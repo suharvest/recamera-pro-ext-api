@@ -1,0 +1,215 @@
+{
+  "id": "face-analysis",
+  "name": "Face Analysis",
+  "name_zh": "客群分析",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/face-analysis.png",
+  "type": "self-hosted",
+  "scene": "Retail & Audience",
+  "scene_zh": "零售客群",
+  "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Emits per-face attribute events plus a simple time-windowed demographic aggregation (gender / age / race / emotion histograms). Privacy-first: faces can be flagged for blurring and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
+  "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "privacy_blur": true,
+  "models": [
+    {
+      "id": "yolov8n_face_rawhead_fp16",
+      "file": "models/yolov8n_face_rawhead_fp16.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "face"
+      ],
+      "role": "stage1_detector"
+    },
+    {
+      "id": "fairface_fp16",
+      "file": "models/fairface_fp16.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        224,
+        224,
+        3
+      ],
+      "quant": "fp16",
+      "heads": {
+        "race": 7,
+        "gender": 2,
+        "age": 9
+      },
+      "norm": "imagenet-baked",
+      "role": "stage2_fairface"
+    },
+    {
+      "id": "emotion_enet_b0_fp16",
+      "file": "models/emotion_enet_b0_fp16.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        224,
+        224,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "Anger",
+        "Contempt",
+        "Disgust",
+        "Fear",
+        "Happiness",
+        "Neutral",
+        "Sadness",
+        "Surprise"
+      ],
+      "norm": "imagenet-baked",
+      "role": "stage3_emotion"
+    }
+  ],
+  "default_model": "yolov8n_face_rawhead_fp16",
+  "postproc": "face_detect",
+  "pipeline": [
+    {
+      "model": "yolov8n_face_rawhead_fp16",
+      "postproc": "face_detect",
+      "stage": "detect"
+    },
+    {
+      "model": "fairface_fp16",
+      "postproc": "classify",
+      "stage": "roi_classify",
+      "input_size": 224,
+      "crop_pad": 0.15
+    },
+    {
+      "model": "emotion_enet_b0_fp16",
+      "postproc": "classify",
+      "stage": "roi_classify",
+      "input_size": 224,
+      "crop_pad": 0.15
+    }
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,score,blur,gender,gender_conf,age,age_conf,race,race_conf,emotion,emotion_conf} + events[]{kind=face|demographics,...}",
+    "topic": "recamera/face-analysis/results"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Face detection",
+        "title_zh": "人脸检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "title": "Face confidence",
+            "title_zh": "人脸置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.45
+          },
+          {
+            "key": "max_faces",
+            "type": "number",
+            "title": "Max faces / frame",
+            "title_zh": "每帧最大人脸数",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 5
+          },
+          {
+            "key": "crop_pad",
+            "type": "number",
+            "title": "Face ROI padding",
+            "title_zh": "人脸 ROI 外扩",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.15
+          }
+        ]
+      },
+      {
+        "key": "attributes",
+        "title": "Attribute analysis",
+        "title_zh": "属性分析",
+        "items": [
+          {
+            "key": "emotion_interval",
+            "type": "number",
+            "title": "Emotion every N frames",
+            "title_zh": "情绪每 N 帧",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "default": 1
+          },
+          {
+            "key": "aggregate_window_sec",
+            "type": "number",
+            "title": "Aggregation window (s)",
+            "title_zh": "聚合窗口（秒）",
+            "min": 5.0,
+            "max": 300.0,
+            "step": 5.0,
+            "default": 30.0
+          }
+        ]
+      },
+      {
+        "key": "privacy",
+        "title": "Privacy",
+        "title_zh": "隐私",
+        "items": [
+          {
+            "key": "privacy_blur",
+            "type": "boolean",
+            "title": "Blur faces in overlay",
+            "title_zh": "叠加层模糊人脸",
+            "default": true
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "face_count",
+      "name": "Face Count",
+      "value_template": "{{ value_json.results_count }}",
+      "state_class": "measurement",
+      "icon": "mdi:face-recognition"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "occupancy",
+      "name": "Face Detected",
+      "value_template": "{{ 'ON' if value_json.results_count > 0 else 'OFF' }}",
+      "device_class": "occupancy"
+    }
+  ]
+}

@@ -1,0 +1,251 @@
+{
+  "id": "facemesh-reader",
+  "name": "Facemesh Reader",
+  "name_zh": "面部疲劳检测",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/facemesh-reader.png",
+  "type": "self-hosted",
+  "scene": "Safety & Care",
+  "scene_zh": "安全看护",
+  "description": "On-device drowsiness / fatigue detection with a two-stage face cascade: a YOLOv8n-face detector finds the face, a 468-point MediaPipe FaceMesh landmark model runs on the cropped face ROI, then explainable CPU-only temporal logic derives EAR (eye aspect ratio), MAR (mouth aspect ratio), blinks, yawns and a composite drowsiness state. First reference for the reCamera Pro cascade-pipeline pattern reused by face-analysis.",
+  "description_zh": "设备端困倦/疲劳检测，采用两级人脸级联：YOLOv8n-face 检测人脸，468 点 MediaPipe FaceMesh 关键点模型在裁剪的人脸 ROI 上运行，再由可解释的纯 CPU 时序逻辑计算 EAR（眼纵横比）、MAR（嘴纵横比）、眨眼、打哈欠与综合困倦状态。是 reCamera Pro 级联流水线范式的首个参考，供 face-analysis 复用。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [
+    {
+      "id": "yolov8n_face_rawhead_fp16",
+      "file": "models/yolov8n_face_rawhead_fp16.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "face"
+      ],
+      "role": "stage1_detector"
+    },
+    {
+      "id": "face_landmark_fp16",
+      "file": "models/face_landmark_fp16.rknn",
+      "task": "landmark",
+      "input": [
+        1,
+        192,
+        192,
+        3
+      ],
+      "quant": "fp16",
+      "keypoints": "facemesh468",
+      "role": "stage2_landmark"
+    }
+  ],
+  "default_model": "yolov8n_face_rawhead_fp16",
+  "postproc": "face_detect",
+  "pipeline": [
+    {
+      "model": "yolov8n_face_rawhead_fp16",
+      "postproc": "face_detect",
+      "stage": "detect"
+    },
+    {
+      "model": "face_landmark_fp16",
+      "postproc": "landmark",
+      "stage": "roi_landmark",
+      "input_size": 192,
+      "crop_pad": 0.25
+    }
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,score,presence,landmark_count,ear,mar} + events[]{kind=metrics|blink|yawn|drowsiness,avg_ear,mar,state,drowsiness_level,perclos_pct,...}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Face detection",
+        "title_zh": "人脸检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "title": "Face confidence",
+            "title_zh": "人脸置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.45
+          },
+          {
+            "key": "crop_pad",
+            "type": "number",
+            "title": "Face ROI padding",
+            "title_zh": "人脸 ROI 外扩",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.25
+          },
+          {
+            "key": "presence_threshold",
+            "type": "number",
+            "title": "Landmark presence",
+            "title_zh": "关键点存在阈值",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.5
+          }
+        ]
+      },
+      {
+        "key": "metrics",
+        "title": "EAR / MAR thresholds",
+        "title_zh": "EAR / MAR 阈值",
+        "items": [
+          {
+            "key": "ear_threshold",
+            "type": "number",
+            "title": "Eye-closed EAR",
+            "title_zh": "闭眼 EAR 阈值",
+            "min": 0.1,
+            "max": 0.4,
+            "step": 0.01,
+            "default": 0.21
+          },
+          {
+            "key": "mar_threshold",
+            "type": "number",
+            "title": "Yawn MAR",
+            "title_zh": "打哈欠 MAR 阈值",
+            "min": 0.3,
+            "max": 1.2,
+            "step": 0.05,
+            "default": 0.65
+          },
+          {
+            "key": "yawn_consecutive_frames",
+            "type": "number",
+            "title": "Yawn hold frames",
+            "title_zh": "打哈欠持续帧数",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 5
+          }
+        ]
+      },
+      {
+        "key": "drowsiness",
+        "title": "Drowsiness timing",
+        "title_zh": "困倦时序",
+        "items": [
+          {
+            "key": "ear_continuous_sec",
+            "type": "number",
+            "title": "Continuous-closure (s)",
+            "title_zh": "连续闭眼（秒）",
+            "min": 0.2,
+            "max": 10.0,
+            "step": 0.1,
+            "default": 2.0
+          },
+          {
+            "key": "perclos_window_sec",
+            "type": "number",
+            "title": "PERCLOS window (s)",
+            "title_zh": "PERCLOS 窗口（秒）",
+            "min": 5.0,
+            "max": 120.0,
+            "step": 5.0,
+            "default": 60.0
+          },
+          {
+            "key": "perclos_critical_pct",
+            "type": "number",
+            "title": "PERCLOS critical %",
+            "title_zh": "PERCLOS 临界百分比",
+            "min": 5.0,
+            "max": 60.0,
+            "step": 1.0,
+            "default": 20.0
+          },
+          {
+            "key": "alert_cooldown_sec",
+            "type": "number",
+            "title": "Alert cooldown (s)",
+            "title_zh": "报警冷却（秒）",
+            "min": 0.0,
+            "max": 30.0,
+            "step": 0.5,
+            "default": 5.0
+          },
+          {
+            "key": "yawn_count_threshold",
+            "type": "number",
+            "title": "Yawns/5min for drowsy",
+            "title_zh": "5 分钟打哈欠数阈值",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "default": 3
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "binary_sensor",
+      "object_id": "drowsiness",
+      "name": "Drowsiness Alert",
+      "value_template": "{{ 'ON' if value_json.summary.alert_active else 'OFF' }}",
+      "device_class": "problem"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "yawn",
+      "name": "Yawning",
+      "value_template": "{{ 'ON' if value_json.summary.is_yawning else 'OFF' }}",
+      "icon": "mdi:sleep"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "occupancy",
+      "name": "Face Detected",
+      "value_template": "{{ 'ON' if value_json.results_count > 0 else 'OFF' }}",
+      "device_class": "occupancy"
+    },
+    {
+      "component": "sensor",
+      "object_id": "perclos",
+      "name": "PERCLOS",
+      "value_template": "{{ value_json.summary.perclos_pct | default(0) }}",
+      "unit_of_measurement": "%",
+      "state_class": "measurement"
+    },
+    {
+      "component": "sensor",
+      "object_id": "ear",
+      "name": "Eye Aspect Ratio",
+      "value_template": "{{ value_json.summary.avg_ear | default(0) }}",
+      "state_class": "measurement"
+    }
+  ]
+}

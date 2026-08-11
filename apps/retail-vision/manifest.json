@@ -1,0 +1,180 @@
+{
+  "id": "retail-vision",
+  "name": "Retail People Counting",
+  "name_zh": "零售人流分析",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/retail-vision.png",
+  "type": "self-hosted",
+  "scene": "Retail",
+  "scene_zh": "零售",
+  "description": "On-device retail people-flow analytics. Runs YOLOv8n (person class only) on the RV1126B NPU, tracks each shopper across frames (IoU association + velocity prediction + track id), and turns tracks into the three numbers a store manager asks for: how many came in/out, how many are in the store right now, and who is browsing / engaged / needs assistance. Optional counting zone and directional entry/exit line. Streams tracks + counting events for the /appcenter overlay.",
+  "description_zh": "本地零售人流分析。在 RV1126B NPU 上运行 YOLOv8n（只取 person 类），跨帧跟踪每位顾客（IoU 关联 + 速度预测 + track id），把轨迹转化为门店最关心的三个数字：进/出多少人、当前在店多少人、谁在浏览/驻足/需要帮助。可选统计区域与有向进出计数线。向 /appcenter 叠加层输出轨迹与计数事件。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [
+    {
+      "id": "yolo8n_rawhead_int8",
+      "file": "models/yolo8n_rawhead_int8.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "classes": "coco80"
+    }
+  ],
+  "default_model": "yolo8n_rawhead_int8",
+  "postproc": "detect",
+  "pipeline": [
+    {
+      "model": "yolo8n_rawhead_int8",
+      "postproc": "detect"
+    }
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,cls,cls_name,score} + events[]{kind=track|line_cross|metrics,track_id,box,state,dir,occupancy,entry_count,exit_count,peak,browsing,engaged,assistance}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "title": "Person confidence",
+            "title_zh": "人体置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "title": "NMS IoU threshold",
+            "title_zh": "NMS IoU 阈值",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.45
+          }
+        ]
+      },
+      {
+        "key": "zone",
+        "title": "Counting Zone",
+        "title_zh": "统计区域",
+        "items": [
+          {
+            "key": "count_zone",
+            "type": "zone",
+            "title": "Counting zone",
+            "title_zh": "统计区域",
+            "maxPoints": 8
+          }
+        ]
+      },
+      {
+        "key": "line",
+        "title": "Entry / Exit Line",
+        "title_zh": "进出计数线",
+        "items": [
+          {
+            "key": "entry_line",
+            "type": "line",
+            "title": "Entry line",
+            "title_zh": "进出计数线",
+            "directional": true
+          }
+        ]
+      },
+      {
+        "key": "dwell",
+        "title": "Dwell",
+        "title_zh": "驻留",
+        "items": [
+          {
+            "key": "dwell_engaged",
+            "type": "number",
+            "title": "Engaged threshold (s)",
+            "title_zh": "驻足阈值（秒）",
+            "min": 0.5,
+            "max": 30,
+            "step": 0.5,
+            "default": 1.5
+          },
+          {
+            "key": "dwell_assist",
+            "type": "number",
+            "title": "Assistance threshold (s)",
+            "title_zh": "求助阈值（秒）",
+            "min": 5,
+            "max": 120,
+            "step": 1,
+            "default": 20
+          },
+          {
+            "key": "dwell_speed",
+            "type": "number",
+            "title": "Stationary speed (px/s)",
+            "title_zh": "驻留速度阈值（像素/秒）",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "default": 10
+          }
+        ]
+      },
+      {
+        "key": "window",
+        "title": "Window",
+        "title_zh": "统计窗口",
+        "items": [
+          {
+            "key": "window_duration",
+            "type": "number",
+            "title": "Rolling window (s)",
+            "title_zh": "滚动窗口（秒）",
+            "min": 10,
+            "max": 600,
+            "step": 10,
+            "default": 60
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "people_count",
+      "name": "People Count",
+      "value_template": "{{ value_json.summary.occupancy | default(0) }}",
+      "state_class": "measurement",
+      "icon": "mdi:account-group"
+    },
+    {
+      "component": "sensor",
+      "object_id": "entered_total",
+      "name": "People Entered Total",
+      "value_template": "{{ value_json.summary.entry_count | default(0) }}",
+      "state_class": "total_increasing"
+    },
+    {
+      "component": "sensor",
+      "object_id": "exited_total",
+      "name": "People Exited Total",
+      "value_template": "{{ value_json.summary.exit_count | default(0) }}",
+      "state_class": "total_increasing"
+    }
+  ]
+}

@@ -1,0 +1,295 @@
+"""
+Offline sanity tests for the official extension-API adapters (official.py).
+
+No device, no librecamera_ext.so, no librga: we inject a fake `recamera_ext`
+module into sys.modules that mimics the shipped SDK's FrameSource/ResultSink
+surface, then assert that:
+
+  * OfficialFrameSource yields our `Frame` contract (uint8 RGB HWC, fmt="RGB",
+    pts == pts_us/1e6) using the OpenCV-fallback path (no librga present);
+  * OfficialResultSink maps detect dicts -> send_detections(pts_us, boxes) with
+    the exact pts round-trip, source_id, and box/label/class_id mapping, and
+    skips boxless (classification-only) results;
+  * the registry selects the Official* implementations when the sockets probe
+    present, and the base-loop Frame is directly consumable by preprocess.letterbox.
+
+Run:  python3 -m kit.adapters.test_official      (from repo root)
+"""
+import os
+import sys
+import tempfile
+import types
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+import numpy as np
+
+
+# --- fake `recamera_ext` SDK module ----------------------------------------- #
+class _FakeExtFrame:
+    """Mimics recamera_ext.Frame: full NV12->BGR done here (no cv2 needed)."""
+
+    def __init__(self, seq, pts_us, w, h):
+        self.seq = seq
+        self.pts_us = pts_us
+        self.width = w
+        self.height = h
+        self.fourcc = 0x3231564E
+        self.planes = [(0, w, h), (w * h, w, h // 2)]  # (offset, stride, vstride)
+        # Private C-buf shim: OfficialFrameSource reads _c.fd for the RGA path;
+        # with no librga present that path is never taken, but keep it realistic.
+        self._c = types.SimpleNamespace(fd=7)
+
+    def to_bgr(self):
+        # Deterministic BGR image so we can assert the channel flip.
+        img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        img[..., 0] = 10   # B
+        img[..., 1] = 20   # G
+        img[..., 2] = 30   # R
+        return img
+
+
+class _FakeExtFrameSource:
+    def __init__(self, config=None, timeout_ms=1000, lib_path=None):
+        self.width, self.height = 1280, 720
+        self.fourcc, self.pool_depth, self.max_outstanding = 0x3231564E, 4, 2
+        self._n = 3
+
+    def __iter__(self):
+        for i in range(self._n):
+            yield _FakeExtFrame(seq=i, pts_us=1_000_000 + i * 33_000,
+                                w=self.width, h=self.height)
+
+    def close(self):
+        pass
+
+
+class _FakeExtResultSink:
+    """Captures every send_* call as (method, source_id, pts_us, items)."""
+
+    calls = []  # class-level capture
+
+    def __init__(self, source_id, lib_path=None):
+        self.source_id = source_id
+
+    def _rec(self, method, pts_us, items):
+        _FakeExtResultSink.calls.append((method, self.source_id, pts_us, list(items)))
+        return 0
+
+    def send_detections(self, pts_us, boxes):
+        return self._rec("send_detections", pts_us, boxes)
+
+    def send_classification(self, pts_us, items):
+        return self._rec("send_classification", pts_us, items)
+
+    def send_segmentation(self, pts_us, items):
+        return self._rec("send_segmentation", pts_us, items)
+
+    def send_tracking(self, pts_us, items):
+        return self._rec("send_tracking", pts_us, items)
+
+    def send_keypoints(self, pts_us, instances):
+        return self._rec("send_keypoints", pts_us, instances)
+
+    def close(self):
+        pass
+
+
+def _install_fake_ext():
+    mod = types.ModuleType("recamera_ext")
+    mod.FrameSource = _FakeExtFrameSource
+    mod.ResultSink = _FakeExtResultSink
+    mod.FrameConfig = lambda **kw: types.SimpleNamespace(**kw)
+    sys.modules["recamera_ext"] = mod
+
+
+def test_frame_source_yields_rgb():
+    _install_fake_ext()
+    from kit.adapters.official import OfficialFrameSource
+    from kit.runtime.preprocess import letterbox
+
+    src = OfficialFrameSource(url=None, prefer_rga=False, verbose=False)
+    frames = list(src.frames())
+    assert len(frames) == 3, len(frames)
+    f0 = frames[0]
+    assert f0.data.dtype == np.uint8 and f0.data.shape == (720, 1280, 3), f0.data.shape
+    assert f0.fmt == "RGB", f0.fmt
+    assert (f0.w, f0.h) == (1280, 720)
+    # BGR (10,20,30) -> RGB flip => (30,20,10)
+    assert tuple(f0.data[0, 0]) == (30, 20, 10), tuple(f0.data[0, 0])
+    # pts_us -> seconds round-trips exactly back to us.
+    assert abs(f0.pts - 1.0) < 1e-9, f0.pts
+    assert int(round(f0.pts * 1e6)) == 1_000_000
+    # The base loop feeds frame.data straight into letterbox -> proves contract.
+    padded, info = letterbox(f0.data, 640)
+    assert padded.shape == (640, 640, 3) and padded.dtype == np.uint8
+    assert (info.orig_w, info.orig_h) == (1280, 720)
+    print("PASS test_frame_source_yields_rgb (RGB HWC, pts round-trip, letterbox-ready)")
+
+
+def test_result_sink_maps_detections():
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink, OsdInjectResultSink
+    assert OsdInjectResultSink is OfficialResultSink  # back-compat alias
+
+    sink = OfficialResultSink(app_id="yolo-detector", verbose=False)
+    payload = {"results": [
+        {"box": [10.0, 20.0, 110.0, 220.0], "cls": 0, "cls_name": "person", "score": 0.9},
+        {"box": [1, 2, 3, 4], "cls": 2, "cls_name": "car", "score": 0.7},
+    ]}
+    sink.emit(payload, pts=1.0)            # 1.0 s -> 1_000_000 us
+    sink.emit({"results": []}, pts=2.033)  # empty -> clears OSD via empty detections
+    sink.close()
+
+    assert len(_FakeExtResultSink.calls) == 2, _FakeExtResultSink.calls
+    method, sid, pts_us, boxes = _FakeExtResultSink.calls[0]
+    assert method == "send_detections" and sid == "yolo-detector"
+    assert pts_us == 1_000_000, pts_us            # exact s->us round-trip
+    assert len(boxes) == 2, boxes
+    x1, y1, x2, y2, score, label, class_id = boxes[0]
+    assert (x1, y1, x2, y2) == (10.0, 20.0, 110.0, 220.0)
+    assert label == "person" and class_id == 0 and abs(score - 0.9) < 1e-6
+    # empty frame -> empty send_detections still fires (clears the OSD).
+    m2, _s2, pts_us2, boxes2 = _FakeExtResultSink.calls[1]
+    assert m2 == "send_detections" and pts_us2 == 2_033_000 and boxes2 == []
+    # qrcode-style quad (no box) derives a bbox.
+    _FakeExtResultSink.calls = []
+    sink = OfficialResultSink(app_id="qrcode", verbose=False)
+    sink.emit({"results": [{"text": "HELLO",
+                            "quad": [[10, 10], [30, 12], [28, 40], [8, 38]]}]}, pts=0.5)
+    m, _s, _p, boxes = _FakeExtResultSink.calls[0]
+    assert m == "send_detections" and boxes[0][:4] == (8.0, 10.0, 30.0, 40.0), boxes
+    assert boxes[0][5] == "HELLO"          # text -> label
+    print("PASS test_result_sink_maps_detections (detections + quad->bbox + empty-clears)")
+
+
+def test_result_sink_maps_keypoints():
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink
+
+    # pose result: box + 17 [x,y,conf] keypoints (fall/fitness schema).
+    kps = [[float(i), float(i + 1), 0.8] for i in range(17)]
+    sink = OfficialResultSink(app_id="fitness-trainer", verbose=False)
+    sink.emit({"results": [{"box": [5, 6, 105, 206], "score": 0.88,
+                            "cls": 0, "cls_name": "person", "keypoints": kps}],
+               "events": [{"kind": "workout", "reps": 3}]}, pts=1.5)
+    sink.close()
+
+    assert len(_FakeExtResultSink.calls) == 1, _FakeExtResultSink.calls
+    method, _sid, pts_us, instances = _FakeExtResultSink.calls[0]
+    assert method == "send_keypoints", method
+    assert pts_us == 1_500_000
+    inst = instances[0]
+    assert inst["box"] == (5.0, 6.0, 105.0, 206.0)
+    assert inst["label"] == "person" and abs(inst["score"] - 0.88) < 1e-6
+    assert len(inst["points"]) == 17
+    # point schema: (x, y, score, keypoint_id) with id == index (COCO order)
+    assert inst["points"][0] == (0.0, 1.0, 0.8, 0)
+    assert inst["points"][16][3] == 16
+    # facemesh landmark schema: [x,y] pairs (no conf) -> conf defaults to 1.0
+    _FakeExtResultSink.calls = []
+    sink = OfficialResultSink(app_id="facemesh", verbose=False)
+    sink.emit({"results": [{"box": [0, 0, 50, 50], "kind": "face",
+                            "keypoints": [[1.0, 2.0], [3.0, 4.0]]}]}, pts=0.1)
+    _m, _s, _p, instances = _FakeExtResultSink.calls[0]
+    assert instances[0]["points"][0] == (1.0, 2.0, 1.0, 0), instances[0]["points"]
+    print("PASS test_result_sink_maps_keypoints (pose 17-kpt + facemesh landmark, id=index, conf default)")
+
+
+def test_result_sink_maps_classification():
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink
+
+    # face-analysis result: box + attributes -> send_classification (box dropped).
+    sink = OfficialResultSink(app_id="face-analysis", verbose=False)
+    sink.emit({"results": [{
+        "box": [10, 10, 60, 70], "cls_name": "face", "score": 0.95,
+        "gender": "Male", "gender_conf": 0.9,
+        "age": "30-39", "age_conf": 0.6,
+        "emotion": "Happiness", "emotion_conf": 0.7,
+    }]}, pts=2.0)
+    sink.close()
+
+    assert len(_FakeExtResultSink.calls) == 1, _FakeExtResultSink.calls
+    method, _sid, pts_us, items = _FakeExtResultSink.calls[0]
+    assert method == "send_classification", method   # NOT send_detections
+    assert pts_us == 2_000_000
+    score, class_id, label = items[0]
+    assert label == "Male,30-39,Happiness", label     # composite attribute label
+    assert abs(score - 0.6) < 1e-6                     # min of the attr confidences
+    # generic boxless label classifier also routes to classification.
+    _FakeExtResultSink.calls = []
+    sink = OfficialResultSink(app_id="clf", verbose=False)
+    sink.emit({"results": [{"label": "cat", "score": 0.8, "cls": 3}]}, pts=0.2)
+    m, _s, _p, items = _FakeExtResultSink.calls[0]
+    assert m == "send_classification" and items[0] == (0.8, 3, "cat"), items
+    print("PASS test_result_sink_maps_classification (face attrs->classification, box dropped, boxless label)")
+
+
+def test_result_sink_maps_tracking():
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink
+
+    # retail-vision: raw person detections in results, tracked boxes in events.
+    sink = OfficialResultSink(app_id="retail-vision", verbose=False)
+    sink.emit({
+        "results": [{"box": [0, 0, 10, 10], "cls": 0, "cls_name": "person", "score": 0.9}],
+        "events": [
+            {"kind": "track", "track_id": 7, "state": "ENGAGED", "score": 0.9,
+             "box": [0.0, 0.0, 10.0, 10.0]},
+            {"kind": "metrics", "occupancy": 1},   # non-track event ignored
+        ],
+    }, pts=3.0)
+    sink.close()
+
+    assert len(_FakeExtResultSink.calls) == 1, _FakeExtResultSink.calls
+    method, _sid, pts_us, items = _FakeExtResultSink.calls[0]
+    assert method == "send_tracking", method   # supersedes the raw detections
+    assert pts_us == 3_000_000
+    x1, y1, x2, y2, score, class_id, label, track_id = items[0]
+    assert (x1, y1, x2, y2) == (0.0, 0.0, 10.0, 10.0)
+    assert track_id == 7 and label == "ENGAGED", (track_id, label)
+    print("PASS test_result_sink_maps_tracking (event track_id -> send_tracking, supersedes detections)")
+
+
+def test_registry_selects_official():
+    _install_fake_ext()
+    from kit.adapters import registry
+    from kit.adapters.official import OfficialFrameSource, OfficialResultSink
+
+    for k in ("RECAMERA_ADAPTER_PREFER", "RECAMERA_RESULT_INGRESS"):
+        os.environ.pop(k, None)
+    with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as ftf, \
+         tempfile.NamedTemporaryFile(prefix="result-in-", suffix=".sock") as rtf:
+        os.environ["RECAMERA_FRAMES_SOCK"] = ftf.name
+        os.environ["RECAMERA_RESULT_SOCK"] = rtf.name
+        caps = registry.capabilities(refresh=True)
+        assert caps.frame_broker and caps.result_ingress, caps
+
+        src = registry.select_frame_source(url="rtsp://x", prefer="ffmpeg")
+        assert isinstance(src, OfficialFrameSource), type(src)
+        assert src.sock == ftf.name, src.sock
+        sink = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
+                                            app_id="demo")
+        assert isinstance(sink, OfficialResultSink), type(sink)
+    for k in ("RECAMERA_FRAMES_SOCK", "RECAMERA_RESULT_SOCK"):
+        os.environ.pop(k, None)
+    registry.capabilities(refresh=True)
+    print("PASS test_registry_selects_official (frame.sock + result-in.sock -> Official*)")
+
+
+if __name__ == "__main__":
+    test_frame_source_yields_rgb()
+    test_result_sink_maps_detections()
+    test_result_sink_maps_keypoints()
+    test_result_sink_maps_classification()
+    test_result_sink_maps_tracking()
+    test_registry_selects_official()
+    print("ALL OFFICIAL ADAPTER TESTS PASSED")

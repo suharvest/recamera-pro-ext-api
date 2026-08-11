@@ -1,0 +1,48 @@
+{
+  "id": "qrcode-reader",
+  "name": "QR Code Reader",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/qrcode-reader.png",
+  "type": "self-hosted",
+  "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [],
+  "postproc": "qrcode",
+  "pipeline": [
+    {
+      "model": "quirc",
+      "path": "cpu",
+      "task": "qrcode-decode",
+      "postproc": "qrcode"
+    }
+  ],
+  "tags": [
+    "qrcode",
+    "cpu"
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{text,quad} + events[]{kind,text,quad}"
+  },
+  "config_schema": {},
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "qr_count",
+      "name": "QR Count",
+      "value_template": "{{ value_json.counts_by_kind.qrcode | default(0) }}",
+      "state_class": "measurement",
+      "icon": "mdi:qrcode-scan"
+    },
+    {
+      "component": "sensor",
+      "object_id": "qr_last_text",
+      "name": "QR Last Text",
+      "value_template": "{{ value_json.summary.text | default('') }}",
+      "icon": "mdi:qrcode"
+    }
+  ]
+}

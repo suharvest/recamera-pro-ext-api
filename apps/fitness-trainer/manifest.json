@@ -1,0 +1,169 @@
+{
+  "id": "fitness-trainer",
+  "name": "Fitness Trainer",
+  "name_zh": "健身教练",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/fitness-trainer.png",
+  "type": "self-hosted",
+  "scene": "Health & Wellness",
+  "scene_zh": "健康健身",
+  "description": "Counts your reps and calls out sloppy form, on-device, using YOLO11n-Pose and joint-angle hysteresis state machines. Pick squats, push-ups or hammer curls, set your reps and sets, and the camera does the rest -- no phone, no wearable, no video leaving the device. Streams keypoints and live rep counts for the /appcenter overlay.",
+  "description_zh": "使用 YOLO11n-Pose 与关节角迟滞状态机在设备本地数你的组数并提示动作不到位。选择深蹲、俯卧撑或哑铃弯举，设定次数与组数，剩下的交给摄像头——不用手机、不戴手环，画面也不出设备。向 /appcenter 叠加层输出关键点与实时计数。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [
+    {
+      "id": "yolo11n_pose_rawhead_int8",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "task": "pose",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "keypoints": "coco17"
+    }
+  ],
+  "default_model": "yolo11n_pose_rawhead_int8",
+  "postproc": "pose",
+  "pipeline": [
+    {
+      "model": "yolo11n_pose_rawhead_int8",
+      "postproc": "pose"
+    }
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind} + events[]{kind=workout,mode,reps,set,target_reps,target_sets,stage,angle,tracking,rep_completed,set_completed,workout_complete,form_warning,...}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "workout",
+        "title": "Workout",
+        "title_zh": "训练设置",
+        "items": [
+          {
+            "key": "mode",
+            "type": "enum",
+            "title": "Exercise",
+            "title_zh": "运动模式",
+            "options": [
+              "squat",
+              "push_up",
+              "hammer_curl"
+            ],
+            "option_labels": [
+              "Squat",
+              "Push-up",
+              "Hammer Curl"
+            ],
+            "option_labels_zh": [
+              "深蹲",
+              "俯卧撑",
+              "哑铃弯举"
+            ],
+            "default": "squat"
+          },
+          {
+            "key": "target_reps",
+            "type": "number",
+            "title": "Reps per set",
+            "title_zh": "每组次数",
+            "min": 1,
+            "max": 100,
+            "step": 1,
+            "default": 12
+          },
+          {
+            "key": "target_sets",
+            "type": "number",
+            "title": "Sets",
+            "title_zh": "组数",
+            "min": 1,
+            "max": 20,
+            "step": 1,
+            "default": 3
+          },
+          {
+            "key": "idle_reset_seconds",
+            "type": "number",
+            "title": "Reset after idle (seconds, 0 = never)",
+            "title_zh": "无人后重置计数（秒，0 = 不重置）",
+            "min": 0,
+            "max": 3600,
+            "step": 10,
+            "default": 60
+          }
+        ]
+      },
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "title": "Person confidence threshold",
+            "title_zh": "人体置信度阈值",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "keypoint_confidence",
+            "type": "number",
+            "title": "Keypoint confidence threshold",
+            "title_zh": "关键点置信度阈值",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "reps",
+      "name": "Reps",
+      "value_template": "{{ value_json.summary.reps | default(0) }}",
+      "state_class": "measurement",
+      "icon": "mdi:counter"
+    },
+    {
+      "component": "sensor",
+      "object_id": "set",
+      "name": "Set",
+      "value_template": "{{ value_json.summary.set | default(0) }}",
+      "state_class": "measurement"
+    },
+    {
+      "component": "sensor",
+      "object_id": "exercise",
+      "name": "Exercise",
+      "value_template": "{{ value_json.summary.mode | default('') }}",
+      "icon": "mdi:dumbbell"
+    },
+    {
+      "component": "sensor",
+      "object_id": "stage",
+      "name": "Stage",
+      "value_template": "{{ value_json.summary.stage | default('') }}"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "workout_complete",
+      "name": "Workout Complete",
+      "value_template": "{{ 'ON' if value_json.summary.workout_complete else 'OFF' }}"
+    }
+  ]
+}

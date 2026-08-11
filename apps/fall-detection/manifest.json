@@ -1,0 +1,240 @@
+{
+  "id": "fall-detection",
+  "name": "Fall Detection",
+  "name_zh": "跌倒检测",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/fall-detection.png",
+  "type": "self-hosted",
+  "scene": "Safety & Care",
+  "scene_zh": "安全看护",
+  "description": "On-device fall detection using YOLO11n-Pose and an explainable geometric + temporal state machine (rapid hip drop + horizontal-posture cue, confirmed across frames to suppress everyday-activity false alarms). Streams keypoints and fall events for the /appcenter overlay.",
+  "description_zh": "使用 YOLO11n-Pose 与可解释的几何+时序状态机在设备本地检测跌倒（髋部快速下坠 + 躯干转横线索，跨帧确认以抑制日常动作误报）。向 /appcenter 叠加层输出关键点与跌倒事件。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [
+    {
+      "id": "yolo11n_pose_rawhead_int8",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "task": "pose",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "keypoints": "coco17"
+    }
+  ],
+  "default_model": "yolo11n_pose_rawhead_int8",
+  "postproc": "pose",
+  "pipeline": [
+    {
+      "model": "yolo11n_pose_rawhead_int8",
+      "postproc": "pose"
+    }
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind} + events[]{kind=pose_state|fall,state,fall_detected,event_id,...}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection thresholds",
+        "title_zh": "检测阈值",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "title": "Person confidence",
+            "title_zh": "人体置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "keypoint_confidence",
+            "type": "number",
+            "title": "Keypoint confidence",
+            "title_zh": "关键点置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          },
+          {
+            "key": "hip_drop_speed_threshold",
+            "type": "number",
+            "title": "Hip drop speed",
+            "title_zh": "髋部下坠速度",
+            "min": 0.0,
+            "max": 2.0,
+            "step": 0.05,
+            "default": 0.25
+          },
+          {
+            "key": "hip_drop_distance_threshold",
+            "type": "number",
+            "title": "Minimum hip drop distance",
+            "title_zh": "最小髋部下坠距离",
+            "min": 0,
+            "max": 0.5,
+            "step": 0.005,
+            "default": 0.02
+          },
+          {
+            "key": "motion_window_sec",
+            "type": "number",
+            "title": "Drop-to-posture window (s)",
+            "title_zh": "下坠到转横窗口（秒）",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 0.75
+          },
+          {
+            "key": "torso_angle_threshold_deg",
+            "type": "number",
+            "title": "Lying torso angle (deg)",
+            "title_zh": "躺卧躯干角度（度）",
+            "min": 20,
+            "max": 89,
+            "step": 1,
+            "default": 55
+          },
+          {
+            "key": "bbox_aspect_ratio_threshold",
+            "type": "number",
+            "title": "Lying box aspect ratio",
+            "title_zh": "躺卧框宽高比",
+            "min": 1.0,
+            "max": 4.0,
+            "step": 0.05,
+            "default": 1.25
+          },
+          {
+            "key": "min_suspected_features",
+            "type": "number",
+            "title": "Minimum evidence features",
+            "title_zh": "最少证据特征数",
+            "min": 1,
+            "max": 3,
+            "step": 1,
+            "default": 2
+          }
+        ]
+      },
+      {
+        "key": "timing",
+        "title": "Temporal confirmation",
+        "title_zh": "时序确认",
+        "items": [
+          {
+            "key": "confirmation_sec",
+            "type": "number",
+            "title": "Confirmation window (s)",
+            "title_zh": "确认窗口（秒）",
+            "min": 0,
+            "max": 10,
+            "step": 0.1,
+            "default": 0.8
+          },
+          {
+            "key": "suspected_timeout_sec",
+            "type": "number",
+            "title": "Suspected timeout (s)",
+            "title_zh": "疑似超时（秒）",
+            "min": 0.1,
+            "max": 30,
+            "step": 0.1,
+            "default": 1.5
+          },
+          {
+            "key": "occlusion_grace_sec",
+            "type": "number",
+            "title": "Post-impact occlusion grace (s)",
+            "title_zh": "落地后遮挡宽限（秒）",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "default": 0.75
+          },
+          {
+            "key": "recovery_torso_angle_deg",
+            "type": "number",
+            "title": "Upright torso angle (deg)",
+            "title_zh": "站立躯干角度（度）",
+            "min": 5,
+            "max": 89,
+            "step": 1,
+            "default": 35
+          },
+          {
+            "key": "recovery_aspect_ratio",
+            "type": "number",
+            "title": "Upright box aspect ratio",
+            "title_zh": "站立框宽高比",
+            "min": 1.0,
+            "max": 3.0,
+            "step": 0.05,
+            "default": 1.1
+          },
+          {
+            "key": "recovery_window_sec",
+            "type": "number",
+            "title": "Recovery window (s)",
+            "title_zh": "恢复窗口（秒）",
+            "min": 0,
+            "max": 30,
+            "step": 0.1,
+            "default": 2.0
+          },
+          {
+            "key": "cooldown_sec",
+            "type": "number",
+            "title": "Alarm cooldown (s)",
+            "title_zh": "报警冷却（秒）",
+            "min": 0,
+            "max": 60,
+            "step": 0.5,
+            "default": 3.0
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "binary_sensor",
+      "object_id": "fall_detected",
+      "name": "Fall Detected",
+      "value_template": "{{ 'ON' if value_json.summary.fall_detected else 'OFF' }}",
+      "device_class": "problem"
+    },
+    {
+      "component": "sensor",
+      "object_id": "fall_state",
+      "name": "Fall State",
+      "value_template": "{{ value_json.summary.state | default('') }}",
+      "icon": "mdi:human-handsdown"
+    },
+    {
+      "component": "sensor",
+      "object_id": "fall_event_id",
+      "name": "Fall Event ID",
+      "value_template": "{{ value_json.summary.event_id | default(0) }}"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "person_present",
+      "name": "Person Present",
+      "value_template": "{{ 'ON' if value_json.counts_by_kind.person is defined and value_json.counts_by_kind.person > 0 else 'OFF' }}",
+      "device_class": "occupancy"
+    }
+  ]
+}

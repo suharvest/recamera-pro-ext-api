@@ -1,0 +1,194 @@
+{
+  "id": "voice-transcribe",
+  "name": "Voice Transcribe",
+  "name_zh": "语音转录",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/voice-transcribe.png",
+  "type": "self-hosted",
+  "scene": "Voice & Audio",
+  "scene_zh": "语音音频",
+  "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via rkipc's RTSP audio track (no /dev/snd takeover, video untouched), spots a wake word with a streaming sherpa-onnx KeywordSpotter, endpoints the following utterance with silero VAD, and transcribes it with SenseVoice int8 -- all on the ARM cores, no NPU. Streams state (idle/listening/transcribing) and transcript text to the /appcenter panel.",
+  "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。通过 rkipc 的 RTSP 音频轨采集麦克风（不接管 /dev/snd，不影响视频），用流式 sherpa-onnx KeywordSpotter 检测唤醒词，用 silero VAD 对后续语句断句，再用 SenseVoice int8 转录，全程运行在 ARM 核心上，不使用 NPU。向 /appcenter 面板输出状态（空闲/聆听/转录）与转录文本。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "audio"
+  ],
+  "needs_model": false,
+  "models": [],
+  "postproc": "voice",
+  "pipeline": [
+    {
+      "model": "sensevoice-int8",
+      "path": "cpu",
+      "task": "asr",
+      "postproc": "voice"
+    }
+  ],
+  "tags": [
+    "voice",
+    "asr",
+    "audio",
+    "cpu"
+  ],
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "events[]{kind=state|wake|transcript|listen_timeout, state, text, keyword, backend, audio_sec, rtf, language} + top-level {state, summary{state,text}}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "wake",
+        "title": "Wake word",
+        "title_zh": "唤醒词",
+        "items": [
+          {
+            "key": "wake_backend",
+            "type": "enum",
+            "title": "Wake backend",
+            "title_zh": "唤醒后端",
+            "options": [
+              "kws",
+              "asr"
+            ],
+            "option_labels": [
+              "Streaming KWS (fast)",
+              "ASR keyword match"
+            ],
+            "default": "kws"
+          },
+          {
+            "key": "wakeword",
+            "type": "string",
+            "title": "Wake phrase (ASR backend)",
+            "title_zh": "唤醒短语（ASR 后端）",
+            "default": "hello camera"
+          },
+          {
+            "key": "kws_threshold",
+            "type": "number",
+            "title": "KWS trigger threshold",
+            "title_zh": "KWS 触发阈值",
+            "min": 0.05,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.25
+          },
+          {
+            "key": "kws_score",
+            "type": "number",
+            "title": "KWS boost score",
+            "title_zh": "KWS 加权分数",
+            "min": 0.5,
+            "max": 4.0,
+            "step": 0.1,
+            "default": 1.5
+          }
+        ]
+      },
+      {
+        "key": "capture",
+        "title": "Capture & endpointing",
+        "title_zh": "采集与断句",
+        "items": [
+          {
+            "key": "language",
+            "type": "enum",
+            "title": "Language",
+            "title_zh": "语言",
+            "options": [
+              "auto",
+              "zh",
+              "en",
+              "ja",
+              "ko",
+              "yue"
+            ],
+            "option_labels": [
+              "Auto",
+              "Chinese",
+              "English",
+              "Japanese",
+              "Korean",
+              "Cantonese"
+            ],
+            "default": "auto"
+          },
+          {
+            "key": "min_silence_sec",
+            "type": "number",
+            "title": "Silence to end utterance (s)",
+            "title_zh": "断句静音时长（秒）",
+            "min": 0.2,
+            "max": 3.0,
+            "step": 0.1,
+            "default": 0.6
+          },
+          {
+            "key": "max_utterance_sec",
+            "type": "number",
+            "title": "Max recording length (s)",
+            "title_zh": "最长录音时长（秒）",
+            "min": 2.0,
+            "max": 30.0,
+            "step": 1.0,
+            "default": 15.0
+          },
+          {
+            "key": "preroll_ms",
+            "type": "number",
+            "title": "Pre-roll look-back (ms)",
+            "title_zh": "句头回看补偿（毫秒）",
+            "min": 0.0,
+            "max": 800.0,
+            "step": 50.0,
+            "default": 300.0
+          },
+          {
+            "key": "listen_timeout_sec",
+            "type": "number",
+            "title": "Listen timeout after wake (s)",
+            "title_zh": "唤醒后聆听超时（秒）",
+            "min": 2.0,
+            "max": 20.0,
+            "step": 1.0,
+            "default": 8.0
+          },
+          {
+            "key": "model_dir",
+            "type": "string",
+            "title": "Shared model dir",
+            "title_zh": "共享模型目录",
+            "default": "/userdata/local/models/asr"
+          },
+          {
+            "key": "audio_filter",
+            "type": "string",
+            "title": "Mic gain filter (ffmpeg -af)",
+            "title_zh": "麦克风增益滤镜（ffmpeg -af）",
+            "default": "loudnorm=I=-16:TP=-1.5"
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "voice_state",
+      "name": "Voice State",
+      "value_template": "{{ value_json.summary.state | default('idle') }}",
+      "icon": "mdi:microphone"
+    },
+    {
+      "component": "sensor",
+      "object_id": "last_transcript",
+      "name": "Last Transcript",
+      "value_template": "{{ value_json.summary.text | default('') }}",
+      "icon": "mdi:message-text"
+    }
+  ]
+}

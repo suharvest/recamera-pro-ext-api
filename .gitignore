@@ -1,0 +1,28 @@
+# 系统/编辑器
+.DS_Store
+__pycache__/
+*.pyc
+*.bak
+*.swp
+
+# 模型权重/产物(体积大,用别的方式分发,不进 git)
+*.rknn
+*.caffemodel
+*.prototxt
+*.onnx
+models/
+market/
+apps/*/models/
+
+# 大资源目录(应用素材/市场包)
+*.mp4
+*.avi
+
+# 开发临时工作区(各阶段 agent 的 scratch,非交付物)
+_m4_work/
+_stage_3b/
+_g5g6/
+_verify_artifacts/
+
+# SDK 构建产物(源在 sdk/,build 是编出来的)
+sdk/**/build/
