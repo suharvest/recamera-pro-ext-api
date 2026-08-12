@@ -12,6 +12,7 @@
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
   "models": [
     {
       "id": "yolo11n_pose_rawhead_int8",
