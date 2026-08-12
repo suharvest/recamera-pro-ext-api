@@ -7,11 +7,12 @@
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",
-  "description": "On-device fall detection using YOLO11n-Pose and an explainable geometric + temporal state machine (rapid hip drop + horizontal-posture cue, confirmed across frames to suppress everyday-activity false alarms). Streams keypoints and fall events for the /appcenter overlay.",
-  "description_zh": "使用 YOLO11n-Pose 与可解释的几何+时序状态机在设备本地检测跌倒（髋部快速下坠 + 躯干转横线索，跨帧确认以抑制日常动作误报）。向 /appcenter 叠加层输出关键点与跌倒事件。",
+  "description": "On-device multi-person fall detection using YOLO11n-Pose and an explainable geometric + temporal state machine (rapid hip drop + horizontal-posture cue, confirmed across frames to suppress everyday-activity false alarms). Each person receives a stable track_id and independent fall state.",
+  "description_zh": "使用 YOLO11n-Pose 与可解释的几何+时序状态机在设备本地检测多人跌倒（髋部快速下坠 + 躯干转横线索，跨帧确认以抑制日常动作误报）。每个人都有稳定的 track_id 和独立跌倒状态。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
   "models": [
     {
       "id": "yolo11n_pose_rawhead_int8",
@@ -38,7 +39,7 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind} + events[]{kind=pose_state|fall,state,fall_detected,event_id,...}"
+    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind,track_id,state,fall_detected,event_id} + events[]{kind=pose_state|fall,track_id,state,fall_detected,event_id,...}"
   },
   "config_schema": {
     "groups": [
@@ -213,7 +214,7 @@
       "component": "binary_sensor",
       "object_id": "fall_detected",
       "name": "Fall Detected",
-      "value_template": "{{ 'ON' if value_json.summary.fall_detected else 'OFF' }}",
+      "value_template": "{{ 'ON' if value_json.fallen_count | default(0) > 0 else 'OFF' }}",
       "device_class": "problem"
     },
     {
@@ -230,10 +231,26 @@
       "value_template": "{{ value_json.summary.event_id | default(0) }}"
     },
     {
+      "component": "sensor",
+      "object_id": "person_count",
+      "name": "Person Count",
+      "value_template": "{{ value_json.person_count | default(0) }}",
+      "state_class": "measurement",
+      "icon": "mdi:account-multiple"
+    },
+    {
+      "component": "sensor",
+      "object_id": "fallen_count",
+      "name": "Fallen Count",
+      "value_template": "{{ value_json.fallen_count | default(0) }}",
+      "state_class": "measurement",
+      "icon": "mdi:account-alert"
+    },
+    {
       "component": "binary_sensor",
       "object_id": "person_present",
       "name": "Person Present",
-      "value_template": "{{ 'ON' if value_json.counts_by_kind.person is defined and value_json.counts_by_kind.person > 0 else 'OFF' }}",
+      "value_template": "{{ 'ON' if value_json.person_count | default(0) > 0 else 'OFF' }}",
       "device_class": "occupancy"
     }
   ]
