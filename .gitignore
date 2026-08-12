@@ -24,5 +24,12 @@ _stage_3b/
 _g5g6/
 _verify_artifacts/
 
+# 本地备份(移入的 *.bak / 旧 scratch,保留可回溯,不进 git)
+_local_backups/
+
+# 打包产物(可再生)
+dist/
+.pytest_cache/
+
 # SDK 构建产物(源在 sdk/,build 是编出来的)
 sdk/**/build/

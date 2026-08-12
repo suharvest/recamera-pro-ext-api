@@ -251,7 +251,7 @@ def test_cgi_envelope_code_nonzero_raises(monkeypatch):
 # ===========================================================================
 # #5  select_probe / select_control selection logic (mocked capabilities/env).
 # ===========================================================================
-_ENV_KEYS = ("RECAMERA_FRAMES_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
+_ENV_KEYS = ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
              "RECAMERA_PROBE_SOCK", "RECAMERA_RESULT_INGRESS", "RECAMERA_CONTROL_API",
              "RECAMERA_ADAPTER_PREFER")
 

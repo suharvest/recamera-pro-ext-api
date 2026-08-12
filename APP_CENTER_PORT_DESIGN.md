@@ -1,5 +1,7 @@
 # reCamera Pro 应用中心（App Center）移植设计
 
+> ⚠️ 部分过时(2026-08-12)：本文描述的 /appcenter 静态 SPA drop-in 前端已被官方 web 原生 React 页 /app-center 取代(recamera_web_react)。appmgr 后端/打包/catalog 仍有效(见 docs/ext/app-center-publishing.md)。前端整合详情见该处。
+
 > 把一代 `sscma-example-sg200x/solutions/supervisor` 的「云端一键安装 / 应用画廊」移植到 reCamera Pro（RV1126B / aarch64 / nginx + entry.cgi + go2rtc）。
 
 ## 0. 一句话结论

@@ -22,7 +22,7 @@ from kit.adapters.official import OfficialFrameSource, OsdInjectResultSink
 
 
 def _clear_env():
-    for k in ("RECAMERA_FRAMES_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
+    for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
               "RECAMERA_RESULT_INGRESS", "RECAMERA_CONTROL_API",
               "RECAMERA_ADAPTER_PREFER"):
         os.environ.pop(k, None)
@@ -32,7 +32,7 @@ def test_no_official_selects_workaround():
     """No official endpoints -> workaround implementations, behaviour unchanged."""
     _clear_env()
     # Point the frame-broker probe at a path guaranteed absent.
-    os.environ["RECAMERA_FRAMES_SOCK"] = "/nonexistent/frames.sock.absent"
+    os.environ["RECAMERA_FRAME_SOCK"] = "/nonexistent/frame.sock.absent"
     os.environ["RECAMERA_RESULT_SOCK"] = "/nonexistent/result-in.sock.absent"
     os.environ["RECAMERA_AUDIO_SOCK"] = "/nonexistent/audio.sock.absent"
     caps = registry.capabilities(refresh=True)
@@ -58,10 +58,10 @@ def test_no_official_selects_workaround():
 
 
 def test_simulated_official_selects_official():
-    """Fake /var/run/recamera/frames.sock present -> OfficialFrameSource chosen."""
+    """Fake /run/recamera/frame.sock present -> OfficialFrameSource chosen."""
     _clear_env()
-    with tempfile.NamedTemporaryFile(prefix="frames-", suffix=".sock") as tf:
-        os.environ["RECAMERA_FRAMES_SOCK"] = tf.name  # exists on disk now
+    with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as tf:
+        os.environ["RECAMERA_FRAME_SOCK"] = tf.name  # exists on disk now
         caps = registry.capabilities(refresh=True)
         assert caps.frame_broker is True, caps
 
@@ -79,7 +79,7 @@ def test_simulated_official_selects_official():
 def test_prefer_override():
     """RECAMERA_ADAPTER_PREFER forces selection regardless of probe."""
     _clear_env()
-    os.environ["RECAMERA_FRAMES_SOCK"] = "/nonexistent/frames.sock.absent"
+    os.environ["RECAMERA_FRAME_SOCK"] = "/nonexistent/frame.sock.absent"
     os.environ["RECAMERA_RESULT_INGRESS"] = "1"  # pretend ingress probes true
     os.environ["RECAMERA_ADAPTER_PREFER"] = "workaround"
     registry.capabilities(refresh=True)
