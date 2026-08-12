@@ -13,6 +13,9 @@
 关键点：
   - 跨帧要保留的数据必须 .copy()（frame.array 是零拷贝视图，下一帧会被覆写）。
   - 回注时传 pts_us=frame.pts_us，让 OSD 按就近帧对齐叠加。
+  - 坐标契约：send_detections 要求 box 为**归一化 [0,1]**（相对画面宽高）。
+    detect() 出的是像素坐标，注入前必须除以帧宽/帧高，否则会被 OSD clamp 成
+    1px 隐形框（见 SDK send_detections docstring）。
 
 API 逐一核实自 sdk/librecamera_ext/python/recamera_ext/__init__.py：
   - FrameSource() / for frame in src / frame.array / frame.pts_us  (L470-511, L441-449, L401)
@@ -62,11 +65,17 @@ def main():
             if prev is not None:
                 boxes = detect(prev, cur, args.thresh, args.min_pixels)
                 if boxes:
+                    h, w = cur.shape[0], cur.shape[1]
+                    # 坐标契约：send_detections 要求归一化 [0,1]（相对画面宽高）。
+                    # detect() 出的是像素坐标，注入前除以帧宽/帧高转成比例，
+                    # 否则会被 OSD clamp 成 1px 隐形框。
+                    norm = [(x1 / w, y1 / h, x2 / w, y2 / h, sc, lb)
+                            for (x1, y1, x2, y2, sc, lb) in boxes]
                     # pts_us=frame.pts_us -> OSD 按就近帧对齐叠加。
-                    sink.send_detections(pts_us=frame.pts_us, boxes=boxes)
-                    x1, y1, x2, y2, sc, _ = boxes[0]
-                    print("motion seq=%d pts=%d box=(%d,%d,%d,%d) score=%.2f"
-                          % (frame.seq, frame.pts_us, x1, y1, x2, y2, sc))
+                    sink.send_detections(pts_us=frame.pts_us, boxes=norm)
+                    nb = norm[0]
+                    print("motion seq=%d pts=%d box=(%.3f,%.3f,%.3f,%.3f) score=%.2f"
+                          % (frame.seq, frame.pts_us, nb[0], nb[1], nb[2], nb[3], nb[4]))
             # 必须 .copy()：cur 是零拷贝视图，下一帧迭代开始后会被覆写。
             prev = cur.copy()
 

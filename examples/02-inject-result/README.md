@@ -12,8 +12,8 @@
 from recamera_ext import ResultSink
 
 with ResultSink(source_id="my-app") as sink:
-    # boxes: (x1, y1, x2, y2, score, label[, class_id]) 像素坐标, score 0..1
-    sink.send_detections(pts_us=0, boxes=[(100, 80, 240, 300, 0.92, "person")])
+    # boxes: (x1, y1, x2, y2, score, label[, class_id]) 归一化 [0,1], score 0..1
+    sink.send_detections(pts_us=0, boxes=[(0.16, 0.17, 0.38, 0.62, 0.92, "person")])
 ```
 
 `pts_us=0` 表示不与具体帧关联（结果照常叠加/推送）。要与某帧对齐叠加时传该帧的 `frame.pts_us`（见示例 03）。`label` 支持中文（自动 UTF-8 编码）。
@@ -25,7 +25,7 @@ with ResultSink(source_id="my-app") as sink:
 | `--task` | 方法 | 每条数据格式 |
 |---|---|---|
 | `detection` | `send_detections` | `(x1, y1, x2, y2, score, label[, class_id])` |
-| `classification` | `send_classification` | `(score, class_id, label)` |
+| `classification` | `send_classification` | `(score, class_id, label[, (x1,y1,x2,y2)])` |
 | `tracking` | `send_tracking` | `(x1, y1, x2, y2, score, class_id, label, track_id)` |
 | `keypoints` | `send_keypoints` | `dict{ points:[(x,y,score,keypoint_id),...], 可选 box/score/class_id/label }` |
 
@@ -76,5 +76,5 @@ injected #2
 
 - **`send_detections failed: rc=-2`（EAUTH）**：`source_id` 用了 `"builtin"`，换个名字。
 - **`rc_ext_result_open failed`**：固件不含扩展 API，或权限不足（见总 README）。
-- **框不出现在画面**：确认是 `result-in.sock`（本示例）而非 notify；坐标是否落在画面内（像素坐标，相对订阅分辨率）。
+- **框不出现在画面**：确认是 `result-in.sock`（本示例）而非 notify；坐标是否为归一化 [0,1]（相对画面宽高的比例，**不是像素**——发像素值会被 clamp 成 1px 隐形框）。
 - **发太快没全上屏**：超过 60 msg/s 的会被丢弃计数，把 `--interval` 调大。

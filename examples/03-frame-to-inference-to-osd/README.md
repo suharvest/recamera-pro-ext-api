@@ -26,16 +26,21 @@ with FrameSource() as src, ResultSink(source_id="motion") as sink:
     for frame in src:
         cur = frame.array                        # 零拷贝 Y 平面视图
         if prev is not None:
-            boxes = my_model(prev, cur)          # -> [(x1,y1,x2,y2,score,label), ...]
+            boxes = my_model(prev, cur)          # -> [(x1,y1,x2,y2,score,label), ...] 像素坐标
             if boxes:
-                sink.send_detections(pts_us=frame.pts_us, boxes=boxes)
+                h, w = cur.shape[0], cur.shape[1]
+                # 坐标契约：注入前把像素框除以帧宽/帧高，转成归一化 [0,1]
+                norm = [(x1/w, y1/h, x2/w, y2/h, sc, lb)
+                        for (x1, y1, x2, y2, sc, lb) in boxes]
+                sink.send_detections(pts_us=frame.pts_us, boxes=norm)
         prev = cur.copy()                        # 跨帧保留必须 .copy()
 ```
 
-两处关键：
+三处关键：
 
 - **`prev = cur.copy()`**：`frame.array` 是零拷贝视图，下一帧迭代开始后底层内存会被覆写。要把上一帧留到下次迭代比较，必须 `.copy()`。这是帧差/光流/攒 batch 类算法的通用纪律。
 - **`pts_us=frame.pts_us`**：让 OSD 按就近帧对齐叠加（容差约 1 帧周期）。`frame.pts_us` 与固件内建推理同一时钟源（VI 帧 PTS，`CLOCK_MONOTONIC` 微秒）。
+- **坐标归一化 `[0,1]`**：`send_detections` 的 box 坐标是**归一化比例**（相对画面宽高，左上 x1/y1、右下 x2/y2）。算法通常出的是像素坐标，注入前必须除以帧宽/帧高。**直接发像素值会被 OSD clamp 成 1px 隐形框**（这个示例最初就踩了这个坑）。
 
 ## 依赖
 
@@ -59,9 +64,11 @@ adb shell 'cd /root && python3 motion_to_osd.py --thresh 25 --min-pixels 800'
 
 ```
 running: 640x640 source_id='motion'  (Ctrl-C 退出)
-motion seq=101 pts=1699999999 box=(120,80,300,360) score=0.42
-motion seq=102 pts=1700033332 box=(118,78,305,362) score=0.55
+motion seq=101 pts=1699999999 box=(0.188,0.125,0.469,0.563) score=0.42
+motion seq=102 pts=1700033332 box=(0.184,0.122,0.477,0.566) score=0.55
 ```
+
+（box 为归一化 [0,1]，即像素坐标除以画面宽高后的比例。）
 
 打开 RTSP/预览：在摄像头前挥手，会看到一个 `motion` 框跟着变化区域走。静止时没有框（不发）。
 
