@@ -10,6 +10,7 @@ set:
     ResultSink   = caps.result_ingress ? OsdInjectResultSink  : WsResultSink
     AudioSource  = caps.audio_broker   ? OfficialPcmSource     : (workaround TBD)
     ControlPlane = caps.control_api    ? OfficialControl       : CgiControl
+    ProbeSource  = ProbeSource (SDK)   -- v1 baseline (probe@1), no workaround alt
 
 On today's firmware (6.1.157) none of the official endpoints exist, so every
 factory selects the existing verified workaround and behaviour is byte-for-byte
@@ -52,6 +53,10 @@ def _audio_sock_path() -> str:
     return os.environ.get("RECAMERA_AUDIO_SOCK", "/run/recamera/audio.sock")
 
 
+def _probe_sock_path() -> str:
+    return os.environ.get("RECAMERA_PROBE_SOCK", "/run/recamera/probe.sock")
+
+
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
 
@@ -63,6 +68,11 @@ class Capabilities:
     result_ingress: bool = False
     audio_broker: bool = False
     control_api: bool = False
+    # probe@1 is the ABI v1 baseline observability tap (spec §4). Unlike the
+    # capabilities above it has no reverse-engineered workaround -- the SDK's
+    # ProbeSource is the only implementation. The probe here is informational
+    # (lets appmgr log/skip when the socket is absent); selection never branches.
+    probe: bool = False
 
 
 def probe_capabilities() -> Capabilities:
@@ -76,6 +86,7 @@ def probe_capabilities() -> Capabilities:
                         or _env_bool("RECAMERA_RESULT_INGRESS")),
         audio_broker=os.path.exists(_audio_sock_path()),
         control_api=_env_bool("RECAMERA_CONTROL_API"),
+        probe=os.path.exists(_probe_sock_path()),
     )
 
 
@@ -200,3 +211,26 @@ def select_control(**kw):
         return OfficialControl(**kw)
     from .cgi_control import CgiControl
     return CgiControl(**kw)
+
+
+def select_probe(stages, **kw):
+    """Pick a ProbeSource implementation (spec §4 observability tap).
+
+    Unlike select_frame_source / select_result_sink / select_audio_source /
+    select_control -- each of which chooses between an `Official*` backend and a
+    reverse-engineered workaround -- probe has NO workaround: the SDK's
+    `recamera_ext.ProbeSource` (probe@1, the ABI v1 baseline) is the only
+    implementation, present on any extension-API firmware. So this factory does
+    not branch on `_prefer_official`; it always returns the SDK ProbeSource.
+    `caps.probe` (probed by capabilities()) is informational only -- appmgr can
+    read it to log or skip when the socket is absent, but it does not change the
+    selection.
+
+    `stages` is the non-empty list of stage ids to subscribe (e.g. ["metrics"],
+    ["npu"]); extra kwargs (`sample_every`, `timeout_ms`, `lib_path`) are
+    forwarded to ProbeSource verbatim. Imported lazily so this module stays
+    importable off-device (recamera_ext + librecamera_ext.so.1 only exist on the
+    device with the extension-API firmware).
+    """
+    from recamera_ext import ProbeSource
+    return ProbeSource(stages=stages, **kw)

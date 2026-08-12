@@ -56,6 +56,7 @@ _EXPORTS = {
     "select_result_sink": "registry",
     "select_audio_source": "registry",
     "select_control": "registry",
+    "select_probe": "registry",
     # control plane (official ABC + CgiControl workaround)
     "ControlPlane": "official",
     "OfficialControl": "official",
