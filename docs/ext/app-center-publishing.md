@@ -1,0 +1,401 @@
+# reCamera Pro 应用中心：应用开发与上架指南
+
+> 适用设备：reCamera Pro（RV1126B / recamera_v2）。
+> 读者：想把自己的 AI 应用做成"能装进应用中心、能一键启停、能分发"形态的方案商。
+> 本文只讲**应用中心特有的这条链路**：app 结构 → 打包 → 签名 → 上架 → 安装/管理。
+> app 内部怎么拿帧、回注结果、驱动 GPIO —— 那是扩展 SDK 的能力，见
+> [docs/ext/README.md](./README.md)，本文不重复。
+>
+> 事实来源（全部逐行核实自仓库源码）：
+> - appmgr 后端：`market/appmgr/*.py`
+> - 打包/签名：`market/packaging/{build.py,sign.py,keygen.sh,SIGNING.md}`
+> - 目录/签名策略：`market/appmgr/paths.py`
+> - 目录格式：`market/catalog/{catalog.json,gen_catalog.py}`
+> - 真实 manifest：`apps/*/manifest.json`
+> - 部署脚本：`market/deploy/{S94appmgr,ext_appmgr.conf}`
+
+---
+
+## 1. 应用中心是什么
+
+应用中心（App Center）由一个设备侧进程 **appmgr** 支撑。appmgr 干两件事：
+
+1. **编排**：安装、单活切换、启停、读写配置。核心逻辑是 `market/appmgr/server.py`
+   里的一组普通函数，CLI（`python3 -m appmgr <cmd>`）和 HTTP API 共用同一份代码。
+2. **最小 HTTP API**：监听 **loopback `127.0.0.1:8130`**
+   （`paths.py:62-63`），由 nginx 边缘（`ext_appmgr.conf`）用官方 JWT 会话把关，
+   路径 `/api/appMgr/`。
+
+### app 的运行形态
+
+- **独立进程**。appmgr 就是进程监督者本身（不走 `/etc/init.d`）。
+  `supervisor.start()`（`supervisor.py:146`）用 `subprocess.Popen(..., start_new_session=True)`
+  以新的会话/进程组拉起 app，把 pid 写到 `<app>/run.pid`，stdout/stderr 重定向到
+  `<app>/logs/app.log`。
+- **以 root 运行**。appmgr 自身经 `S94appmgr` 以 root 启动，其拉起的 app 继承 root。
+  原因见规格 §1.1：摄像头/麦克风/`/dev/mpi/*` 设备节点均 root 属主，非 root 开不了硬件。
+- **用扩展 SDK 对接固件**：拿帧（帧代理）、回注结果（结果注入 → OSD/录像/推送）、
+  GPIO、音频，全部走扩展 SDK 的 unix domain socket，见 [README.md](./README.md)。
+- **单活模型**：同一时刻只有一个 app 在跑。`do_switch()`（`server.py:180`）先停掉当前
+  active（和目标本身，保证干净重启），再启动目标。这与"摄像头独占"约束一致。
+
+### 和"裸跑扩展"的区别
+
+裸跑扩展 = 你手动把自己的进程 scp 到设备、手动起停、自己管生命周期。
+应用中心 = **把同一个进程包成可发现（catalog）、可安装（签名校验 + 安全解包）、
+可一键启停切换（单活监督）、可配置（config_schema）、可接 HA/MQTT 的打包形态**。
+底层调用的扩展 API 完全一样；应用中心只是在外面加了一层"分发 + 生命周期"骨架。
+
+---
+
+## 2. 一个 app 的结构
+
+### 目录布局（开发时）
+
+```
+apps/<id>/
+├── manifest.json     # 必需：app 的全部声明（见下）
+├── app.py            # 必需：入口，通常继承 kit.app.App
+├── models/           # 可选：随包分发的模型文件（*.rknn 等）
+│   └── <model>.rknn
+├── hooks/            # 可选：安装/启停钩子（会被打进包）
+└── run               # 可选：自定义启动脚本（会被打进包，装后置 0755）
+```
+
+打包器只收 `manifest.json / app.py / models / hooks / run` 这几项
+（`build.py:28` 的 `INCLUDE_TOP`），其余（`__pycache__`、隐藏文件、`.pyc`、`kit/`）一律排除。
+**共享的 `kit` 运行时不随 app 分发**，它单独部署到设备一份（见 §3）。
+
+### 安装后（设备上）
+
+装到 `/userdata/local/apps/<id>/`（`paths.py:20`），运行期还会多出：
+`config.json`（用户配置覆盖层）、`run.pid`、`logs/app.log`。
+
+### manifest.json 逐字段说明
+
+下表字段以真实 manifest 为准（核实自 `apps/yolo-detector`、`apps/ppocr-reader`、
+`apps/face-analysis`、`apps/voice-transcribe`、`apps/qrcode-reader`、`apps/fall-detection`）。
+
+| 字段 | 必需 | 谁在用 | 说明 |
+|---|---|---|---|
+| `id` | ✅ | 全链路 | app 唯一标识，正则 `[a-z0-9-]{1,64}`（`paths.py:61`）。安装时必须与请求 id 一致，也是安装目录名。 |
+| `name` | ✅ | list/UI | 展示名。 |
+| `name_zh` | | UI | 中文名（可选，部分 app 有）。 |
+| `version` | ✅ | 打包/state | 版本号。`build.py` 用它拼包名 `<id>-<ver>-arm64.tar.gz`；无则打包报错。 |
+| `image` | | list/UI | 画廊图路径，如 `/appcenter/apps/<id>.png`。 |
+| `type` | | list/UI | 现有样本全为 `"self-hosted"`。 |
+| `scene` / `scene_zh` | | UI | 场景分类，如 `"Retail & Audience"`。 |
+| `description` / `description_zh` | | list/UI/catalog | 描述文案。`gen_catalog.py` 从包内 manifest 取 `description` 写进目录。 |
+| `author` | | list/UI | 作者，样本为 `"Seeed reCamera Pro"`。 |
+| `entry` | | supervisor | 入口文件，默认 `"app.py"`。禁止绝对路径或含 `..`（`supervisor.py:118`）。 |
+| `kit` | | 声明式 | 依赖的 kit 版本约束串，如 `">=0.1.0"`（当前仅声明，appmgr 未强校验）。 |
+| `interpreter`（别名 `python`） | | supervisor | 可选：指定解释器绝对路径，如 voice-transcribe 的 `/userdata/rknnenv/bin/python`。缺省用 appmgr 自己的 `sys.executable`。必须是设备上存在的绝对路径，否则 switch 时硬报错（`supervisor.py:93-113`）。 |
+| `capabilities` | | 声明式 | 能力声明数组，如 `["audio"]`。 |
+| `needs_model` | | 声明式 | 是否需要模型，如 voice-transcribe 为 `false`。 |
+| `models[]` | | supervisor/kit | 模型列表。**supervisor 只用 `models[0].file` 作为 `--model` 传入**（`supervisor.py:120-128`）；`models[]` 为空则不传 `--model`（CPU-only app，如 qrcode-reader）。每个元素常见键：`id`、`file`（相对路径，如 `models/x.rknn`）、`task`（detect/pose/classify/recognize…）、`input`（NHWC 形状）、`quant`（int8/fp16）、`classes`/`keypoints`/`heads`、`norm`、`output`、`role`、`dict`。除 `file` 外均由 kit 运行时/前端消费，appmgr 不解析。 |
+| `default_model` | | kit | 默认模型 id（多模型级联时）。 |
+| `postproc` | | kit | 后处理器名，如 `detect`/`pose`/`db_ocr`/`voice`。 |
+| `pipeline[]` | | kit | 多级流水线声明（模型 + 后处理 + stage）。 |
+| `tags[]` | | UI | 标签数组。 |
+| `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor.py:133-135`）。 |
+| `config_schema` | | config API | 可配置项 schema，**扁平** 或 **分组**（`groups[]`）两种写法（`config.py:27-40`）。控件类型：`number`（带 min/max/step）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
+| `ha_entities[]` | | MQTT/HA | Home Assistant 实体声明（component/object_id/name/value_template/device_class…），app 开启 MQTT 后据此上报。 |
+| `privacy_blur` | | app 逻辑 | 隐私开关声明（face-analysis 用）。 |
+
+> **谁真正读 manifest**：appmgr 只读少数字段 ——
+> `server.do_list()` 读 `name/version/type/image/description/scene/author`；
+> `supervisor` 读 `entry / models[0].file / output.sink+port / interpreter`；
+> `config` 读 `config_schema`。**其余字段是给 kit 运行时和前端 SPA 用的声明**，
+> appmgr 原样透传、不校验。写清这点是为了让方案商知道哪些字段"填错会装不上/起不来"
+> （前四类），哪些"填错只影响 UI/运行逻辑"（其余）。
+
+### 应用图标解析（三级回退）
+
+前端渲染 app 图标按三级回退，安装弹窗（AppStore）与已装列表（Applications）两处**用同一套逻辑**：
+
+1. **catalog / manifest 的 `image` 字段**：条目带 `image`（如 `/appcenter/apps/<id>.png`）时直接用它。
+2. **前端内置 `APP_IMAGES`**：`image` 缺省时，若 app `id` 命中前端内置映射表，用打包进前端的内置图——图片放
+   `recamera_web_react/src/components/app_center/apps/<id>.png`，并在 `appImages.js` 里按 `id` 登记进 `APP_IMAGES`。
+3. **首字母占位**：前两级都缺时，回落到用 app 名首字母生成的占位图标。
+
+给自己的 app 配图标：要随包/目录分发就填 `image`；要内置进官方前端就走第 2 级（放 png + 登记 `appImages.js`）。
+
+### 最小可用 manifest 模板
+
+```json
+{
+  "id": "my-app",
+  "name": "My App",
+  "version": "0.1.0",
+  "type": "self-hosted",
+  "author": "Your Company",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "models": [
+    { "id": "my_model", "file": "models/my_model.rknn", "task": "detect" }
+  ],
+  "output": { "sink": "ws", "port": 8124 },
+  "config_schema": {}
+}
+```
+
+CPU-only（无模型）的最小形态把 `models` 写成 `[]` 即可（参考 qrcode-reader）。
+
+---
+
+## 3. 开发
+
+app 逻辑基于**扩展 SDK + 共享 kit 运行时**。SDK 的帧代理/结果注入/GPIO/音频 API 细节
+见 [README.md](./README.md) 与 `sdk/`，本文不复述。这里只讲应用中心侧要点：
+
+### app.py 的典型结构
+
+现有样本几乎都是"薄壳"：拿帧 → 推理 → 后处理这套通用循环在共享 `kit.app.App` 基类里，
+app 只声明用哪个模型/后处理，并重写 `on_results()` 把原始检测整形成应用级事件。
+核实自 `apps/yolo-detector/app.py`：
+
+```python
+from kit.app import App, run_app
+
+class YoloDetectorApp(App):
+    id = "yolo-detector"
+    name = "YOLO Detector"
+    postproc = "detect"
+
+    def on_results(self, results, frame):
+        return [
+            {"kind": "detection", "label": d["cls_name"],
+             "cls": d["cls"], "score": d["score"], "box": d["box"]}
+            for d in results
+        ]
+
+if __name__ == "__main__":
+    run_app(YoloDetectorApp())
+```
+
+端到端"取帧 → 推理 → 回注 OSD"的完整可运行样例见
+[examples/03-frame-to-inference-to-osd](../../examples/03-frame-to-inference-to-osd/)。
+
+### kit 运行时从哪来
+
+kit 是**一份共享副本**，部署在 `/userdata/local/kit/kit/`（`paths.py:10`，`KIT_PARENT=/userdata/local/kit`）。
+supervisor 启动 app 时注入 `KIT_PARENT` 和 `PYTHONPATH`（`supervisor.py:164-167`），
+所以 app 里 `import kit.app` 能找到。**kit 不打进 app 包**，app 包只有几百 KB～几十 MB
+（模型占大头）。
+
+### 模型放哪、怎么被加载
+
+- 开发时放 `apps/<id>/models/`，manifest `models[].file` 用相对路径 `models/xxx.rknn`。
+- 打包时 `models/` 整个进包（`build.py:28`）。
+- 运行时 supervisor 以 app 安装目录为 cwd，把 `models[0].file` 作为 `--model` 传给
+  `app.py`（`supervisor.py:120-128`、`_build_cmd`）。多模型级联由 kit 依 `pipeline[]` 自行加载。
+
+---
+
+## 4. 打包
+
+用 `market/packaging/build.py` 把 app 目录打成分发包：
+
+```sh
+cd market/packaging
+python3 build.py ../../apps/my-app                 # 输出到 packaging/dist/
+python3 build.py ../../apps/my-app --out /tmp/out  # 指定输出目录
+```
+
+产物：`<id>-<version>-arm64.tar.gz`（包名由 manifest 的 `id`+`version` 拼出）。
+
+**包结构**（tar.gz 顶层，核实自 `build.py` 与 `dist/` 样本）：
+
+```
+manifest.json      ← 必须在顶层（installer/gen_catalog 都 getmember("manifest.json")）
+app.py             ← 必须存在，否则 build.py 报错
+models/…           ← 若声明了模型
+hooks/ run         ← 若存在
+```
+
+要点（`build.py`）：
+
+- 只收 `INCLUDE_TOP` 五项，自动剔除 `__pycache__`/隐藏文件/`.pyc`/`kit/`。
+- tar 归一化：`uid=gid=0`、`mtime=0`、成员排序 —— 尽量可复现。
+- 打完打印成员列表、字节数、**md5**。
+- **kit 不入包**（`build.py:6-9`）。
+- 包大小受设备侧限制约束：≤200 MB 压缩包、≤400 MB 解包、≤4096 个成员（`paths.py:57-59`）。
+
+---
+
+## 5. 签名
+
+### 为什么要签
+
+`installer.inspect()` 在解包**之前**先验签（`installer.py:90-104` → `signing.verify_package`）。
+安装 app 等于"向设备投递 root 代码"，所以每个包都当作敌意输入：先验真伪，再做
+zip-slip/tar-bomb 防护，最后才解包。
+
+### 签名方案（核实自 `signing.py`、`SIGNING.md`、`keygen.sh`）
+
+- **算法**：ECDSA over P-256（prime256v1），摘要 SHA-256。
+- **签的是**：原始 `<pkg>.tar.gz` 字节的**分离签名**。
+- **分发**：base64(DER)，两种载体 —— `<pkg>.tar.gz.sig` 边车文件，和 catalog 里的
+  `package.signature`（+ `signature_alg`）。
+- **验签工具**：设备用自带 `openssl dgst -sha256 -verify`（兼容设备的 OpenSSL 1.1.1 与构建机 3.x，
+  故不用 Ed25519）。零 Python 加密依赖。
+
+### 信任锚与密钥
+
+| 密钥 | 位置 | 在仓库？ | 在设备？ |
+|---|---|---|---|
+| 私钥 `release_priv.pem` | `~/.recamera_release_key/`（chmod 600） | 否，永不 | 否，永不 |
+| 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随 appmgr 部署到 `/userdata/local/appmgr/keys/`） |
+
+设备侧唯一信任锚就是这份公钥（`paths.py:40-41`，可用 `APPMGR_RELEASE_PUBKEY` 覆盖）。
+
+### 怎么签一个包
+
+```sh
+cd market/packaging
+./keygen.sh                 # 一次性生成密钥对（私钥留本地，公钥落仓库；拒绝覆盖已有私钥）
+python3 build.py ../../apps/my-app
+python3 sign.py             # 给 dist/*.tar.gz 逐个签，写出 <pkg>.tar.gz.sig
+python3 sign.py --verify    # 可选：拿公钥回验
+```
+
+### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`paths.py:50-51`）
+
+- 默认 **1（开）**：**无签名的包被拒**；**签名错误的包永远被拒**。
+- **0**：允许无签名包（审计告警）；签名错误仍拒。这是迁移/兜底开关。
+- 已安装的 app 不会被重新验签，翻这个开关不会弄死在跑的设备，只影响新安装。
+- 有签名但设备上没有公钥 → **fail closed**（拒装，`signing.py:128-131`）。
+
+### 信任链现状（诚实标注）
+
+**机制完整，生态不完整。** 逐条核实：
+
+- 签名/验签的机制是**完整可用**的：`keygen.sh`/`sign.py`/`signing.py` 全链路能跑，
+  仓库里 `dist/` 的 8 个包都有有效 `.sig` 且已嵌入 `catalog.json`，
+  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 公钥。
+- 但这是**单密钥自签模型**，不是 CA / 开发者证书体系：
+  - 只有**一对**密钥。谁跑了 `keygen.sh`、谁手里就有能让全设备信任的私钥。仓库里这枚公钥
+    对应的私钥由发布方（Seeed，样本 `author` 为 "Seeed reCamera Pro"）持有。
+  - **没有面向第三方方案商的证书签发流程**。方案商自己签的包，出厂设备的信任锚（Seeed 公钥）
+    验不过 → 默认策略下装不上。
+- 因此，方案商要让包装进"出厂设备的应用中心"，当前只有三条路，**都需要额外配合或降级**：
+  1. **由 Seeed 侧签发**（把包交给持私钥方签名）—— 需 Seeed 配合，流程未在本仓库定义；
+  2. **自管设备群**：把设备上的 `release_pub.pem` 换成自己的公钥，用自己的私钥签
+     （或用 `APPMGR_RELEASE_PUBKEY` 指向自己的锚）；
+  3. **关闭强制**：`APPMGR_REQUIRE_SIGNATURE=0` 允许无签名安装（牺牲真伪保证）。
+
+> 结论：**签名基础设施已就绪，但"第三方开发者证书 / 上架签发"这一环是半成品，需 Seeed 侧配合才能形成
+> 面向生态的信任链。** 规格 §1（第 18-20 行）也把"打包分发/签名"列为 P1/P2、不在当前固件范围。
+
+---
+
+## 6. 上架
+
+### catalog.json 格式（schema v1，核实自 `catalog.json` + `gen_catalog.py`）
+
+```json
+{
+  "schema": 1,
+  "generated": "2026-08-09T04:16:49Z",
+  "source": "recamera_pro/market/packaging/dist",
+  "apps": [
+    {
+      "id": "fall-detection",
+      "name": "Fall Detection",
+      "version": "0.1.0",
+      "description": "…",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/pkgs/fall-detection-0.1.0-arm64.tar.gz",
+        "filename": "fall-detection-0.1.0-arm64.tar.gz",
+        "sha256": "7124718d…",
+        "size": 2865713,
+        "signature": "MEUCIC…",
+        "signature_alg": "ecdsa-sha256"
+      }
+    }
+  ]
+}
+```
+
+### 怎么把 app 加进 catalog
+
+```sh
+python3 market/catalog/gen_catalog.py                       # 扫 ../packaging/dist，base /appcenter/pkgs/
+python3 market/catalog/gen_catalog.py --dist DIR --out FILE --base-url https://cdn.example/pkgs/
+```
+
+`gen_catalog.py` 是目录的唯一真源：扫 `dist/*.tar.gz`，从**包内 manifest** 取
+id/name/version/description，实算 sha256+size，读 `.sig` 边车嵌入 `signature`。
+url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策略下这类包会被设备拒装）。
+`--base-url` 生产环境指向 CDN/OSS。
+
+### 装到设备的流程
+
+设备在常见 USB 组网下没有外网路由（`gen_catalog.py:5-10`），所以**由浏览器代下**：
+
+```
+浏览器从 catalog 的 package.url 下载 .tar.gz
+   → 浏览器本地校验 sha256
+   → POST /api/appMgr/upload （raw bytes + X-Filename 头）
+        → appmgr 落盘到 /userdata/appstage/<filename>（server.do_upload）
+   → POST /api/appMgr/install { "path": "/userdata/appstage/<filename>", "signature": "<base64>" }
+        → installer 验签 + zip-slip 防护 + 原子解包到 /userdata/local/apps/<id>/
+```
+
+设备本地也可直接用 CLI（`__main__.py`）：`python3 -m appmgr install <pkg.tar.gz>`
+（包路径须在允许根 `/userdata` 下，`paths.py:54-56`）。
+
+### 启停切换（单活）
+
+- `POST /api/appMgr/switch {id}`：停当前 active（及目标）→ 启目标 → 置 active；
+  启动失败会回滚 active 状态（`server.py:180-202`）。
+- `POST /api/appMgr/stop {id?}`：停指定 id，或停当前 active。
+- 开机自恢复：appmgr 启动时会重启上次的 active app（`server._boot_restore`）。
+
+---
+
+## 7. 安装/管理 API 参考
+
+Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（同源 cookie `token`）把关。
+路径尾部斜杠会被 strip（`server.py:380,416`）。核实自 `server.py`。
+
+| 方法 | 路径 | 入参 | 返回 | 源码 |
+|---|---|---|---|---|
+| GET | `/api/appMgr/list` | — | `{active_app, apps:[{id,name,version,type,image,description,scene,author,installed,running,pid,active}]}` | `server.py:378-382` / `do_list:85` |
+| POST | `/api/appMgr/install` | `{path, signature?}` | `{id, version, installed:true, signature:{signed,verified,alg,detail}}` | `server.py:430-434` / `do_install:168` |
+| POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:435-439` / `do_switch:180` |
+| POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:440-441` / `do_stop:205` |
+| POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:419-427` / `do_upload:122` |
+| GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:383-390` / `do_get_config:216` |
+| POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:442-448` / `do_set_config:225` |
+| GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:391-392` / `do_get_mqtt:326` |
+| POST | `/api/appMgr/mqtt` | `{mqtt:{...}}` 或平铺 | 同上视图 + `restarted`（改后重启 active app 生效） | `server.py:449-453` / `do_set_mqtt:331` |
+| GET | `/api/appMgr/metrics` | — | `{npu_load, mem, temp_c, active_app, uptime_s, ts}` | `server.py:393-394` / `do_metrics:308` |
+
+**错误码**（`server.py:455-460`）：
+`400` 参数/校验/安装/监督错误（`ValueError`/`InstallError`/`SupervisorError`）；
+`409` 忙（`{"error":..., "code":-2}`，有别的 install/switch/stop 在跑，busy-gate 串行化）；
+`404` 未知路径；`500` 其他异常。
+
+---
+
+## 8. 现状与限制（诚实标注）
+
+- **appmgr 是应用方旁挂实现，非原厂内建**。规格 §1（14-20 行）明确"打包分发/签名/沙箱不在本版固件范围"，
+  列为 P1/P2。appmgr 代码+状态放在 `/userdata`（survive OTA），靠 `S94appmgr` 开机重注入
+  nginx 边缘 conf，OTA 后的重注入触发链**不完全自动**（需 `appmgr-restore.sh`，见 `S94appmgr:22-30`）。
+- **签名/上架是半成品（生态侧）**：机制完整可跑，但只有单密钥自签、无第三方开发者证书体系。
+  方案商要上架出厂设备，需 Seeed 侧签发、或自管公钥、或关闭强制。详见 §5。
+- **无卸载 / 无版本管理 API**：`installer.uninstall()` 存在（`installer.py:180`），
+  但 `server.py` 和 CLI **都没有把它接出来** —— 当前没有卸载端点、没有多版本共存、没有回滚面。
+  安装是"原子换目录"（旧目录移为 `.old` 再删，`installer.py:163-173`），`state.json`
+  只记 active app + version。
+- **单活**：同一时刻只有一个 app 运行（摄像头独占），`switch` 会停掉其它。
+- **v1 无沙箱**：app 全部以 root 运行，扩展间无强隔离（规格 §1.1：source_id 防冒充在全 root 下
+  "只能防手滑不能防恶意"）。
+- **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:57-59`）。
+- **当前样本**：`apps/` 有 9 个 app 目录，但 `catalog.json` 只收录 **8 个已签名**应用
+  （face-analysis / facemesh-reader / fall-detection / fitness-trainer / ppocr-reader /
+  qrcode-reader / retail-vision / yolo-detector）。第 9 个 **voice-transcribe** 在 `dist/`
+  有包但**无 `.sig`、未进 catalog**（较新、尚未签名上架）—— 正好是"未签名 = 未上架"的活样本。

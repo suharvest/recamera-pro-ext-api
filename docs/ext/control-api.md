@@ -106,6 +106,19 @@ curl -k -b "token=<JWT>" https://<设备>/cgi-bin/entry.cgi/api/v1/ext/capabilit
 
 **后续方向**：待 rkipc 暴露订阅状态查询——经现有 `/var/tmp/rkipc` RPC，或新增一条只读 socket——entry.cgi 侧再补充跨进程查询并聚合返回。
 
+### 1.3 kit 控制面客户端 `CgiControl`（已实现）
+
+共享 kit 运行时提供 `CgiControl`——把下列存量端点封装成方案商可直接调用的控制面。`kit.control.select_control()` 现返回 `CgiControl` 实例（不再抛 `NotImplementedError`）。
+
+- **`set_inference(enable, model, fps)`**：调 `POST /cgi-bin/entry.cgi/model/inference?id=<n>`，body `{"iEnable":<0|1>, "sModel":"<name>", "iFPS":<n>}`——开关内建推理、切模型、设帧率。
+- **`snapshot()`**：走**帧代理**取帧（`FrameSource` 抓一帧 → `cv2` 编 JPEG 返回字节），**不经 entry.cgi**——entry.cgi 无取帧端点，故用帧代理旁路实现单帧抓取。
+
+**HTTPS + 本机免鉴权（接入要点，踩坑写清）**：
+
+- 请求走 **HTTPS 443**（自签证书，客户端须 `verify=False` / `curl -k`）。**不要打 80**：nginx 从 80 会 **307 跳转**到 443，requests 默认不会把 body 带过重定向，POST 会静默变空 → 推理配置不生效。直接用 `https://127.0.0.1/...`。
+- 来源 `127.0.0.1` 命中 nginx localhost 直通（`HTTP_X_INTERNAL_FROM_LOCALHOST=1`），**免 JWT**——设备上的 app 调控制面零门槛，无需先登录拿 Cookie。
+- 真机已验证 `set_inference` + `snapshot` 通过。
+
 ---
 
 ## 2. 存量 API 必需子集（冻结 vs internal）

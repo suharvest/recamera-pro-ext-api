@@ -6,8 +6,8 @@
 >
 > 事实来源：
 > - 规格：`RECAMERA_PRO_API_SPEC.md`（§1 握手/身份/错误码、§2 帧代理、§3 结果注入、§8 架构）
-> - C ABI：`sdk/librecamera_ext/include/recamera_ext.h`
-> - Python 封装：`sdk/librecamera_ext/python/recamera_ext/__init__.py`
+> - C ABI：`sdk/include/recamera_ext.h`
+> - Python 封装：`sdk/python/recamera_ext/__init__.py`
 > - proto：`common/vigil/protocol/ext_api.proto`、`common/vigil/protocol/inference.proto`
 
 ---
@@ -32,13 +32,13 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | 能力 | 状态 | 对接方式 | 文档 |
 |---|---|---|---|
 | **帧代理**（零拷贝取帧） | 现成可用（M2） | `FrameSource` / C ABI `rc_ext_frame_*`，`/run/recamera/frame.sock` | 本文 §3 |
-| **结果注入**（OSD+录像+推送） | 现成可用（M1） | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **结果注入**（OSD+录像+推送） | 现成可用（M1）；全套 `send_*`（检测/分类/分割/跟踪/关键点）已在 SDK | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
 | **音频 PCM** | 现成可用 | `arecord -D ai_asr`（ALSA dsnoop 共享） | [audio-pcm.md](./audio-pcm.md) |
 | **GPIO 结果触发** | 现成可用（组合现有零件） | notify WS + gmgr API，无需固件新功能 | [gpio-result-trigger.md](./gpio-result-trigger.md) |
 | **前端扩展挂载** | 现成可用 | `ext_<name>.conf` + `/extension/<name>/`（复用 JWT 会话） | [frontend-extension.md](./frontend-extension.md) |
 | **结果推送（notify）** | 现成可用 | 向 `/var/tmp/notify` 写 `InferenceResult`（仅分发，不上 OSD） | [result-push.md](./result-push.md) |
 | **rkipc RPC / 配置类** | 走 HTTP API | entry.cgi HTTP API（`/var/tmp/rkipc` 是内部接口，勿直连） | [rkipc-rpc-status.md](./rkipc-rpc-status.md) |
-| **观测面（M3）** | 已实现（真机验证） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §8 与规格 §4 |
+| **观测面（M3）** | 已实现（真机验证）；SDK client `ProbeSource`（v1.2.0） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §4.8 与规格 §4 |
 | 控制面（M4）/ 显示（M5）/ 生态（M6）/ 沙箱分发 | 规划中 | — | 见本文 §8 与规格 |
 
 > **帧代理 vs 结果注入 vs notify 的选择**：
@@ -77,8 +77,8 @@ with FrameSource() as src:          # 默认订阅 NPU 同款分辨率/格式（
 from recamera_ext import ResultSink
 
 with ResultSink(source_id="face-app") as sink:
-    # boxes: (x1, y1, x2, y2, score, label[, class_id]) 像素坐标，score 0..1
-    sink.send_detections(pts_us=0, boxes=[(100, 80, 240, 300, 0.92, "person")])
+    # boxes: (x1, y1, x2, y2, score, label[, class_id]) 归一化 [0,1] 坐标，score 0..1
+    sink.send_detections(pts_us=0, boxes=[(0.16, 0.17, 0.38, 0.63, 0.92, "person")])
 ```
 
 `pts_us=0` 表示不与具体帧关联（结果照常叠加/推送）。要与某一帧对齐叠加时，传该帧的 `frame.pts_us`（见 §4）。
@@ -104,7 +104,7 @@ with FrameSource() as src, ResultSink(source_id="my-app") as sink:
 
 ### 3.1 C ABI（`recamera_ext.h`，v1 冻结）
 
-签名逐一核实自 `sdk/librecamera_ext/include/recamera_ext.h`：
+签名逐一核实自 `sdk/include/recamera_ext.h`：
 
 ```c
 // 打开：连接 /run/recamera/frame.sock，完成握手 + FrameSubscribe。
@@ -241,56 +241,223 @@ with FrameSource(FrameConfig(fps_divisor=2)) as src:
 
 ## 4. 结果注入 API（M1 — `result-in.sock`）
 
-把你算出的检测结果送回 rkipc，走**与内建推理完全相同的三路分发**（规格 §3.3）：
+把你算出的推理结果（检测 / 分类 / 分割 / 跟踪 / 关键点）送回 rkipc，走**与内建推理完全相同的三路分发**（规格 §3.3）：
 
 1. **OSD 叠加**：`osd_manager_draw_infer()` 画进 RTSP/预览叠加层，按 `source_id` 哈希分配颜色；
 2. **录像**：结果进 vigil 录像队列，回放可见；
 3. **推送**：`rc_notify_send_inference()` 转发 WS（本机 `127.0.0.1:8123` / 外部 `/ws/inference/results`）/ MQTT / HTTP / UART。
 
-### 4.1 C ABI（`recamera_ext.h`，v1 冻结）
+SDK 覆盖全部五种任务类型：`send_detections` / `send_classification` / `send_segmentation` / `send_tracking` / `send_keypoints`（C ABI 与 Python 一一对应）。每个 `send_*` 打包对应的 `InferenceResult` oneof 分支，发一条 datagram；`pts_us` 语义一致（`CLOCK_MONOTONIC` 微秒，`0` = 不关联帧）；返回 0 成功，负值 = `-rc_ext_err_t`。所有 `const char *label` 均接受 `NULL`（当 `""`）。
+
+> **坐标契约（务必遵守）**：所有 box 坐标（检测 / 分类 ROI / 分割 ROI / 跟踪 / 关键点对象框）以及关键点 point 的 `x/y` 均为**归一化 [0,1]**——相对画面宽高的比例（左上 `x1/y1`、右下 `x2/y2`，`0..1`，如 `0.5` = 居中）。OSD 渲染器（`osd_infer.c`）先 clamp 到 [0,1] 再乘画面宽高，**传像素值会被压成 1px 隐形框**，务必发比例。分割的 `mask` 是行主序原始字节（非坐标），不受此约束。
+
+### 4.1 C ABI（`sdk/include/recamera_ext.h`，v1 冻结）
+
+打开/关闭（对所有任务类型通用）：
+
+```c
+// 连接 /run/recamera/result-in.sock 并握手。source_id 为建议值（服务端按
+// peercred 身份可能改写）；失败返回 NULL 并置 *err。
+rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err);
+
+void rc_ext_result_close(rc_ext_result_t *h);  // NULL 安全
+```
+
+**检测（DETECTION）** — `recamera_ext.h:22-42`：
 
 ```c
 typedef struct {
-    float x1, y1, x2, y2;  // 像素坐标（左上 / 右下）
+    float x1, y1, x2, y2;  // 归一化 [0,1] 坐标（左上 / 右下，相对画面宽高）
     float score;           // 置信度 0..1
     const char *label;     // 类名；NULL -> ""
     int class_id;
 } rc_ext_box_t;
 
-// 连接 /run/recamera/result-in.sock 并握手。source_id 为建议值（服务端按
-// peercred 身份可能改写）；失败返回 NULL 并置 *err。
-rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err);
-
-// 发一条 DETECTION 结果，n 个框，pts_us = CLOCK_MONOTONIC 微秒（0 = 不关联帧）。
-// 返回 0 成功，负值 = -rc_ext_err_t。
 int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
                                   const rc_ext_box_t *boxes, size_t n);
+```
 
-void rc_ext_result_close(rc_ext_result_t *h);  // NULL 安全
+**分类（CLASSIFICATION）** — `recamera_ext.h:51-59`。分类条目**无位置字段**（见 §4.5 分类通道 box 缺口）：
+
+```c
+typedef struct {
+    float score;       // 置信度 0..1
+    int class_id;
+    const char *label; // 类名；NULL -> ""
+} rc_ext_class_t;
+
+int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
+                                      const rc_ext_class_t *items, size_t n);
+```
+
+**分割（SEGMENTATION）** — `recamera_ext.h:63-78`。每条 = 可选 ROI box + 行主序 mask（`mask` 指向 `mask_w*mask_h` 字节，可为 `NULL` 且 `mask_w=mask_h=0`）：
+
+```c
+typedef struct {
+    float x1, y1, x2, y2;
+    float score;
+    int class_id;
+    const char *label;
+    const uint8_t *mask; // 行主序，mask_w*mask_h 字节；NULL -> 空
+    int mask_w;
+    int mask_h;
+} rc_ext_seg_t;
+
+int rc_ext_result_send_segmentation(rc_ext_result_t *h, uint64_t pts_us,
+                                    const rc_ext_seg_t *items, size_t n);
+```
+
+**跟踪（TRACKING）** — `recamera_ext.h:81-94`。检测框 + 持久 `track_id`：
+
+```c
+typedef struct {
+    float x1, y1, x2, y2;
+    float score;
+    int class_id;
+    const char *label;
+    int track_id;
+} rc_ext_track_t;
+
+int rc_ext_result_send_tracking(rc_ext_result_t *h, uint64_t pts_us,
+                                const rc_ext_track_t *items, size_t n);
+```
+
+**关键点（KEYPOINTS）** — `recamera_ext.h:97-121`。每个实例 = 可选对象框（`has_box=0` 时整组 object_info 省略，与 proto 一致）+ 一组关键点：
+
+```c
+typedef struct {
+    float x, y;
+    float score;      // 关键点置信度（非对象置信度）
+    int keypoint_id;  // 调用方自定义关键点 schema 里的索引
+} rc_ext_point_t;
+
+typedef struct {
+    int has_box;         // 0 -> 整组对象框/score/class/label 省略
+    float x1, y1, x2, y2;
+    float score;         // 对象置信度
+    int class_id;
+    const char *label;
+    const rc_ext_point_t *points;
+    size_t n_points;
+} rc_ext_kpinstance_t;
+
+int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
+                                 const rc_ext_kpinstance_t *instances, size_t n);
 ```
 
 ### 4.2 Python（`ResultSink`）
 
-核实自 `__init__.py`：
+核实自 `sdk/python/recamera_ext/__init__.py`。构造与方法：
 
 ```python
 ResultSink(source_id, lib_path=None)
-sink.send_detections(pts_us, boxes)   # boxes: (x1,y1,x2,y2,score,label[,class_id])
+
+# 检测：boxes 每条 (x1, y1, x2, y2, score, label[, class_id])   __init__.py:241
+sink.send_detections(pts_us, boxes)
+
+# 分类：items 每条 (score, class_id, label)                      __init__.py:264
+sink.send_classification(pts_us, items)
+
+# 分割：items 每条 (x1, y1, x2, y2, score, class_id, label,
+#                   mask_bytes, mask_w, mask_h)                   __init__.py:280
+#      mask_bytes 可为 None/空（配 mask_w=mask_h=0）
+sink.send_segmentation(pts_us, items)
+
+# 跟踪：items 每条 (x1, y1, x2, y2, score, class_id, label, track_id)  __init__.py:307
+sink.send_tracking(pts_us, items)
+
+# 关键点：instances 每条为一个 dict（一个对象）：                  __init__.py:328
+#   {"points": [(x, y, score, keypoint_id), ...],   # 必填
+#    "box": (x1, y1, x2, y2),                        # 可选；省略 -> 无对象框
+#    "score": float, "class_id": int, "label": str}  # 对象级，配合 box
+sink.send_keypoints(pts_us, instances)
 ```
 
-`label` 可为 str（自动 UTF-8 编码，支持中文）或 bytes；`class_id` 可省略（默认 0）。示例见 §2.2 / §2.3。
+`label` 可为 str（自动 UTF-8 编码，支持中文）或 bytes。检测的 `class_id` 可省略（默认 0）。任一方法失败抛 `RuntimeError`（消息含 `rc=`）。
 
-### 4.3 约束
+### 4.3 每种任务的最小示例
+
+均可直接复制（`source_id` 换成你的应用名，坐标为归一化 [0,1]）。OSD 叠加效果见 §4.4。
+
+```python
+from recamera_ext import ResultSink
+
+with ResultSink(source_id="my-app") as sink:
+    # 检测：画框 + label（坐标归一化 [0,1]）
+    sink.send_detections(0, [(0.16, 0.17, 0.38, 0.63, 0.92, "person", 0)])
+
+    # 分类：top-k 标签（无位置，见 §4.5）
+    sink.send_classification(0, [(0.87, 3, "cat"), (0.09, 5, "dog")])
+
+    # 分割：ROI box（归一化）+ 行主序 mask（此处传空 mask）
+    sink.send_segmentation(0, [(0.16, 0.17, 0.38, 0.63, 0.9, 0, "person", None, 0, 0)])
+
+    # 跟踪：检测框（归一化）+ 持久 track_id
+    sink.send_tracking(0, [(0.16, 0.17, 0.38, 0.63, 0.92, 0, "person", 7)])
+
+    # 关键点：一个带框的实例 + 3 个点（box/point 均归一化，COCO 式 keypoint_id）
+    sink.send_keypoints(0, [{
+        "box": (0.16, 0.17, 0.38, 0.63), "score": 0.92, "class_id": 0, "label": "person",
+        "points": [(0.24, 0.22, 0.9, 0), (0.27, 0.22, 0.9, 1), (0.25, 0.30, 0.8, 2)],
+    }])
+    # 关键点也可省略 box（纯骨架，不画对象框）：
+    sink.send_keypoints(0, [{"points": [(0.24, 0.22, 0.9, 0), (0.25, 0.30, 0.8, 2)]}])
+```
+
+### 4.4 OSD 渲染现状（诚实标注）
+
+> ⚠️ **坐标契约（务必遵守）：所有 box 坐标与 keypoint 点坐标均为归一化 `[0,1]`（相对画面宽高的比例），不是像素。** 设备 OSD 渲染器（`osd_infer.c`：`osd_infer_box_to_rect` / `osd_infer_norm_to_pixel`）对坐标 `clamp(0,1)` 后再乘画面宽高。**若传像素值（如 240、300），会被 clamp 到 1.0 → 框缩成右下角 1 像素 → 画面上看不见框。** 早期 header 曾误标"pixels"（v1.2.0 已更正），按像素接入的框不显示即此原因。把你的像素结果除以画面宽高转成 `[0,1]` 再注入。
+
+各任务类型注入后的三路分发（OSD 叠加 / 录像 / WS·MQTT·HTTP·UART 推送）走同一 `rc_result_dispatch()`。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；OSD 画面渲染的真机端到端验证程度不同：
+
+| 任务类型 | 注入 + WS 推送 | OSD 画面渲染 | 端到端真机验证 |
+|---|---|---|---|
+| 检测 | 是 | 画检测框 + label（按 `source_id` 哈希配色） | **已验证**（2026-08-12 真机：归一化坐标注入→RTSP `live/0` 抓帧确认框 + label 上屏；WS + SDK C ABI 端到端，CHANGES §4） |
+| 跟踪 | 是 | 画框 + `track_id`（复用同一 `osd_infer_box_to_rect`） | 注入/WS 已验证；OSD 画面复用已验证的检测框渲染，跟踪专项画面未单独截图 |
+| 关键点 | 是 | 画骨架点 + 对象框（`osd_manager.c` TASK_TYPE_KEYPOINTS + pose schema，点坐标同为归一化） | 注入/WS 已验证；OSD 骨架画面未单独截图 |
+| 分类 | 是 | 画标签文本 + 可选 ROI 框（见 §4.5，box 可选） | 注入/WS 已验证；带 box 的分类 OSD 画面未单独截图 |
+| 分割 | 是 | ROI 框 + mask 叠加 | 注入/WS 已验证；OSD 画面未单独截图 |
+
+诚实结论：**注入能通、WS 能收，对全部五种任务成立**；OSD 画面渲染方面，**检测框已在真机端到端复验（2026-08-12，坐标修正后确认上屏）**，其余任务类型复用同一套已验证的 `osd_infer_box_to_rect`/点渲染，专项画面尚未逐一截图核对。接入时坐标务必用归一化 `[0,1]`（见上方警示）。
+
+### 4.5 分类通道可选 ROI box（v1.1.0+）
+
+`InferenceClassificationEntry` 自 v1.1.0 起带**可选** `InferenceBox box`（proto tag 4，向后兼容；detection/segmentation/tracking 也都带 `InferenceBox`）。多目标场景（如画面里多张脸各自的属性）可用它表达"某属性属于哪个目标"。
+
+- **带位置的分类**（每条属性绑定一个 ROI）：`send_classification` 的 item 传第 4 元素 `(x1,y1,x2,y2)`（归一化 `[0,1]`，见 §4.4 坐标契约），OSD 会在该 ROI 画框 + 标签。
+- **整幅分类**（无位置）：省略 box，照常输出 top-k 标签文本。
+- C 侧 `rc_ext_class_t` 的 `has_box` + `x1/y1/x2/y2` 承载该字段（`has_box=0` 时省略）；Python `send_classification` item 为 `(score, class_id, label)` 或 `(score, class_id, label, (x1,y1,x2,y2))`。
+
+（早期版本无此字段时的变通是把属性拼进 detection 的 `label`；v1.1.0 起可直接用分类 box，不再需要变通。）
+
+### 4.6 约束
 
 - **`source_id` 不能用保留字 `"builtin"`**——那是内建推理专用，外部使用被拒（EAUTH，规格 §1.1）。服务端按连接的 peercred 身份校验；无注册条目时会把 source_id 改写为 `"uid:<n>"`。
 - **限速**：两级 token bucket——每连接 **60 msg/s**（burst 15）+ 全局 120 msg/s（burst 30）；单条 payload ≤ 64 KB。超限**丢弃 + 计数**（不断连接）。控制你的发送速率不要超过帧率。
 - **并发**：≤ 4 个结果注入连接。
 - **pts 对齐**：传 `frame.pts_us` 让 OSD 按就近帧匹配（容差 1 帧周期）；传 0 则不关联，照常叠加/推送。
-- v1 只提供 `send_detections`（TASK_TYPE_DETECTION）。proto 层 `InferenceResult` 已支持分类/分割/跟踪/关键点（见 `inference.proto` 的 oneof 10-14），但 SDK 便捷封装 v1 只覆盖检测。
 
-### 4.4 结果去向 vs notify 的区别
+### 4.7 结果去向 vs notify 的区别
 
 `result-in.sock`（本 API）= OSD + 录像 + 推送三路；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API。
+
+### 4.8 观测面 probe（`ProbeSource`，v1.2.0）
+
+订阅内建流水线的 tap 点，观测 rkipc 实际喂进/送出各级的数据（调预处理、核对 NPU 输入、抓后处理张量）。SDK client `ProbeSource` 自 v1.2.0 起可用，连 `/run/recamera/probe.sock`：
+
+```python
+from recamera_ext import ProbeSource
+
+with ProbeSource(stages=["metrics"]) as ps:   # 也可 stages=["preproc.out","npu.raw","postproc.out"]
+    for s in ps:
+        print(s.stage_id, s.seq, len(s.payload))
+```
+
+`ProbeSource(stages=[...], sample_every=1, timeout_ms=1000)` 是迭代器，产出 `ProbeSample`：`.stage_id` / `.seq` / `.pts_us` / `.payload`（原始字节）/ `.meta` / `.array`（零拷贝 ndarray）。
+
+- **stages**：`metrics`（流水线计数/耗时等小数据，**inline** 随消息带回）、`preproc.out`（预处理输出图）、`npu.raw`（NPU 原始输出）、`postproc.out`（后处理张量）。
+- **inline vs memfd**：`metrics` 走 inline；`preproc.out` / `npu.raw` / `postproc.out` 是大张量，服务端经 **memfd** 传递，`.array` 对该内存做**零拷贝** ndarray 视图（生命周期同帧代理，跨迭代保留需 `.copy()`）。
+- 真机已验证 metrics + preproc.out 双路通过。`letterbox padding` 之类"喂 NPU 的图不对"的 bug 就是靠订阅 `preproc.out` 抓实际输入图发现的。
 
 ---
 
@@ -365,7 +532,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 | 结果注入（OSD+录像+推送） | M1 | 现成可用 |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | 现成可用（塌方级门禁 G1-G4 均真机 PASS，2026-08-11） |
 | 音频 PCM / notify / 前端挂载 / rkipc 文档化 | M0 | 现成可用 |
-| 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | 已实现（真机验证；复用 M1 socket 骨架） |
+| 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | 已实现（真机验证；复用 M1 socket 骨架）；SDK client `ProbeSource` v1.2.0，inline + memfd 双路真机验证 |
 | 控制面（`/api/v1/ext/*` 版本化域 + capabilities + app token） | M4 | 规划中 |
 | 显示（M5）/ 生态框架接入 gstreamer/ffmpeg（M6）/ 沙箱与打包签名分发 | M5/M6 | 规划中 |
 
