@@ -71,6 +71,20 @@ _PROBE_DTYPES = {
 
 FOURCC_NV12 = 0x3231564E  # 'N','V','1','2' little-endian
 
+_numpy = None
+
+
+def _np():
+    """Lazily import numpy on first use and cache it. numpy stays an optional
+    dependency (the SDK core is pure ctypes); this raises ImportError at call
+    time only if a frame/probe array is actually requested without numpy."""
+    global _numpy
+    if _numpy is None:
+        import numpy as np
+
+        _numpy = np
+    return _numpy
+
 
 class Box(Structure):
     """Mirror of rc_ext_box_t."""
@@ -289,8 +303,81 @@ def _load(path=None):
     raise OSError("librecamera_ext.so.1 not found")
 
 
-class ResultSink:
+class _Handle:
+    """Lifecycle mixin for an object owning a C handle in ``self._h``.
+
+    Subclasses set ``_close_cfn`` (the lib close-function attribute name) and
+    may override ``_on_close()`` for teardown that must run before the handle
+    is closed. Provides ``close()`` plus the context-manager / ``__del__``
+    protocol."""
+
+    _close_cfn = None
+
+    def _on_close(self):
+        pass
+
+    def close(self):
+        self._on_close()
+        h = getattr(self, "_h", None)
+        if h:
+            getattr(self._lib, self._close_cfn)(h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+class _BorrowIterator(_Handle):
+    """Borrow-iterator over a C ``*_next`` / ``*_release`` pair. Each
+    ``__next__`` releases the previously borrowed record before fetching the
+    next one, so the wrapper is valid only for the current loop step.
+    Subclasses provide the ctypes record type (``_record``), the lib function
+    names (``_next_cfn`` / ``_release_cfn``), and ``_wrap()``."""
+
+    _record = None
+    _next_cfn = None
+    _release_cfn = None
+
+    def _wrap(self, cbuf):
+        raise NotImplementedError
+
+    def _release_cur(self):
+        if self._cur is not None:
+            getattr(self._lib, self._release_cfn)(self._h, byref(self._cur))
+            self._cur = None
+
+    def _on_close(self):
+        self._release_cur()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._release_cur()
+        while True:
+            cbuf = self._record()
+            rc = getattr(self._lib, self._next_cfn)(self._h, byref(cbuf), self._timeout)
+            if rc == 0:
+                self._cur = cbuf
+                return self._wrap(cbuf)
+            if rc > 0:
+                continue  # timeout, keep waiting for a live record
+            raise StopIteration  # EOF / server error
+
+
+class ResultSink(_Handle):
     """Injects detection results into rkipc via /run/recamera/result-in.sock."""
+
+    _close_cfn = "rc_ext_result_close"
 
     def __init__(self, source_id, lib_path=None):
         self._lib = _load(lib_path)
@@ -301,6 +388,29 @@ class ResultSink:
         self.source_id = source_id
         self._labels = []
 
+    @staticmethod
+    def _enc(label):
+        if isinstance(label, str):
+            return label.encode()
+        return label or b""
+
+    def _send(self, cfn, ArrayT, name, pts_us, items, fill_item):
+        """Shared send scaffold: materialise ``items`` into a ``(ArrayT * n)``
+        C array via ``fill_item(i, item, arr)``, call ``self._lib.<cfn>``, and
+        raise on a non-zero rc (``name`` labels the error). ``self._labels`` is
+        reset here as the common keepalive; callers with extra keepalives (e.g.
+        masks, point arrays) reset those before invoking ``_send``."""
+        items = list(items)
+        n = len(items)
+        arr = (ArrayT * n)()
+        self._labels = []
+        for i, it in enumerate(items):
+            fill_item(i, it, arr)
+        rc = getattr(self._lib, cfn)(self._h, c_uint64(pts_us), arr, c_size_t(n))
+        if rc != 0:
+            raise RuntimeError("%s failed: rc=%d" % (name, rc))
+        return rc
+
     def send_detections(self, pts_us, boxes):
         """boxes: iterable of (x1, y1, x2, y2, score, label[, class_id]).
 
@@ -308,26 +418,16 @@ class ResultSink:
         a fraction of frame width/height). The OSD renderer clamps to [0,1] and
         multiplies by frame size, so pixel values collapse to a 1px box -- always
         send fractions, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, "person")."""
-        boxes = list(boxes)
-        n = len(boxes)
-        arr = (Box * n)()
-        self._labels = []
-        for i, b in enumerate(boxes):
+
+        def fill(i, b, arr):
             x1, y1, x2, y2, score, label = b[0], b[1], b[2], b[3], b[4], b[5]
             class_id = b[6] if len(b) > 6 else 0
-            lb = label.encode() if isinstance(label, str) else (label or b"")
+            lb = self._enc(label)
             self._labels.append(lb)
             arr[i] = Box(float(x1), float(y1), float(x2), float(y2), float(score), lb, int(class_id))
-        rc = self._lib.rc_ext_result_send_detections(self._h, c_uint64(pts_us), arr, c_size_t(n))
-        if rc != 0:
-            raise RuntimeError("send_detections failed: rc=%d" % rc)
-        return rc
 
-    @staticmethod
-    def _enc(label):
-        if isinstance(label, str):
-            return label.encode()
-        return label or b""
+        return self._send("rc_ext_result_send_detections", Box, "send_detections",
+                          pts_us, boxes, fill)
 
     def send_classification(self, pts_us, items):
         """items: iterable of (score, class_id, label[, box]).
@@ -337,11 +437,8 @@ class ResultSink:
         a source ROI to the entry (e.g. per-face attributes). When present, the
         box coordinates are normalized [0,1] (fraction of frame width/height),
         e.g. (0.30, 0.20, 0.55, 0.60)."""
-        items = list(items)
-        n = len(items)
-        arr = (Classification * n)()
-        self._labels = []
-        for i, it in enumerate(items):
+
+        def fill(i, it, arr):
             score, class_id, label = it[0], it[1], it[2]
             lb = self._enc(label)
             self._labels.append(lb)
@@ -354,10 +451,9 @@ class ResultSink:
             else:
                 c.has_box = 0
             arr[i] = c
-        rc = self._lib.rc_ext_result_send_classification(self._h, c_uint64(pts_us), arr, c_size_t(n))
-        if rc != 0:
-            raise RuntimeError("send_classification failed: rc=%d" % rc)
-        return rc
+
+        return self._send("rc_ext_result_send_classification", Classification,
+                          "send_classification", pts_us, items, fill)
 
     def send_segmentation(self, pts_us, items):
         """items: iterable of
@@ -366,12 +462,9 @@ class ResultSink:
         width/height), e.g. (0.05, 0.07, 0.62, 0.94). mask_bytes is raw
         row-major bytes (not coordinates) and may be None/empty (with
         mask_w=mask_h=0)."""
-        items = list(items)
-        n = len(items)
-        arr = (Segmentation * n)()
-        self._labels = []
         self._masks = []
-        for i, it in enumerate(items):
+
+        def fill(i, it, arr):
             x1, y1, x2, y2, score, class_id, label = it[0], it[1], it[2], it[3], it[4], it[5], it[6]
             mask = it[7] if len(it) > 7 else None
             mask_w = it[8] if len(it) > 8 else 0
@@ -384,10 +477,9 @@ class ResultSink:
                 float(x1), float(y1), float(x2), float(y2), float(score),
                 int(class_id), lb, (mb if mb else None), int(mask_w), int(mask_h),
             )
-        rc = self._lib.rc_ext_result_send_segmentation(self._h, c_uint64(pts_us), arr, c_size_t(n))
-        if rc != 0:
-            raise RuntimeError("send_segmentation failed: rc=%d" % rc)
-        return rc
+
+        return self._send("rc_ext_result_send_segmentation", Segmentation,
+                          "send_segmentation", pts_us, items, fill)
 
     def send_tracking(self, pts_us, items):
         """items: iterable of (x1, y1, x2, y2, score, class_id, label, track_id).
@@ -395,11 +487,8 @@ class ResultSink:
         Coordinates are normalized [0,1] (fraction of frame width/height), same
         contract as send_detections, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, 0,
         "person", 7)."""
-        items = list(items)
-        n = len(items)
-        arr = (Tracking * n)()
-        self._labels = []
-        for i, it in enumerate(items):
+
+        def fill(i, it, arr):
             x1, y1, x2, y2, score, class_id, label, track_id = (
                 it[0], it[1], it[2], it[3], it[4], it[5], it[6], it[7]
             )
@@ -409,10 +498,9 @@ class ResultSink:
                 float(x1), float(y1), float(x2), float(y2), float(score),
                 int(class_id), lb, int(track_id),
             )
-        rc = self._lib.rc_ext_result_send_tracking(self._h, c_uint64(pts_us), arr, c_size_t(n))
-        if rc != 0:
-            raise RuntimeError("send_tracking failed: rc=%d" % rc)
-        return rc
+
+        return self._send("rc_ext_result_send_tracking", Tracking, "send_tracking",
+                          pts_us, items, fill)
 
     def send_keypoints(self, pts_us, instances):
         """instances: iterable of dicts (or tuples) describing one object each:
@@ -425,12 +513,9 @@ class ResultSink:
         normalized [0,1] (fraction of frame width/height), same contract as
         send_detections. A missing "box" leaves the whole object_info group
         unset on the wire."""
-        instances = list(instances)
-        n = len(instances)
-        arr = (KeypointInstance * n)()
-        self._labels = []
         self._pt_arrays = []  # keep Point arrays alive until the C call returns
-        for i, inst in enumerate(instances):
+
+        def fill(i, inst, arr):
             pts = list(inst.get("points", []))
             np_ = len(pts)
             parr = (Point * np_)()
@@ -456,28 +541,9 @@ class ResultSink:
             ke.points = ctypes.cast(parr, POINTER(Point)) if np_ else ctypes.cast(None, POINTER(Point))
             ke.n_points = np_
             arr[i] = ke
-        rc = self._lib.rc_ext_result_send_keypoints(self._h, c_uint64(pts_us), arr, c_size_t(n))
-        if rc != 0:
-            raise RuntimeError("send_keypoints failed: rc=%d" % rc)
-        return rc
 
-    def close(self):
-        h = getattr(self, "_h", None)
-        if h:
-            self._lib.rc_ext_result_close(h)
-            self._h = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+        return self._send("rc_ext_result_send_keypoints", KeypointInstance,
+                          "send_keypoints", pts_us, instances, fill)
 
 
 class Frame:
@@ -509,7 +575,7 @@ class Frame:
         the whole dma-buf (zero-copy)."""
         if self._buf is not None:
             return self._buf
-        import numpy as np
+        np = _np()
 
         yptr = self._src._lib.rc_ext_frame_map(self._src._h, byref(self._c))
         if not yptr:
@@ -521,7 +587,7 @@ class Frame:
 
     def plane_array(self, i):
         """Plane i as a zero-copy (rows, stride) uint8 view honouring vstride."""
-        import numpy as np
+        np = _np()
 
         buf = self._map()
         off, stride, vstride = self.planes[i]
@@ -543,7 +609,8 @@ class Frame:
     def to_bgr(self):
         """Convenience: contiguous BGR image (copy) via cv2 NV12 conversion."""
         import cv2
-        import numpy as np
+
+        np = _np()
 
         buf = self._map()
         off0, stride0, vstride0 = self.planes[0]
@@ -559,11 +626,16 @@ class Frame:
         return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
 
 
-class FrameSource:
+class FrameSource(_BorrowIterator):
     """Zero-copy frame receiver over /run/recamera/frame.sock (spec §2.5).
 
     Iterating yields Frame objects; each is released automatically when the loop
     advances to the next frame or the context exits."""
+
+    _record = _FrameBuf
+    _next_cfn = "rc_ext_frame_next"
+    _release_cfn = "rc_ext_frame_release"
+    _close_cfn = "rc_ext_frame_close"
 
     def __init__(self, config=None, timeout_ms=1000, lib_path=None):
         self._lib = _load(lib_path)
@@ -582,44 +654,8 @@ class FrameSource:
         self._timeout = timeout_ms
         self._cur = None  # _FrameBuf currently borrowed
 
-    def _release_cur(self):
-        if self._cur is not None:
-            self._lib.rc_ext_frame_release(self._h, byref(self._cur))
-            self._cur = None
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        self._release_cur()
-        while True:
-            cbuf = _FrameBuf()
-            rc = self._lib.rc_ext_frame_next(self._h, byref(cbuf), self._timeout)
-            if rc == 0:
-                self._cur = cbuf
-                return Frame(self, cbuf)
-            if rc > 0:
-                continue  # timeout, keep waiting for a live frame
-            raise StopIteration  # EOF / server error
-
-    def close(self):
-        self._release_cur()
-        h = getattr(self, "_h", None)
-        if h:
-            self._lib.rc_ext_frame_close(h)
-            self._h = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _wrap(self, cbuf):
+        return Frame(self, cbuf)
 
 
 class ProbeSample:
@@ -665,7 +701,7 @@ class ProbeSample:
         """Zero-copy numpy view over the payload. When meta is present the view
         is typed/shaped by the TensorMeta (dtype + shape); otherwise a flat
         uint8 array. The view is valid only until the loop advances."""
-        import numpy as np
+        np = _np()
 
         if not self._ptr or self.payload_len == 0:
             return np.empty((0,), dtype=np.uint8)
@@ -682,7 +718,7 @@ class ProbeSample:
         return np.frombuffer(carr, dtype=np.uint8)
 
 
-class ProbeSource:
+class ProbeSource(_BorrowIterator):
     """Probe observability tap over /run/recamera/probe.sock (spec §4).
 
     Iterating yields ProbeSample objects; each is released automatically when
@@ -693,6 +729,11 @@ class ProbeSource:
             for s in probe:
                 print(s.stage_id, s.seq, s.payload_len)
     """
+
+    _record = _ProbeSample
+    _next_cfn = "rc_ext_probe_next"
+    _release_cfn = "rc_ext_probe_release"
+    _close_cfn = "rc_ext_probe_close"
 
     def __init__(self, stages, sample_every=1, timeout_ms=1000, lib_path=None):
         self._lib = _load(lib_path)
@@ -716,41 +757,5 @@ class ProbeSource:
         self._timeout = timeout_ms
         self._cur = None  # _ProbeSample currently borrowed
 
-    def _release_cur(self):
-        if self._cur is not None:
-            self._lib.rc_ext_probe_release(self._h, byref(self._cur))
-            self._cur = None
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        self._release_cur()
-        while True:
-            csample = _ProbeSample()
-            rc = self._lib.rc_ext_probe_next(self._h, byref(csample), self._timeout)
-            if rc == 0:
-                self._cur = csample
-                return ProbeSample(self, csample)
-            if rc > 0:
-                continue  # timeout, keep waiting
-            raise StopIteration  # EOF / server error
-
-    def close(self):
-        self._release_cur()
-        h = getattr(self, "_h", None)
-        if h:
-            self._lib.rc_ext_probe_close(h)
-            self._h = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _wrap(self, csample):
+        return ProbeSample(self, csample)

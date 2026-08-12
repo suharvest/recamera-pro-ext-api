@@ -11,6 +11,7 @@ add_library(recamera_ext SHARED
 	recamera_ext.c
 	frame_recv.c
 	probe_recv.c
+	ext_client_common.c
 	${RKIPC_COMMON}/rc_notify/inference.pb-c.c
 	${RKIPC_COMMON}/rc_ext_core/ext_api.pb-c.c
 )
