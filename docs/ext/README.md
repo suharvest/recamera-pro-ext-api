@@ -416,9 +416,9 @@ with ResultSink(source_id="my-app") as sink:
 | 跟踪 | 是 | 画框 + `track_id`（复用同一 `osd_infer_box_to_rect`） | 注入/WS 已验证；OSD 画面复用已验证的检测框渲染，跟踪专项画面未单独截图 |
 | 关键点 | 是 | 画骨架点 + 对象框（`osd_manager.c` TASK_TYPE_KEYPOINTS + pose schema，点坐标同为归一化） | 注入/WS 已验证；OSD 骨架画面未单独截图 |
 | 分类 | 是 | 画标签文本 + 可选 ROI 框（见 §4.5，box 可选） | 注入/WS 已验证；带 box 的分类 OSD 画面未单独截图 |
-| 分割 | 是 | ROI 框 + mask 叠加 | 注入/WS 已验证；OSD 画面未单独截图 |
+| 分割 | 是（注入/WS/录像可用） | **不上 OSD** —— `osd_infer.c` 的 task_type switch 只枚举 检测/分类/跟踪/关键点四类，SEGMENTATION 命中 `default` 返回 `-EOPNOTSUPP`，不写任何像素（`osd_infer.h` 标 `segmentation // future` 未实现） | **OSD 不渲染 seg**（源码确认 2026-08-12）；seg 结果仍走 WS/录像分发 |
 
-诚实结论：**注入能通、WS 能收，对全部五种任务成立**；OSD 画面渲染方面，**检测框已在真机端到端复验（2026-08-12，坐标修正后确认上屏）**，其余任务类型复用同一套已验证的 `osd_infer_box_to_rect`/点渲染，专项画面尚未逐一截图核对。接入时坐标务必用归一化 `[0,1]`（见上方警示）。
+诚实结论：**注入能通、WS 能收,对全部五种任务成立**；OSD 画面渲染方面,**检测框已真机端到端复验（2026-08-12，坐标修正后确认上屏）**；跟踪/分类/关键点复用同一套 `osd_infer_box_to_rect`/`osd_infer_norm_to_pixel`（有对应 switch 分支），**但注意：内建推理活跃时其检测 OSD 会持续重绘画布,实测外部注入的非检测结果（跟踪/分类/关键点）在内建活跃时可能不同时显示(需关掉内建推理隔离验证,待补)**；**分割不上 OSD**（渲染器无 seg 分支）。接入时坐标务必用归一化 `[0,1]`（见上方警示）。
 
 ### 4.5 分类通道可选 ROI box（v1.1.0+）
 
