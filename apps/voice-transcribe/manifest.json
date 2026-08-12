@@ -95,6 +95,23 @@
         "title_zh": "采集与断句",
         "items": [
           {
+            "key": "asr_backend",
+            "type": "enum",
+            "title": "ASR backend",
+            "title_zh": "识别后端",
+            "options": [
+              "rk",
+              "sherpa"
+            ],
+            "option_labels": [
+              "NPU w4a16 (rk)",
+              "CPU sherpa"
+            ],
+            "default": "rk",
+            "help": "rk = NPU w4a16 SenseVoice (uses the shared sensevoice_rv1126b_w4a16.rknn). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
+            "help_zh": "rk = NPU w4a16 SenseVoice（使用共享的 sensevoice_rv1126b_w4a16.rknn）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
+          },
+          {
             "key": "language",
             "type": "enum",
             "title": "Language",

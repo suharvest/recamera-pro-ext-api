@@ -71,9 +71,12 @@ class VoiceTranscribeApp(App):
         super().setup(config or {})
         c = self.config
         self.wake_backend = str(c.get("wake_backend", "kws")).lower()
-        # ASR backend selector (voxedge consumer): "sherpa" (CPU, default) or
-        # "rk" (NPU w4a16 via kit.asr_rknn_backend). Downstream is identical.
-        self.asr_backend = str(c.get("asr_backend", "sherpa")).lower()
+        # ASR backend selector (voxedge consumer): "rk" (NPU w4a16 via
+        # kit.asr_rknn_backend, default -- the shared model dir ships the w4a16
+        # .rknn, NOT a sherpa model.int8.onnx) or "sherpa" (CPU). Downstream is
+        # identical. Mirrored as config_schema default so appmgr injects it and a
+        # UI config-set never drops it.
+        self.asr_backend = str(c.get("asr_backend", "rk")).lower()
         self.wakeword = str(c.get("wakeword", "hello camera"))
         self.language = str(c.get("language", "auto"))
         self.min_silence_sec = float(c.get("min_silence_sec", 0.6))
@@ -205,7 +208,11 @@ class VoiceTranscribeApp(App):
             if verbose:
                 print(f"[app:{self.id}] wake backend = ASR keyword {self.wakeword!r}",
                       flush=True)
-            wake = AsrKeywordWakeWord(asr, self.wakeword.split("|"))
+            # Give the wake-word's internal VAD the SAME model_dir silero as the
+            # listening VAD above -- otherwise AsrKeywordWakeWord builds a bare
+            # VadSegmenter() that falls back to kit.logic.vad.DEFAULT_VAD_MODEL.
+            wake = AsrKeywordWakeWord(asr, self.wakeword.split("|"),
+                                     vad_kwargs={"model": vad_model})
         else:
             if verbose:
                 print(f"[app:{self.id}] wake backend = sherpa KeywordSpotter "

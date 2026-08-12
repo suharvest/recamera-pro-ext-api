@@ -9,8 +9,8 @@ endpointing: turn a continuous 16 kHz mono PCM stream into utterance segments,
 cutting on trailing silence (`min_silence_duration`) or a hard cap
 (`max_speech_duration`).
 
-Model artifact (staged on device next to the ASR model, reuse verbatim):
-    /userdata/tmp/asr/silero_vad.onnx        silero VAD v5 ONNX (~0.6 MB)
+Model artifact (staged on device in the SHARED model dir, reuse verbatim):
+    /userdata/local/models/asr/silero_vad.onnx   silero VAD v5 ONNX (~2.2 MB)
 
 sherpa-onnx VAD contract (verified on device, sherpa_onnx 1.13.4, 2026-08-09):
     VoiceActivityDetector.accept_waveform(float32[])   # feed any-length chunk
@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator, Union
 
-DEFAULT_VAD_MODEL = "/userdata/tmp/asr/silero_vad.onnx"
+DEFAULT_VAD_MODEL = "/userdata/local/models/asr/silero_vad.onnx"
 
 
 @dataclass
