@@ -19,8 +19,9 @@
 | [`03-frame-to-inference-to-osd/`](./03-frame-to-inference-to-osd/) | Python | `FrameSource` + `ResultSink` | 完整闭环：取帧 → 自带算法（帧差运动检测）→ 回注 OSD |
 | [`04-gpio-trigger/`](./04-gpio-trigger/) | Python | notify WS + gmgr | 结果命中即拉高/拉低引脚（继电器/LED/告警） |
 | [`05-cpp-frame/`](./05-cpp-frame/) | C | `rc_ext_frame_*` | C ABI 拿一帧写盘 + 交叉编译 Makefile |
+| [`06-probe/`](./06-probe/) | Python | `ProbeSource` | 观测内建推理流水线各级张量/指标（只读） |
 
-建议阅读顺序：01 → 02 → 03（03 是"方案商自带流水线"的核心示例），04/05 按需。
+建议阅读顺序：01 → 02 → 03（03 是"方案商自带流水线"的核心示例），04/05/06 按需。
 
 ### 生产级适配层范本（区别于上面的最小示例）
 
