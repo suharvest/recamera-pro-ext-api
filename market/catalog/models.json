@@ -6,7 +6,8 @@
       "sensevoice_rv1126b_w4a16.rknn",
       "am.mvn",
       "embedding.npy",
-      "chn_jpn_yue_eng_ko_spectok.bpe.model"
+      "chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "silero_vad.onnx"
     ]
   }
 }

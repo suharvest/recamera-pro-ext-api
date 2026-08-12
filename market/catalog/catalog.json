@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-12T12:42:42Z",
+  "generated": "2026-08-12T14:33:46Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -124,9 +124,9 @@
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/packages/voice-transcribe-0.1.0-arm64.tar.gz",
         "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
-        "sha256": "607a3e4ef3cb52b16e413c0cef3ae979ee7b3e5162c7916017f374a04f234826",
-        "size": 6340,
-        "signature": "MEYCIQDafVCqqo9YIOQD2S1MBZfH50IW4C8kj/nJYxfcKPvyeQIhANZ9Os/YhZnBn8hk0jygWvbUd4ss5AVdpN5JNWdm920j",
+        "sha256": "0d2e3228872233e89578c824463c55c03355b47efeb18e7e0162263b5409bbf6",
+        "size": 6660,
+        "signature": "MEUCIBuCY7Bh+GeufAUK7e4jlqlTPQkB5m5UzBtgjHBJSSeCAiEA2Ws1aAgtqfOTJuhcgKnPD/FJMOQytB0VxwQbEfNSfEU=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -156,6 +156,13 @@
           "filename": "chn_jpn_yue_eng_ko_spectok.bpe.model",
           "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
           "size": 377341,
+          "target_path": "/userdata/local/models/asr"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/silero_vad.onnx",
+          "filename": "silero_vad.onnx",
+          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+          "size": 2327524,
           "target_path": "/userdata/local/models/asr"
         }
       ]
