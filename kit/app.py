@@ -199,6 +199,12 @@ class App:
 
                 events = self.on_results(results, frame)
 
+                # Hand the sink the current frame's pixel dimensions before
+                # emit so coordinate-normalizing sinks (OfficialResultSink ->
+                # extension-API [0,1] contract) can divide by the ORIGINAL
+                # full-res frame size our result coords are mapped to. No-op on
+                # the WS/stdout/MQTT workaround sinks (they keep pixel coords).
+                sink.set_frame_size(frame.w, frame.h)
                 sink.emit({"results": results, "events": events}, frame.pts)
 
                 t_pre += t1 - t0

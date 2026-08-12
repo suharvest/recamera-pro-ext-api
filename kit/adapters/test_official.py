@@ -130,6 +130,11 @@ def test_frame_source_yields_rgb():
     print("PASS test_frame_source_yields_rgb (RGB HWC, pts round-trip, letterbox-ready)")
 
 
+# Test frame geometry: width != height so we prove x/width vs y/height, chosen
+# so the sample pixel coords normalize to round [0,1] values.
+_FW, _FH = 200, 400
+
+
 def test_result_sink_maps_detections():
     _install_fake_ext()
     _FakeExtResultSink.calls = []
@@ -137,6 +142,7 @@ def test_result_sink_maps_detections():
     assert OsdInjectResultSink is OfficialResultSink  # back-compat alias
 
     sink = OfficialResultSink(app_id="yolo-detector", verbose=False)
+    sink.set_frame_size(_FW, _FH)          # base loop does this every frame
     payload = {"results": [
         {"box": [10.0, 20.0, 110.0, 220.0], "cls": 0, "cls_name": "person", "score": 0.9},
         {"box": [1, 2, 3, 4], "cls": 2, "cls_name": "car", "score": 0.7},
@@ -151,20 +157,42 @@ def test_result_sink_maps_detections():
     assert pts_us == 1_000_000, pts_us            # exact s->us round-trip
     assert len(boxes) == 2, boxes
     x1, y1, x2, y2, score, label, class_id = boxes[0]
-    assert (x1, y1, x2, y2) == (10.0, 20.0, 110.0, 220.0)
+    # NORMALIZED: x/200, y/400 -> 10/200=0.05, 20/400=0.05, 110/200=0.55, 220/400=0.55
+    assert (x1, y1, x2, y2) == (0.05, 0.05, 0.55, 0.55), (x1, y1, x2, y2)
     assert label == "person" and class_id == 0 and abs(score - 0.9) < 1e-6
     # empty frame -> empty send_detections still fires (clears the OSD).
     m2, _s2, pts_us2, boxes2 = _FakeExtResultSink.calls[1]
     assert m2 == "send_detections" and pts_us2 == 2_033_000 and boxes2 == []
-    # qrcode-style quad (no box) derives a bbox.
+    # qrcode-style quad (no box) derives a bbox, then normalizes.
     _FakeExtResultSink.calls = []
     sink = OfficialResultSink(app_id="qrcode", verbose=False)
+    sink.set_frame_size(_FW, _FH)
     sink.emit({"results": [{"text": "HELLO",
                             "quad": [[10, 10], [30, 12], [28, 40], [8, 38]]}]}, pts=0.5)
     m, _s, _p, boxes = _FakeExtResultSink.calls[0]
-    assert m == "send_detections" and boxes[0][:4] == (8.0, 10.0, 30.0, 40.0), boxes
+    # bbox=(8,10,30,40) -> (8/200,10/400,30/200,40/400)=(0.04,0.025,0.15,0.10)
+    assert m == "send_detections" and boxes[0][:4] == (0.04, 0.025, 0.15, 0.10), boxes
     assert boxes[0][5] == "HELLO"          # text -> label
-    print("PASS test_result_sink_maps_detections (detections + quad->bbox + empty-clears)")
+    print("PASS test_result_sink_maps_detections (normalized [0,1] + quad->bbox + empty-clears)")
+
+
+def test_result_sink_normalizes_and_clamps():
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink
+
+    # Guard: emit WITHOUT set_frame_size -> skipped, no send (avoids 1px boxes).
+    sink = OfficialResultSink(app_id="x", verbose=False)
+    sink.emit({"results": [{"box": [1, 2, 3, 4], "score": 0.5}]}, pts=1.0)
+    assert _FakeExtResultSink.calls == [], "must not send without frame size"
+
+    # Out-of-frame pixels clamp to [0,1]: x1<0 -> 0, y1>H -> 1, x2>W -> 1, y2>>H -> 1.
+    sink.set_frame_size(_FW, _FH)          # 200 x 400
+    sink.emit({"results": [{"box": [-10, 500, 250, 800], "score": 0.5,
+                            "cls_name": "person"}]}, pts=1.0)
+    _m, _s, _p, boxes = _FakeExtResultSink.calls[0]
+    assert boxes[0][:4] == (0.0, 1.0, 1.0, 1.0), boxes[0][:4]
+    print("PASS test_result_sink_normalizes_and_clamps (no-size guard + [0,1] clamp)")
 
 
 def test_result_sink_maps_keypoints():
@@ -175,6 +203,7 @@ def test_result_sink_maps_keypoints():
     # pose result: box + 17 [x,y,conf] keypoints (fall/fitness schema).
     kps = [[float(i), float(i + 1), 0.8] for i in range(17)]
     sink = OfficialResultSink(app_id="fitness-trainer", verbose=False)
+    sink.set_frame_size(_FW, _FH)          # 200 x 400
     sink.emit({"results": [{"box": [5, 6, 105, 206], "score": 0.88,
                             "cls": 0, "cls_name": "person", "keypoints": kps}],
                "events": [{"kind": "workout", "reps": 3}]}, pts=1.5)
@@ -185,20 +214,23 @@ def test_result_sink_maps_keypoints():
     assert method == "send_keypoints", method
     assert pts_us == 1_500_000
     inst = instances[0]
-    assert inst["box"] == (5.0, 6.0, 105.0, 206.0)
+    # NORMALIZED object box: (5/200,6/400,105/200,206/400)
+    assert inst["box"] == (0.025, 0.015, 0.525, 0.515), inst["box"]
     assert inst["label"] == "person" and abs(inst["score"] - 0.88) < 1e-6
     assert len(inst["points"]) == 17
-    # point schema: (x, y, score, keypoint_id) with id == index (COCO order)
-    assert inst["points"][0] == (0.0, 1.0, 0.8, 0)
-    assert inst["points"][16][3] == 16
+    # point schema: (x/W, y/H, score, keypoint_id) with id == index (COCO order)
+    assert inst["points"][0] == (0.0, 0.0025, 0.8, 0), inst["points"][0]
+    assert inst["points"][16] == (0.08, 0.0425, 0.8, 16), inst["points"][16]
     # facemesh landmark schema: [x,y] pairs (no conf) -> conf defaults to 1.0
     _FakeExtResultSink.calls = []
     sink = OfficialResultSink(app_id="facemesh", verbose=False)
+    sink.set_frame_size(_FW, _FH)
     sink.emit({"results": [{"box": [0, 0, 50, 50], "kind": "face",
                             "keypoints": [[1.0, 2.0], [3.0, 4.0]]}]}, pts=0.1)
     _m, _s, _p, instances = _FakeExtResultSink.calls[0]
-    assert instances[0]["points"][0] == (1.0, 2.0, 1.0, 0), instances[0]["points"]
-    print("PASS test_result_sink_maps_keypoints (pose 17-kpt + facemesh landmark, id=index, conf default)")
+    # (1/200, 2/400, 1.0, 0)
+    assert instances[0]["points"][0] == (0.005, 0.005, 1.0, 0), instances[0]["points"]
+    print("PASS test_result_sink_maps_keypoints (normalized pose + facemesh, id=index, conf default)")
 
 
 def test_result_sink_maps_classification():
@@ -206,8 +238,9 @@ def test_result_sink_maps_classification():
     _FakeExtResultSink.calls = []
     from kit.adapters.official import OfficialResultSink
 
-    # face-analysis result: box + attributes -> send_classification (box dropped).
+    # face-analysis result: box + attributes -> send_classification WITH ROI box.
     sink = OfficialResultSink(app_id="face-analysis", verbose=False)
+    sink.set_frame_size(_FW, _FH)          # 200 x 400
     sink.emit({"results": [{
         "box": [10, 10, 60, 70], "cls_name": "face", "score": 0.95,
         "gender": "Male", "gender_conf": 0.9,
@@ -220,16 +253,20 @@ def test_result_sink_maps_classification():
     method, _sid, pts_us, items = _FakeExtResultSink.calls[0]
     assert method == "send_classification", method   # NOT send_detections
     assert pts_us == 2_000_000
-    score, class_id, label = items[0]
+    # (score, class_id, label, normalized_box)
+    score, class_id, label, box = items[0]
     assert label == "Male,30-39,Happiness", label     # composite attribute label
     assert abs(score - 0.6) < 1e-6                     # min of the attr confidences
-    # generic boxless label classifier also routes to classification.
+    # ROI box normalized: (10/200,10/400,60/200,70/400)
+    assert box == (0.05, 0.025, 0.30, 0.175), box
+    # generic boxless label classifier -> 3-tuple, no box.
     _FakeExtResultSink.calls = []
     sink = OfficialResultSink(app_id="clf", verbose=False)
+    sink.set_frame_size(_FW, _FH)
     sink.emit({"results": [{"label": "cat", "score": 0.8, "cls": 3}]}, pts=0.2)
     m, _s, _p, items = _FakeExtResultSink.calls[0]
     assert m == "send_classification" and items[0] == (0.8, 3, "cat"), items
-    print("PASS test_result_sink_maps_classification (face attrs->classification, box dropped, boxless label)")
+    print("PASS test_result_sink_maps_classification (attrs->classification + normalized ROI box + boxless)")
 
 
 def test_result_sink_maps_tracking():
@@ -239,11 +276,12 @@ def test_result_sink_maps_tracking():
 
     # retail-vision: raw person detections in results, tracked boxes in events.
     sink = OfficialResultSink(app_id="retail-vision", verbose=False)
+    sink.set_frame_size(_FW, _FH)          # 200 x 400
     sink.emit({
         "results": [{"box": [0, 0, 10, 10], "cls": 0, "cls_name": "person", "score": 0.9}],
         "events": [
             {"kind": "track", "track_id": 7, "state": "ENGAGED", "score": 0.9,
-             "box": [0.0, 0.0, 10.0, 10.0]},
+             "box": [20.0, 40.0, 100.0, 200.0]},
             {"kind": "metrics", "occupancy": 1},   # non-track event ignored
         ],
     }, pts=3.0)
@@ -254,9 +292,10 @@ def test_result_sink_maps_tracking():
     assert method == "send_tracking", method   # supersedes the raw detections
     assert pts_us == 3_000_000
     x1, y1, x2, y2, score, class_id, label, track_id = items[0]
-    assert (x1, y1, x2, y2) == (0.0, 0.0, 10.0, 10.0)
+    # NORMALIZED: (20/200,40/400,100/200,200/400)
+    assert (x1, y1, x2, y2) == (0.10, 0.10, 0.50, 0.50), (x1, y1, x2, y2)
     assert track_id == 7 and label == "ENGAGED", (track_id, label)
-    print("PASS test_result_sink_maps_tracking (event track_id -> send_tracking, supersedes detections)")
+    print("PASS test_result_sink_maps_tracking (normalized track box, supersedes detections)")
 
 
 def test_registry_selects_official():
@@ -268,7 +307,7 @@ def test_registry_selects_official():
         os.environ.pop(k, None)
     with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as ftf, \
          tempfile.NamedTemporaryFile(prefix="result-in-", suffix=".sock") as rtf:
-        os.environ["RECAMERA_FRAMES_SOCK"] = ftf.name
+        os.environ["RECAMERA_FRAME_SOCK"] = ftf.name
         os.environ["RECAMERA_RESULT_SOCK"] = rtf.name
         caps = registry.capabilities(refresh=True)
         assert caps.frame_broker and caps.result_ingress, caps
@@ -279,7 +318,7 @@ def test_registry_selects_official():
         sink = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
                                             app_id="demo")
         assert isinstance(sink, OfficialResultSink), type(sink)
-    for k in ("RECAMERA_FRAMES_SOCK", "RECAMERA_RESULT_SOCK"):
+    for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK"):
         os.environ.pop(k, None)
     registry.capabilities(refresh=True)
     print("PASS test_registry_selects_official (frame.sock + result-in.sock -> Official*)")
@@ -288,6 +327,7 @@ def test_registry_selects_official():
 if __name__ == "__main__":
     test_frame_source_yields_rgb()
     test_result_sink_maps_detections()
+    test_result_sink_normalizes_and_clamps()
     test_result_sink_maps_keypoints()
     test_result_sink_maps_classification()
     test_result_sink_maps_tracking()

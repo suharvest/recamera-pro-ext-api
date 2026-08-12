@@ -267,7 +267,20 @@ class OfficialResultSink(ResultSink):
       |   age/emotion) OR label w/o box   |                           |                     |
       | result has `box` (or `quad`)      | yolo / ppocr / qrcode     | send_detections     |
 
-    Field mapping to the SDK tuples/dicts (verified vs sdk/python/recamera_ext)
+    Coordinate normalization (★ the critical contract ★)
+    ----------------------------------------------------
+    recamera_ext.h v1.2.0: EVERY box coordinate (detection / classification ROI
+    / segmentation ROI / tracking / keypoint object box) AND every keypoint
+    point x/y is a NORMALIZED [0,1] fraction of frame width/height. The OSD
+    renderer clamps to [0,1] then multiplies by frame size, so PIXEL values
+    collapse to an invisible 1px box. Our postprocess emits ORIGINAL full-res
+    PIXELS, so this sink divides x by frame width and y by frame height (clamped)
+    for every coordinate before sending -- see set_frame_size() + _norm_box().
+    Non-coordinate fields (score, class_id, label, track_id, keypoint_id,
+    keypoint score, segmentation mask bytes) are passed through unchanged.
+
+    Field mapping to the SDK tuples/dicts (verified vs sdk/python/recamera_ext;
+    all coordinates below are the NORMALIZED [0,1] values, not pixels)
     --------------------------------------------------------------------------
     * detections   : (x1,y1,x2,y2, score, label, class_id)
                        label = cls_name | text | label ; class_id = cls|0 ;
@@ -277,16 +290,15 @@ class OfficialResultSink(ResultSink):
                        Our keypoints are [[x,y,conf]...] (pose, 17) or [[x,y]...]
                        (facemesh landmarks, 468) -> conf defaults to 1.0 when
                        absent; keypoint_id is the list index (COCO order for pose).
-    * classification: (score, class_id, label). face-analysis carries a box too,
-                       but the SDK Classification struct has NO box field, so the
-                       box is dropped here (attributes become a frame/ROI-level
-                       label, e.g. "Male,30-39,Happiness"). >>> DESIGN NOTE /
-                       待确认: if you need the face BOX on the OSD as well, also
-                       call send_detections with r["box"] -- one extra line; kept
-                       out by default to avoid double-drawing. <<<
+    * classification: (score, class_id, label[, (x1,y1,x2,y2)]). face-analysis's
+                       per-face attributes become a composite label
+                       ("Male,30-39,Happiness"); since SDK v1.1.0 the entry
+                       carries an optional normalized ROI box (4th element) so we
+                       attach the face box -> the OSD can localize the label.
     * tracking     : (x1,y1,x2,y2, score, class_id, label, track_id).
     * segmentation : (x1,y1,x2,y2, score, class_id, label, mask_bytes, mask_w,
-                       mask_h). No shipped app emits masks yet; mapping is ready.
+                       mask_h). ROI box normalized; mask bytes untouched. No
+                       shipped app emits masks yet; mapping is ready.
 
     source_id + pts_us (vendor gotchas)
     -----------------------------------
@@ -319,8 +331,24 @@ class OfficialResultSink(ResultSink):
         self.verbose = verbose
         self._sink = None            # recamera_ext.ResultSink (opened lazily)
         self._err_count = 0
+        self._fw = None              # current frame width  (px) for normalization
+        self._fh = None              # current frame height (px) for normalization
         # No connection at construction (cheap + side-effect free); the socket is
         # opened on the first emit() so the registry can build this freely.
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        """Record the current frame's pixel size (base loop calls this per frame).
+
+        ★THE FIX★ The extension-API OSD renderer treats every box/keypoint
+        coordinate as a NORMALIZED [0,1] fraction of frame width/height (header
+        recamera_ext.h v1.2.0: it clamps to [0,1] then multiplies by frame size,
+        so a pixel value like 240 collapses to a 1px box). Our postprocess emits
+        ORIGINAL full-res-frame PIXELS, so we must divide by this frame size
+        before sending. We store it here and apply it in the per-item mappers.
+        """
+        if w and h and w > 0 and h > 0:
+            self._fw = float(w)
+            self._fh = float(h)
 
     def _ensure_open(self) -> bool:
         """Open the SDK ResultSink on first use. Returns False if unavailable
@@ -336,39 +364,57 @@ class OfficialResultSink(ResultSink):
             self._warn_once("open failed: %s" % e)
             return False
 
-    # -- per-item mappers (our result dict -> SDK tuple/dict) --------------- #
+    # -- coordinate normalization (pixels -> [0,1] fraction of frame size) --- #
     @staticmethod
-    def _to_detection(d: dict) -> Optional[tuple]:
+    def _clamp01(v: float) -> float:
+        return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+
+    def _nx(self, x) -> float:
+        """Normalize an x pixel to [0,1] by frame width, clamped."""
+        return self._clamp01(float(x) / self._fw)
+
+    def _ny(self, y) -> float:
+        """Normalize a y pixel to [0,1] by frame height, clamped."""
+        return self._clamp01(float(y) / self._fh)
+
+    def _norm_box(self, box) -> tuple:
+        """[x1,y1,x2,y2] pixels -> ([0,1]) fractions (x by width, y by height)."""
+        return (self._nx(box[0]), self._ny(box[1]),
+                self._nx(box[2]), self._ny(box[3]))
+
+    # -- per-item mappers (our result dict -> SDK tuple/dict, NORMALIZED) ---- #
+    # NB: only the x/y COORDINATES are normalized; score, class_id, label,
+    # track_id, keypoint_id, keypoint score and the segmentation mask bytes are
+    # passed through unchanged (they are not coordinates -- header v1.2.0).
+    def _to_detection(self, d: dict) -> Optional[tuple]:
         box = d.get("box") or _bbox_from_quad(d.get("quad") or [])
         if not box or len(box) < 4:
             return None
+        nx1, ny1, nx2, ny2 = self._norm_box(box)
         label = d.get("cls_name") or d.get("text") or d.get("label") or ""
-        return (float(box[0]), float(box[1]), float(box[2]), float(box[3]),
+        return (nx1, ny1, nx2, ny2,
                 float(d.get("score", 0.0) or 0.0), str(label),
                 int(d.get("cls", 0) or 0))
 
-    @staticmethod
-    def _to_keypoints(d: dict) -> Optional[dict]:
+    def _to_keypoints(self, d: dict) -> Optional[dict]:
         kps = d.get("keypoints") or []
         if not kps:
             return None
         points = []
         for j, p in enumerate(kps):
             # pose: [x,y,conf]; facemesh landmark: [x,y] (no conf -> 1.0 visible)
-            x = float(p[0]); y = float(p[1])
             score = float(p[2]) if len(p) > 2 else 1.0
-            points.append((x, y, score, j))   # keypoint_id = index (COCO order)
+            points.append((self._nx(p[0]), self._ny(p[1]), score, j))  # id = index
         inst = {"points": points}
         box = d.get("box")
         if box and len(box) >= 4:
-            inst["box"] = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
+            inst["box"] = self._norm_box(box)   # object box normalized too
             inst["score"] = float(d.get("score", 0.0) or 0.0)
             inst["class_id"] = int(d.get("cls", 0) or 0)
             inst["label"] = str(d.get("cls_name") or d.get("kind") or "person")
         return inst
 
-    @classmethod
-    def _to_classification(cls, d: dict) -> Optional[tuple]:
+    def _to_classification(self, d: dict) -> Optional[tuple]:
         # Prefer the face-analysis attribute composite; fall back to a plain
         # label/score classification (boxless image classifier).
         parts, confs = [], []
@@ -382,7 +428,15 @@ class OfficialResultSink(ResultSink):
         if parts:
             label = ",".join(parts)
             score = float(min(confs)) if confs else float(d.get("score", 0.0) or 0.0)
-            return (score, int(d.get("cls", 0) or 0), label)
+            item = (score, int(d.get("cls", 0) or 0), label)
+            box = d.get("box")
+            if box and len(box) >= 4:
+                # SDK v1.1.0+ classification carries an optional ROI box (4th
+                # tuple element, normalized) -- attach the face box so the OSD can
+                # localize the attribute label (previously dropped for lack of a
+                # box channel).
+                item = item + (self._norm_box(box),)
+            return item
         # generic boxless classification result
         label = d.get("label") or d.get("cls_name")
         if label is not None and not d.get("box"):
@@ -390,22 +444,22 @@ class OfficialResultSink(ResultSink):
                     str(label))
         return None
 
-    @staticmethod
-    def _to_segmentation(d: dict) -> Optional[tuple]:
-        mask = d.get("mask") or d.get("mask_bytes")
+    def _to_segmentation(self, d: dict) -> Optional[tuple]:
+        mask = d.get("mask") or d.get("mask_bytes")   # raw bytes: NOT normalized
         box = d.get("box") or [0.0, 0.0, 0.0, 0.0]
-        return (float(box[0]), float(box[1]), float(box[2]), float(box[3]),
+        nx1, ny1, nx2, ny2 = self._norm_box(box)      # ROI box normalized
+        return (nx1, ny1, nx2, ny2,
                 float(d.get("score", 0.0) or 0.0), int(d.get("cls", 0) or 0),
                 str(d.get("cls_name") or d.get("label") or ""),
                 mask, int(d.get("mask_w", 0) or 0), int(d.get("mask_h", 0) or 0))
 
-    @staticmethod
-    def _to_tracking(e: dict) -> Optional[tuple]:
+    def _to_tracking(self, e: dict) -> Optional[tuple]:
         box = e.get("box")
         if not box or len(box) < 4:
             return None
+        nx1, ny1, nx2, ny2 = self._norm_box(box)
         label = str(e.get("label") or e.get("state") or e.get("kind") or "object")
-        return (float(box[0]), float(box[1]), float(box[2]), float(box[3]),
+        return (nx1, ny1, nx2, ny2,
                 float(e.get("score", 0.0) or 0.0), int(e.get("cls", 0) or 0),
                 label, int(e.get("track_id")))
 
@@ -415,6 +469,15 @@ class OfficialResultSink(ResultSink):
     # -- ResultSink ABC ----------------------------------------------------- #
     def emit(self, payload: dict, pts: float) -> None:
         if not self._ensure_open():
+            return
+        if not self._fw or not self._fh:
+            # Coordinates are pixels; without the frame size we cannot normalize,
+            # and sending pixels would render as invisible 1px boxes. Skip + warn
+            # rather than emit garbage. The base loop always calls set_frame_size
+            # before emit, so this only trips for misuse (a sink driven directly
+            # without set_frame_size).
+            self._warn_once("frame size unknown (call set_frame_size before "
+                            "emit); skipping frame to avoid 1px OSD boxes")
             return
         pts_us = int(round((pts or 0.0) * 1e6))  # s -> us; inverse of the source
         results = payload.get("results") or []

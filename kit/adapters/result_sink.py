@@ -67,6 +67,18 @@ class ResultSink(ABC):
         """
         pass
 
+    def set_frame_size(self, w: int, h: int) -> None:
+        """Tell the sink the current frame's pixel dimensions.
+
+        The App base loop calls this once per frame BEFORE emit(). Only sinks
+        that must convert pixel coordinates need it: OfficialResultSink divides
+        box/keypoint pixel coords by (w, h) to get the normalized [0,1] fractions
+        the extension-API OSD renderer requires. Default: no-op, so the
+        WS/stdout/MQTT workaround sinks (which keep their own pixel/JSON
+        convention and wire format) are completely unaffected.
+        """
+        pass
+
     def close(self) -> None:  # optional override
         pass
 
@@ -278,6 +290,14 @@ class MultiSink(ResultSink):
         for s in self.sinks:
             try:
                 s.emit_meta(payload)
+            except Exception:
+                pass
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        # Fan the frame size out so a wrapped OfficialResultSink can normalize.
+        for s in self.sinks:
+            try:
+                s.set_frame_size(w, h)
             except Exception:
                 pass
 

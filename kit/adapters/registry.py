@@ -21,7 +21,7 @@ in BOOTSTRAP_PATH.md §3.
 
 Overrides (both for real deployments and for testing the switch logic)
 ----------------------------------------------------------------------
-* `RECAMERA_FRAMES_SOCK` / `RECAMERA_AUDIO_SOCK` -- point the probe at a custom
+* `RECAMERA_FRAME_SOCK` / `RECAMERA_AUDIO_SOCK` -- point the probe at a custom
   socket path (lets a test create a fake socket and prove the switch).
 * `RECAMERA_RESULT_INGRESS` / `RECAMERA_CONTROL_API` -- "1"/"0" to force those
   (currently un-probeable) capabilities on/off.
@@ -39,10 +39,9 @@ from typing import Optional
 # -- capability probing ------------------------------------------------------- #
 # Canonical extension-API socket paths (RECAMERA_PRO_API_SPEC.md §1: all live
 # under /run/recamera/). These are the *real* names the shipped librecamera_ext
-# uses -- singular `frame.sock`, and `result-in.sock` -- not the earlier
-# placeholder `/var/run/recamera/frames.sock`.
-def _frames_sock_path() -> str:
-    return os.environ.get("RECAMERA_FRAMES_SOCK", "/run/recamera/frame.sock")
+# uses -- singular `frame.sock` and `result-in.sock`.
+def _frame_sock_path() -> str:
+    return os.environ.get("RECAMERA_FRAME_SOCK", "/run/recamera/frame.sock")
 
 
 def _result_sock_path() -> str:
@@ -78,7 +77,7 @@ class Capabilities:
 def probe_capabilities() -> Capabilities:
     """Probe the official firmware endpoints. Cheap + side-effect free."""
     return Capabilities(
-        frame_broker=os.path.exists(_frames_sock_path()),
+        frame_broker=os.path.exists(_frame_sock_path()),
         # Both frame + result sockets are filesystem-probeable now that the real
         # paths are known. RECAMERA_RESULT_INGRESS still force-overrides (used by
         # tests, and to opt in before the socket-perms are relaxed).
@@ -128,7 +127,7 @@ def select_frame_source(url: str, prefer: str = "ffmpeg", **kw):
     caps = capabilities()
     if prefer != "snapshot" and _prefer_official(caps.frame_broker):
         from .official import OfficialFrameSource
-        return OfficialFrameSource(url=url, sock=_frames_sock_path(), **kw)
+        return OfficialFrameSource(url=url, sock=_frame_sock_path(), **kw)
     from .frame_source import FfmpegRtspSource, SnapshotSource
     if prefer == "snapshot":
         return SnapshotSource(url=url, **kw)

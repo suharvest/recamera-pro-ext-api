@@ -4,7 +4,7 @@ FrameSource adapter for reCamera Pro (Rockchip RV1126B).
 L0 adapter layer (see PYTHON_KIT_DESIGN.md §0 / BOOTSTRAP_PATH.md §2.1).
 The application only ever sees the `FrameSource` ABC + `Frame`; the concrete
 decode backend is swappable. When the official R1 frame broker
-(`/var/run/recamera/frames.sock`, dma-buf) arrives, only a new FrameSource
+(`/run/recamera/frame.sock`, dma-buf) arrives, only a new FrameSource
 implementation is added and selected by the capability registry -- no
 application code changes.
 
@@ -241,7 +241,7 @@ def open_frame_source(url: str = DEFAULT_SUB_STREAM, prefer: str = "ffmpeg",
     """Factory. `prefer` = "ffmpeg" (streaming) | "snapshot" (fallback).
 
     Delegates to the capability registry, which probes for the official R1
-    frame broker (`/var/run/recamera/frames.sock`) and returns an
+    frame broker (`/run/recamera/frame.sock`) and returns an
     `OfficialFrameSource` when present. On today's firmware the socket does not
     exist, so the registry falls back to the workaround backend selected by
     `prefer` and behaviour is unchanged.

@@ -18,6 +18,13 @@ API 逐一核实自 sdk/librecamera_ext/python/recamera_ext/__init__.py：
     points 元素=(x, y, score, keypoint_id)
   - send_segmentation(pts_us, items)   见 __init__.py L280（含 mask，示例从略）
 
+坐标契约（recamera_ext.h v1.2.0 / docs/ext/README.md §4）：
+  - 所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）以及关键点 point 的
+    x/y 均为**归一化 [0,1]**——相对画面宽高的比例（左上 x1/y1、右下 x2/y2，如
+    0.5=居中）。OSD 会先 clamp 到 [0,1] 再乘画面宽高，**传像素值会被压成 1px 隐形框**，
+    务必发比例。分割 mask 是行主序原始字节（非坐标）。
+  - 若你手头是像素坐标，除以画面宽/高即可：x/宽、y/高。
+
 约束（docs/ext/README.md §4.3）：
   - source_id 不能用保留字 "builtin"（会被拒 EAUTH）。
   - 限速：每连接 60 msg/s（burst 15）；单条 payload <= 64KB。别超过帧率发。
@@ -34,15 +41,17 @@ from recamera_ext import ResultSink
 
 
 def inject_detection(sink):
-    # boxes: (x1, y1, x2, y2, score, label[, class_id]) 像素坐标, score 0..1
+    # boxes: (x1, y1, x2, y2, score, label[, class_id])
+    # 坐标归一化 [0,1]（相对画面宽高），score 0..1。
     sink.send_detections(pts_us=0, boxes=[
-        (100, 80, 240, 300, 0.92, "person", 0),
-        (320, 120, 420, 260, 0.75, "cup", 41),
+        (0.16, 0.17, 0.38, 0.62, 0.92, "person", 0),
+        (0.50, 0.25, 0.66, 0.54, 0.75, "cup", 41),
     ])
 
 
 def inject_classification(sink):
-    # items: (score, class_id, label)  —— top-k 分类
+    # items: (score, class_id, label)  —— 无框 top-k 分类。
+    # 若要附来源 ROI：(score, class_id, label, (x1,y1,x2,y2))，box 同为归一化 [0,1]。
     sink.send_classification(pts_us=0, items=[
         (0.88, 5, "cat"),
         (0.09, 3, "dog"),
@@ -50,25 +59,25 @@ def inject_classification(sink):
 
 
 def inject_tracking(sink):
-    # items: (x1, y1, x2, y2, score, class_id, label, track_id)
+    # items: (x1, y1, x2, y2, score, class_id, label, track_id)；坐标归一化 [0,1]。
     sink.send_tracking(pts_us=0, items=[
-        (100, 80, 240, 300, 0.92, 0, "person", 7),
+        (0.16, 0.17, 0.38, 0.62, 0.92, 0, "person", 7),
     ])
 
 
 def inject_keypoints(sink):
     # instances: dict{ points:[(x,y,score,keypoint_id),...], 可选 box/score/class_id/label }
-    # 无 "box" 则整个 object_info 组在 wire 上留空（仅关键点）。
+    # box 与 point 的 x/y 均归一化 [0,1]。无 "box" 则整个 object_info 组在 wire 上留空。
     sink.send_keypoints(pts_us=0, instances=[
         {
-            "box": (100, 80, 240, 300),
+            "box": (0.16, 0.17, 0.38, 0.62),
             "score": 0.9,
             "class_id": 0,
             "label": "person",
             "points": [
-                (170, 100, 0.95, 0),   # 例：鼻
-                (150, 130, 0.90, 1),   # 例：左眼
-                (190, 130, 0.90, 2),   # 例：右眼
+                (0.27, 0.21, 0.95, 0),   # 例：鼻
+                (0.23, 0.27, 0.90, 1),   # 例：左眼
+                (0.30, 0.27, 0.90, 2),   # 例：右眼
             ],
         },
     ])
