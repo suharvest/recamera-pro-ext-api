@@ -20,6 +20,12 @@ import re
 APPS_DIR = os.environ.get("APPMGR_APPS_DIR", "/userdata/local/apps")
 KIT_PARENT = os.environ.get("APPMGR_KIT_PARENT", "/userdata/local/kit")
 APPMGR_DIR = os.environ.get("APPMGR_DIR", "/userdata/local/appmgr")
+# Per-app virtualenvs (future): apps that ship their own deps get an isolated
+# venv here, keyed by id. Not created yet for vision apps (they share the system
+# python) -- uninstall removes /userdata/local/venvs/<id> only if it exists.
+# NOTE: /userdata/local/models is NOT owned here -- models are SHARED across apps
+# (one-gen models[]+target_path), so uninstalling a single app must never touch it.
+VENVS_DIR = os.environ.get("APPMGR_VENVS_DIR", "/userdata/local/venvs")
 # Browser-relayed cloud installs land here first (POST /api/appMgr/upload), then
 # do_install() unpacks from this path. It sits under /userdata so it is already
 # inside ALLOWED_PKG_ROOTS (the installer refuses packages outside those roots).
@@ -69,6 +75,10 @@ def valid_app_id(app_id: str) -> bool:
 
 def app_dir(app_id: str) -> str:
     return os.path.join(APPS_DIR, app_id)
+
+
+def venv_dir(app_id: str) -> str:
+    return os.path.join(VENVS_DIR, app_id)
 
 
 def pidfile(app_id: str) -> str:

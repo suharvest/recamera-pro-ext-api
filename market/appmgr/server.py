@@ -13,6 +13,8 @@ Concurrency (APP_CENTER_PORT_DESIGN §4.1):
 API (loopback 127.0.0.1:8130; nginx /_jwt_verify guards the public edge):
   GET  /api/appMgr/list      -> installed apps + manifest + running + active
   POST /api/appMgr/install   {path: "/userdata/.../x.tar.gz"}
+  POST /api/appMgr/uninstall {id}   (stop if running, clear active, rm app dir;
+                                     shared /userdata/local/models untouched)
   POST /api/appMgr/switch    {id}   (single-active: stop old active, start id)
   POST /api/appMgr/stop      {id?}  (stop id, or current active)
   POST /api/appMgr/upload    raw tar.gz bytes + X-Filename header
@@ -202,6 +204,40 @@ def do_install(pkg_path: str, signature: str = None) -> dict:
                signed=sig.get("signed"), sig_verified=sig.get("verified"))
         return {"id": app_id, "version": manifest.get("version"),
                 "installed": True, "signature": sig}
+
+
+def do_uninstall(app_id: str) -> dict:
+    """Remove an installed app. Shared by the CLI (`uninstall <id>`) and the HTTP
+    POST /api/appMgr/uninstall route.
+
+    Sequence (mirrors do_switch/do_stop discipline under the busy-gate):
+      1. if the app is running -> stop it first (clean process-group teardown);
+      2. if it is the single-active app -> clear active state so nothing tries to
+         boot-restore a now-deleted app;
+      3. installer.uninstall() deletes /userdata/local/apps/<id>/ and, if present,
+         the future per-app venv /userdata/local/venvs/<id>.
+    Shared models under /userdata/local/models are intentionally left untouched
+    (they are cross-app assets; installer.uninstall has no path into that tree).
+
+    Uninstalling an unknown app is a hard ValueError (not a crash); the running /
+    active handling is idempotent so double-uninstall is safe.
+    """
+    if not paths.valid_app_id(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    if not os.path.isdir(paths.app_dir(app_id)):
+        raise ValueError(f"app not installed: {app_id}")
+    with busy_gate():
+        stopped = False
+        if supervisor.is_running(app_id) is not None:
+            supervisor.stop(app_id)
+            stopped = True
+        was_active = (state.get_active() == app_id)
+        if was_active:
+            state.clear_active_if(app_id)
+        installer.uninstall(app_id)
+        _audit("uninstall", id=app_id, stopped=stopped, was_active=was_active)
+        return {"id": app_id, "uninstalled": True,
+                "stopped": stopped, "was_active": was_active}
 
 
 def do_switch(app_id: str) -> dict:
@@ -474,6 +510,11 @@ class _Handler(BaseHTTPRequestHandler):
                 if not p:
                     return self._send(400, {"error": "missing 'path'"})
                 return self._send(200, do_install(p, body.get("signature")))
+            if path == "/api/appMgr/uninstall":
+                i = body.get("id")
+                if not i:
+                    return self._send(400, {"error": "missing 'id'"})
+                return self._send(200, do_uninstall(i))
             if path == "/api/appMgr/switch":
                 i = body.get("id")
                 if not i:

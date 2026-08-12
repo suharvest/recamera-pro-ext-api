@@ -2,6 +2,8 @@
 CLI entry: python3 -m appmgr <cmd>
 
   install <pkg.tar.gz>   validate + unpack into /userdata/local/apps/<id>/
+  uninstall <id>         stop if running, clear active, rm /userdata/local/apps/<id>/
+                         (shared /userdata/local/models is NOT removed)
   start   <id>           single-active start (== switch): stop old active, start id
   switch  <id>           alias of start
   stop    [id]           stop id (or current active)
@@ -32,6 +34,10 @@ def main(argv=None) -> int:
             if not rest:
                 print("usage: install <pkg.tar.gz>", file=sys.stderr); return 2
             print(json.dumps(server.do_install(rest[0]), indent=2))
+        elif cmd == "uninstall":
+            if not rest:
+                print("usage: uninstall <id>", file=sys.stderr); return 2
+            print(json.dumps(server.do_uninstall(rest[0]), indent=2))
         elif cmd in ("start", "switch"):
             if not rest:
                 print(f"usage: {cmd} <id>", file=sys.stderr); return 2

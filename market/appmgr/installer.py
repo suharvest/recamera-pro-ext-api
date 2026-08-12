@@ -178,8 +178,23 @@ def install(pkg_path: str, signature: Optional[str] = None) -> Tuple[str, dict]:
 
 
 def uninstall(app_id: str) -> None:
+    """Remove an app's on-disk artifacts: its install dir and (if present) its
+    per-app venv.
+
+    We deliberately touch ONLY the app's own dirs. Models under
+    /userdata/local/models are SHARED across apps (one-gen models[]+target_path),
+    so removing a single app must never delete them -- this function has no path
+    into the models tree by construction.
+
+    Idempotent: missing dirs are skipped, so uninstalling something already gone
+    (or an app that never grew a venv) is a no-op rather than an error.
+    """
     if not paths.valid_app_id(app_id):
         raise InstallError(f"invalid app id {app_id!r}")
     dest = paths.app_dir(app_id)
     if os.path.isdir(dest):
         shutil.rmtree(dest, ignore_errors=True)
+    # Future per-app venv hook: remove /userdata/local/venvs/<id> if it exists.
+    venv = paths.venv_dir(app_id)
+    if os.path.isdir(venv):
+        shutil.rmtree(venv, ignore_errors=True)
