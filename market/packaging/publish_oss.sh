@@ -60,14 +60,17 @@ for f in "$DIST"/*.tar.gz; do
 done
 
 # 1b) shared models (one-gen models[]+target_path). Layout mirrors the catalog
-#     URLs exactly: models/<app_id>/<file>. Absent dir -> nothing to upload
-#     (all apps bundle their model inside the package). Uploaded before the
-#     catalog so a models[] URL is never advertised before the bytes are live.
+#     URLs exactly: models/<app_id>/<...subdirs>/<file>. Some apps stage files
+#     in per-group subdirs (e.g. voice-transcribe: <app_id>/ plus <app_id>/kws/)
+#     so we recurse to ARBITRARY depth -- a plain */* glob would skip the kws/
+#     files and advertise a catalog URL whose bytes never landed. Absent dir ->
+#     nothing to upload (those apps bundle their model inside the package).
+#     Uploaded before the catalog so a models[] URL is never advertised before
+#     the bytes are live.
 MODELS="$HERE/models"
 if [ -d "$MODELS" ]; then
-    for f in "$MODELS"/*/*; do
-        [ -f "$f" ] || continue
-        rel="${f#"$MODELS"/}"           # <app_id>/<file>
+    find "$MODELS" -type f | sort | while IFS= read -r f; do
+        rel="${f#"$MODELS"/}"           # <app_id>/<...subdirs>/<file>
         echo "model    $rel  ($(sha256 "$f"))"
         echo "  -> $OSS_BASE/models/$rel"
         if [ "$DO_IT" = 1 ]; then
