@@ -46,6 +46,21 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 > - 要让你的结果出现在视频叠加 + 录像 + 推送 → **结果注入**（§4，`result-in.sock`）。
 > - 只要把结果推给外部消费者、不需要叠加/录像 → **notify**（`result-push.md`）。
 
+### 接入方式：两种，同一套契约
+
+扩展 SDK 是**一套 C ABI 契约 + 一层 Python ctypes 薄封装**，不是两套独立实现。
+
+- **C / C++**：include `sdk/include/recamera_ext.h`（带 `extern "C"` 保护，C 与 C++ 都可直接 include），链接 `librecamera_ext.so.1`。函数族 `rc_ext_frame_*` / `rc_ext_result_*` / `rc_ext_probe_*`。
+- **Python**：`import recamera_ext`（ctypes 薄封装，运行时加载**同一个 `.so`**）。类 `FrameSource` / `ResultSink` / `ProbeSource`。
+
+二者**同 socket、同 wire 协议、同契约**；Python 不是独立实现，是 C ABI 的封装。选 C/C++ 还是 Python 只取决于你的应用语言。
+
+| 能力 | C ABI（`recamera_ext.h`） | Python（`recamera_ext`） |
+|---|---|---|
+| 帧代理 | `rc_ext_frame_*` | `FrameSource` |
+| 结果注入 | `rc_ext_result_*`（`rc_ext_result_send_*`） | `ResultSink`（`send_*`） |
+| 观测面 probe | `rc_ext_probe_*` | `ProbeSource` |
+
 ### 1.2 前置条件（对所有 socket API 通用）
 
 - socket 位于 `/run/recamera/`。**v1 权限模型为 root-only**：目录 `0750 root:root`、socket 文件 `0660`（实测 RV1126B），进程需以 root 运行（麦克风/摄像头/`/dev/mpi` 设备节点均 root 属主，扩展应用经启动脚本以 root 拉起）。
@@ -443,9 +458,82 @@ with ResultSink(source_id="my-app") as sink:
 
 `result-in.sock`（本 API）= OSD + 录像 + 推送三路；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API。
 
-### 4.8 观测面 probe（`ProbeSource`，v1.2.0）
+### 4.8 观测面 probe（`rc_ext_probe_*` / `ProbeSource`，v1.2.0）
 
-订阅内建流水线的 tap 点，观测 rkipc 实际喂进/送出各级的数据（调预处理、核对 NPU 输入、抓后处理张量）。SDK client `ProbeSource` 自 v1.2.0 起可用，连 `/run/recamera/probe.sock`：
+订阅内建流水线的 tap 点，观测 rkipc 实际喂进/送出各级的数据（调预处理、核对 NPU 输入、抓后处理张量）。与帧代理（§3.1 C ABI / §3.2 Python）、结果注入（§4.1 C ABI / §4.2 Python）一样，probe 也是 C ABI + Python 成对提供，连 `/run/recamera/probe.sock`。
+
+#### C ABI（`sdk/include/recamera_ext.h`，v1 冻结）
+
+签名逐一核实自 `recamera_ext.h`：
+
+```c
+// 打开：连接 /run/recamera/probe.sock，握手 + ProbeSubscribe（stage id 列表 +
+// sample_every：每 N 次推理采 1 次，0 => 1）。失败返回 NULL 并置 *err
+// （无任何 stage 被接受时为 EFORMAT）。
+rc_ext_probe_t *rc_ext_probe_open(const char *const *stage_ids, size_t n_stages,
+                                  uint32_t sample_every, int *err);
+
+// 读回实际生效的订阅信息（握手后有效）；任意 out 指针可为 NULL。返回 0。
+// subscribed_mask 用 RC_EXT_PROBE_MASK_{PREPROC=0x1,NPU=0x2,POSTPROC=0x4,METRICS=0x8}。
+int rc_ext_probe_info(rc_ext_probe_t *h, uint32_t *sample_every,
+                      uint32_t *subscribed_mask);
+
+// 等下一条服务端推来的样本，最多 timeout_ms。返回:
+//   0  -> *out 有一条样本（必须 release）
+//   1  -> 超时无样本（重试）
+//  <0  -> -rc_ext_err_t：EOF/传输错误或协议违规，应停止并 close
+int rc_ext_probe_next(rc_ext_probe_t *h, rc_ext_probe_sample_t *out, int timeout_ms);
+
+// 结束一条样本：memfd 样本做 munmap + close memfd；inline 样本为 no-op。
+// 释放后 s.payload/s.stage_id 失效。NULL 安全、幂等。
+void rc_ext_probe_release(rc_ext_probe_t *h, rc_ext_probe_sample_t *s);
+
+void rc_ext_probe_close(rc_ext_probe_t *h);
+```
+
+样本结构体（核实自 `recamera_ext.h`）：
+
+```c
+typedef struct {
+    const char *stage_id;   // "preproc.out"/"npu.raw"/"postproc.out"/"metrics"
+    uint64_t seq;           // 单调递增推理 seq；出现 gap = 丢过样本
+    uint64_t pts_us;        // CLOCK_MONOTONIC 微秒（与帧同一时钟）
+    const uint8_t *payload; // 样本字节（inline 或 memfd 支撑），仅 release 前有效
+    size_t payload_len;
+    uint32_t flags;         // bit0: 此样本之前发生过丢样本
+    int has_meta;           // != 0 时下列张量描述符有效（preproc/npu stage）
+    uint32_t shape[8];
+    uint32_t n_shape;
+    uint32_t dtype;         // 0=uint8 1=int8 2=uint16 3=int16 4=float32 5=float16
+    uint32_t layout;        // 0=unknown 1=NCHW 2=NHWC
+    uint32_t fourcc, width, height, stride;
+    float scale; int32_t zero_point;  // 量化参数
+    // 其余为内部记账字段（_fd/_base/_map_len/_pb），调用方不用碰
+} rc_ext_probe_sample_t;
+```
+
+- **inline vs memfd**：小样本（`metrics` / `postproc.out`）**inline** 在 `payload`（`_fd == -1`）；大张量（`preproc.out` / `npu.raw`）走 **memfd**（`SCM_RIGHTS`），SDK 内部 `mmap(PROT_READ)`（无需 dma-buf cache sync）。`payload` 指针仅在 `rc_ext_probe_release` 之前有效；跨样本保留必须自行拷贝。
+
+典型循环（头文件注释给出的用法）：
+
+```c
+const char *stages[] = {"metrics", "preproc.out"};
+int err;
+rc_ext_probe_t *h = rc_ext_probe_open(stages, 2, 1, &err);
+rc_ext_probe_sample_t s;
+int rc;
+while ((rc = rc_ext_probe_next(h, &s, 1000)) >= 0) {
+    if (rc == 1) continue;                 // 超时，重试
+    // 用 s.stage_id、s.seq、s.pts_us、s.payload[0..s.payload_len)
+    // s.has_meta -> s.width/s.height/s.shape/s.dtype ...（张量 stage）
+    rc_ext_probe_release(h, &s);           // 必须：munmap/close memfd；inline 为 no-op
+}
+rc_ext_probe_close(h);
+```
+
+#### Python（`ProbeSource`）
+
+SDK client `ProbeSource` 自 v1.2.0 起可用，连 `/run/recamera/probe.sock`：
 
 ```python
 from recamera_ext import ProbeSource

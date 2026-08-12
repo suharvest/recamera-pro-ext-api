@@ -20,6 +20,8 @@
 本规格详述 M1/M2/M3，M0/M4 给要点。**沙箱、打包分发、声明式后处理不在本版范围**（设计文档 P1/P2）。
 **v1 交付物以 C ABI 为准**；Python 是 C 库的薄封装，行为不独立定义（评审发现 7）。
 
+**两种接入面，同一套契约**：扩展 SDK 对外提供 C ABI（`sdk/include/recamera_ext.h`，带 `extern "C"`，C 与 C++ 均可 include）+ Python 封装（`recamera_ext`，ctypes 薄封装，运行时加载同一 `.so`）。两者共用本规格定义的 socket 路径、握手与 wire 协议；本文主体即该 wire/ABI 契约。
+
 ---
 
 ## 1. 公共约定

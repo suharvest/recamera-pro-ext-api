@@ -2,6 +2,8 @@
 
 给要极致性能 / 纯 C 栈的方案商。用 C ABI `rc_ext_frame_*` 抓 N 帧，把灰度 Y 平面写成 PGM。Python 版见示例 01；两者行为一致，这里少一层 ctypes 封装。
 
+> **本示例源码是 C**（`frame_dump.c`），不是独立的 C++ 绑定——SDK 只有一套 C ABI。因为 `recamera_ext.h` 带 `extern "C"` 保护，**同一头文件也可直接从 C++ include 使用**：把 `frame_dump.c` 的循环原样搬进 `.cpp` 即可，函数签名与用法完全相同。目录名保留 `05-cpp-frame`（已有引用）。
+
 ## 标准循环
 
 ```c
