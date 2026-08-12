@@ -413,12 +413,14 @@ with ResultSink(source_id="my-app") as sink:
 | 任务类型 | 注入 + WS 推送 | OSD 画面渲染 | 端到端真机验证 |
 |---|---|---|---|
 | 检测 | 是 | 画检测框 + label（按 `source_id` 哈希配色） | **已验证**（2026-08-12 真机：归一化坐标注入→RTSP `live/0` 抓帧确认框 + label 上屏；WS + SDK C ABI 端到端，CHANGES §4） |
-| 跟踪 | 是 | 画框 + `track_id`（复用同一 `osd_infer_box_to_rect`） | 注入/WS 已验证；OSD 画面复用已验证的检测框渲染，跟踪专项画面未单独截图 |
-| 关键点 | 是 | 画骨架点 + 对象框（`osd_manager.c` TASK_TYPE_KEYPOINTS + pose schema，点坐标同为归一化） | 注入/WS 已验证；OSD 骨架画面未单独截图 |
-| 分类 | 是 | 画标签文本 + 可选 ROI 框（见 §4.5，box 可选） | 注入/WS 已验证；带 box 的分类 OSD 画面未单独截图 |
+| 跟踪 | 是 | 画框 + `track_id`（复用同一 `osd_infer_box_to_rect`） | 渲染走已验证的 `osd_infer_box_to_rect`（检测/关键点框均真机验证同一函数）；跟踪单类型专项截图未单独抓（多类型同注时被单槽覆盖，见下） |
+| 关键点 | 是 | 画对象框 + 关键点圆点（`osd_infer.c` TASK_TYPE_KEYPOINTS，`osd_infer_norm_to_pixel`，点坐标同为归一化） | **已验证**（2026-08-12 内建关闭下真机：KPINST 对象框 + 关键点圆点按归一化坐标精确上屏） |
+| 分类 | 是 | 画标签文本 + 可选 ROI 框（见 §4.5，box 可选，走 `osd_infer_box_to_rect`） | 渲染走已验证的 `osd_infer_box_to_rect`；带 box 的分类单类型专项截图未单独抓（同上单槽覆盖） |
 | 分割 | 是（注入/WS/录像可用） | **不上 OSD** —— `osd_infer.c` 的 task_type switch 只枚举 检测/分类/跟踪/关键点四类，SEGMENTATION 命中 `default` 返回 `-EOPNOTSUPP`，不写任何像素（`osd_infer.h` 标 `segmentation // future` 未实现） | **OSD 不渲染 seg**（源码确认 2026-08-12）；seg 结果仍走 WS/录像分发 |
 
-诚实结论：**注入能通、WS 能收,对全部五种任务成立**；OSD 画面渲染方面,**检测框已真机端到端复验（2026-08-12，坐标修正后确认上屏）**；跟踪/分类/关键点复用同一套 `osd_infer_box_to_rect`/`osd_infer_norm_to_pixel`（有对应 switch 分支），**但注意：内建推理活跃时其检测 OSD 会持续重绘画布,实测外部注入的非检测结果（跟踪/分类/关键点）在内建活跃时可能不同时显示(需关掉内建推理隔离验证,待补)**；**分割不上 OSD**（渲染器无 seg 分支）。接入时坐标务必用归一化 `[0,1]`（见上方警示）。
+诚实结论：**注入能通、WS 能收,对全部五种任务成立**；OSD 画面渲染方面,**检测框（INJTEST）与关键点（KPINST 框+圆点）均已真机端到端复验（2026-08-12，坐标修正后确认按归一化坐标上屏）**；跟踪/分类走同一套已验证的 `osd_infer_box_to_rect`（单类型专项截图未单独抓）；**分割不上 OSD**（渲染器无 seg 分支）。
+
+> **OSD 单槽行为（务必知悉）**：非检测类结果（跟踪/分类/关键点）在 OSD 侧共用**单个 INFER 覆盖槽,后写覆盖前写**——同一时刻只显示最近一次注入的那一类。实测:一轮里连发 tracking→classification→keypoints,画面只留 keypoints(最后写的)。且**内建推理活跃时其检测 OSD ~19fps 持续重绘,会盖过 5Hz 外部注入**。检测类是例外:`rc_result_osd` 对 DETECTION 按 `source_id` 做并集,外部检测与内建检测可共存。**结论:要在 OSD 上稳定显示外部结果,单一 source 单一类型注入,或关掉内建推理;需要多路叠加请以 WS 结构化结果为准。** 坐标一律归一化 `[0,1]`（见上方警示）。
 
 ### 4.5 分类通道可选 ROI box（v1.1.0+）
 
