@@ -7,6 +7,7 @@
 > [README.md](./README.md)，本文不重复。
 >
 > 说明：本文描述的应用中心打包 / 签名 / 分发工具链位于 `market/`，属**发布方私有流程，不随公开仓发布**；下列路径用于说明打包链路各环节，公开仓中只保留 `apps/*/manifest.json` 这类应用侧产物。
+> `market/` 现已纳入 **git 版本追踪**（源码、`catalog/*.json`、发布公钥 `keys/release_pub.pem` 入库；构建产物 `packaging/dist/`、大模型 `packaging/models/`、私钥/`*.pem` 私钥、`__pycache__` 由 `.gitignore` 忽略）。
 > 打包链路各环节（发布方私有）：
 > - appmgr 后端：`market/appmgr/*.py`（含共享模型写盘原语 `market/appmgr/modelstore.py`）
 > - 打包/签名：`market/packaging/{build.py,sign.py,keygen.sh,SIGNING.md}`
@@ -22,11 +23,11 @@
 
 应用中心（App Center）由一个设备侧进程 **appmgr** 支撑。appmgr 干两件事：
 
-1. **编排**：安装、单活切换、启停、读写配置。核心逻辑是 `market/appmgr/server.py`
+1. **编排**：安装、卸载、单活切换、启停、读写配置。核心逻辑是 `market/appmgr/server.py`
    里的一组普通函数，CLI（`python3 -m appmgr <cmd>`）和 HTTP API 共用同一份代码。
 2. **最小 HTTP API**：监听 **loopback `127.0.0.1:8130`**
-   （`paths.py:62-63`），由 nginx 边缘（`ext_appmgr.conf`）用官方 JWT 会话把关，
-   路径 `/api/appMgr/`。
+   （`paths.py:68-69`，`HTTP_HOST`/`HTTP_PORT`），由 nginx 边缘（`ext_appmgr.conf`）用官方 JWT
+   会话把关，路径 `/api/appMgr/`。
 
 ### app 的运行形态
 
@@ -38,7 +39,7 @@
   原因见规格 §1.1：摄像头/麦克风/`/dev/mpi/*` 设备节点均 root 属主，非 root 开不了硬件。
 - **用扩展 SDK 对接固件**：拿帧（帧代理）、回注结果（结果注入 → OSD/录像/推送）、
   GPIO、音频，全部走扩展 SDK 的 unix domain socket，见 [README.md](./README.md)。
-- **单活模型**：同一时刻只有一个 app 在跑。`do_switch()`（`server.py:180`）先停掉当前
+- **单活模型**：同一时刻只有一个 app 在跑。`do_switch()`（`server.py:243`）先停掉当前
   active（和目标本身，保证干净重启），再启动目标。这与"摄像头独占"约束一致。
 
 ### 和"裸跑扩展"的区别
@@ -80,7 +81,7 @@ apps/<id>/
 
 | 字段 | 必需 | 谁在用 | 说明 |
 |---|---|---|---|
-| `id` | ✅ | 全链路 | app 唯一标识，正则 `[a-z0-9-]{1,64}`（`paths.py:61`）。安装时必须与请求 id 一致，也是安装目录名。 |
+| `id` | ✅ | 全链路 | app 唯一标识，正则 `[a-z0-9-]{1,64}`（`paths.py:67`）。安装时必须与请求 id 一致，也是安装目录名。 |
 | `name` | ✅ | list/UI | 展示名。 |
 | `name_zh` | | UI | 中文名（可选，部分 app 有）。 |
 | `version` | ✅ | 打包/state | 版本号。`build.py` 用它拼包名 `<id>-<ver>-arm64.tar.gz`；无则打包报错。 |
@@ -189,8 +190,15 @@ supervisor 启动 app 时注入 `KIT_PARENT` 和 `PYTHONPATH`（`supervisor.py:1
 > Python 绑定**（NPU 推理的 Python 层，**非固件自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`）
 > 及对应解释器/venv。默认用 appmgr 自己的 `sys.executable`；manifest 用 `interpreter`
 > 指定 per-app 解释器（如 voice-transcribe 的 `/userdata/rknnenv/bin/python`，
-> `supervisor.py:93-113`，缺失则 switch 硬报错）。这些依赖由**运行时侧 provision**，
-> 打包/上架链路不负责，部署前提详见 [deploy-ops.md](./deploy-ops.md)。
+> `supervisor.py:93-113`，缺失则 switch 硬报错）。这些依赖由**运行时侧 provision**
+> （视觉基础环境 `market/deploy/provision-runtime.sh`；voice 音频运行时 `market/deploy/provision-voice.sh`），
+> 打包/上架链路不负责，部署前提详见 [deploy-ops.md](./deploy-ops.md) §4.4。
+>
+> **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类**大而通用**的依赖走**平台共享基础环境**
+> `/userdata/rknnenv`（provision 一次，8 个视觉 app 复用）；大而共享的**模型**走 catalog
+> `models[]` + `putModel`（见下节）。若某个 app 需要**自己独有**的 Python 依赖（PyAV、特定训练框架…），
+> 不应塞进共享基础环境——见 [per-app-dependencies.md](./per-app-dependencies.md)（**设计文档，尚未实现**：
+> 每 app 建独立 venv 从离线 wheel 装入）。
 
 ### 模型放哪、怎么被加载
 
@@ -259,7 +267,7 @@ hooks/ run         ← 若存在
   （实测：对同一 app 连打两次，两份 tar.gz 的 sha256 完全一致。）
 - 打完打印成员列表、字节数、**md5**。
 - **kit 不入包**（`build.py:6-9`）。
-- 包大小受设备侧限制约束：≤200 MB 压缩包、≤400 MB 解包、≤4096 个成员（`paths.py:57-59`）。
+- 包大小受设备侧限制约束：≤200 MB 压缩包、≤400 MB 解包、≤4096 个成员（`paths.py:63-65`）。
 
 ---
 
@@ -287,7 +295,7 @@ zip-slip/tar-bomb 防护，最后才解包。
 | 私钥 `release_priv.pem` | `~/.recamera_release_key/`（chmod 600） | 否，永不 | 否，永不 |
 | 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随 appmgr 部署到 `/userdata/local/appmgr/keys/`） |
 
-设备侧唯一信任锚就是这份公钥（`paths.py:40-41`，可用 `APPMGR_RELEASE_PUBKEY` 覆盖）。
+设备侧唯一信任锚就是这份公钥（`paths.py:46-47`，可用 `APPMGR_RELEASE_PUBKEY` 覆盖）。
 
 ### 怎么签一个包
 
@@ -299,7 +307,7 @@ python3 sign.py             # 给 dist/*.tar.gz 逐个签，写出 <pkg>.tar.gz.
 python3 sign.py --verify    # 可选：拿公钥回验
 ```
 
-### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`paths.py:50-51`）
+### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`paths.py:56-57`）
 
 - 默认 **1（开）**：**无签名的包被拒**；**签名错误的包永远被拒**。
 - **0**：允许无签名包（审计告警）；签名错误仍拒。这是迁移/兜底开关。
@@ -437,7 +445,7 @@ for m in app.models:
         → installer 验签 + zip-slip 防护 + 原子解包到 /userdata/local/apps/<id>/
 ```
 
-**`putModel` 端点契约**（`server.py:459-469` / `do_putmodel:178` / `modelstore.write_model:98`）：
+**`putModel` 端点契约**（`server.py:495-505` / `do_putmodel:180` / `modelstore.write_model:98`）：
 
 - **入参**：raw model 字节为 body；三个头 —— `X-Filename`（裸 basename，正则
   `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`，禁路径分隔符/`..`）、`X-Target-Path`（模型落盘目录的绝对路径）、
@@ -453,14 +461,28 @@ for m in app.models:
   单元测试见 `market/appmgr/tests/test_modelstore.py`。
 
 设备本地也可直接用 CLI（`__main__.py`）：`python3 -m appmgr install <pkg.tar.gz>`
-（包路径须在允许根 `/userdata` 下，`paths.py:54-56`）。
+（包路径须在允许根 `/userdata` 下，`paths.py:60-62`）。
 
 ### 启停切换（单活）
 
 - `POST /api/appMgr/switch {id}`：停当前 active（及目标）→ 启目标 → 置 active；
-  启动失败会回滚 active 状态（`server.py:180-202`）。
+  启动失败会回滚 active 状态（`server.py:243-265`）。
 - `POST /api/appMgr/stop {id?}`：停指定 id，或停当前 active。
 - 开机自恢复：appmgr 启动时会重启上次的 active app（`server._boot_restore`）。
+
+### 卸载（uninstall）
+
+- `POST /api/appMgr/uninstall {id}`（`server.py:513-517` → `do_uninstall:209`）：卸载一个已装 app。
+  时序（与 switch/stop 一样在 busy-gate 内串行）：**①在跑就先停**（干净拆进程组）→ **②若是当前
+  active 则清 active 状态**（免得 boot-restore 再去拉一个已删的 app）→ **③`installer.uninstall()`
+  删 `/userdata/local/apps/<id>/`，并删 per-app venv `/userdata/local/venvs/<id>`（若存在）**。
+  返回 `{id, uninstalled:true, stopped, was_active}`。卸载不存在的 app 是硬 `ValueError`（400），
+  停/清 active 均幂等，重复卸载安全。
+- **共享模型不动**：`/userdata/local/models` 下的模型是**跨 app 共享**资产（one-gen
+  `models[]`+`target_path`），`installer.uninstall()`（`installer.py:180`）按构造只碰 app 自己的目录
+  和 venv，**永不删共享模型**——`paths.py` 也把 `VENVS_DIR`/`venv_dir()` 与 models 树刻意分开
+  （`paths.py:23-28`）。要清共享模型得手动删。
+- CLI 等价：`python3 -m appmgr uninstall <id>`（`__main__.py:37-40`）。
 
 ### 发布到 CDN（`publish_oss.sh`）
 
@@ -486,25 +508,26 @@ for m in app.models:
 ## 7. 安装/管理 API 参考
 
 Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（同源 cookie `token`）把关。
-路径尾部斜杠会被 strip（`server.py:380,416`）。核实自 `server.py`。
+路径尾部斜杠会被 strip（`server.py:443,481`）。核实自 `server.py`。
 
 | 方法 | 路径 | 入参 | 返回 | 源码 |
 |---|---|---|---|---|
-| GET | `/api/appMgr/list` | — | `{active_app, apps:[{id,name,version,type,image,description,scene,author,installed,running,pid,active}]}` | `server.py:378-382` / `do_list:85` |
-| POST | `/api/appMgr/install` | `{path, signature?}` | `{id, version, installed:true, signature:{signed,verified,alg,detail}}` | `server.py:430-434` / `do_install:168` |
-| POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:435-439` / `do_switch:180` |
-| POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:440-441` / `do_stop:205` |
-| POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:419-427` / `do_upload:122` |
-| POST | `/api/appMgr/putModel` | raw model 字节 + 头 `X-Filename`/`X-Target-Path`/`X-Sha256?` | `{path, filename, size, sha256}`（sha256 不符即删并报 400） | `server.py:459-469` / `do_putmodel:178` / `modelstore.write_model:98` |
-| GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:383-390` / `do_get_config:216` |
-| POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:442-448` / `do_set_config:225` |
-| GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:391-392` / `do_get_mqtt:326` |
-| POST | `/api/appMgr/mqtt` | `{mqtt:{...}}` 或平铺 | 同上视图 + `restarted`（改后重启 active app 生效） | `server.py:449-453` / `do_set_mqtt:331` |
-| GET | `/api/appMgr/metrics` | — | `{npu_load, mem, temp_c, active_app, uptime_s, ts}` | `server.py:393-394` / `do_metrics:308` |
+| GET | `/api/appMgr/list` | — | `{active_app, apps:[{id,name,version,type,image,description,scene,author,installed,running,pid,active}]}` | `server.py:444` / `do_list:97` |
+| POST | `/api/appMgr/install` | `{path, signature?}` | `{id, version, installed:true, signature:{signed,verified,alg,detail}}` | `server.py:508-512` / `do_install:197` |
+| POST | `/api/appMgr/uninstall` | `{id}` | `{id, uninstalled:true, stopped, was_active}`（先停→清 active→删 app 目录 + per-app venv；共享 models 不动） | `server.py:513-517` / `do_uninstall:209` / `installer.uninstall:180` |
+| POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:518-522` / `do_switch:243` |
+| POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:523-524` / `do_stop:268` |
+| POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:484-492` / `do_upload:134` |
+| POST | `/api/appMgr/putModel` | raw model 字节 + 头 `X-Filename`/`X-Target-Path`/`X-Sha256?` | `{path, filename, size, sha256}`（sha256 不符即删并报 400） | `server.py:495-505` / `do_putmodel:180` / `modelstore.write_model:98` |
+| GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:446-453` / `do_get_config:279` |
+| POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:525-531` / `do_set_config:288` |
+| GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:454-455` / `do_get_mqtt:389` |
+| POST | `/api/appMgr/mqtt` | `{mqtt:{...}}` 或平铺 | 同上视图 + `restarted`（改后重启 active app 生效） | `server.py:532-536` / `do_set_mqtt:394` |
+| GET | `/api/appMgr/metrics` | — | `{npu_load, mem, temp_c, active_app, uptime_s, ts}` | `server.py:456-457` / `do_metrics:371` |
 
-**错误码**（`server.py:455-460`）：
+**错误码**（`server.py:538-543`）：
 `400` 参数/校验/安装/监督错误（`ValueError`/`InstallError`/`SupervisorError`）；
-`409` 忙（`{"error":..., "code":-2}`，有别的 install/switch/stop 在跑，busy-gate 串行化）；
+`409` 忙（`{"error":..., "code":-2}`，有别的 install/uninstall/switch/stop 在跑，busy-gate 串行化）；
 `404` 未知路径；`500` 其他异常。
 
 ---
@@ -516,14 +539,16 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
   nginx 边缘 conf，OTA 后的重注入触发链**不完全自动**（需 `appmgr-restore.sh`，见 `S94appmgr:22-30`）。
 - **签名/上架是半成品（生态侧）**：机制完整可跑，但只有单密钥自签、无第三方开发者证书体系。
   方案商要上架出厂设备，需 Seeed 侧签发、或自管公钥、或关闭强制。详见 §5。
-- **无卸载 / 无版本管理 API**：`installer.uninstall()` 存在（`installer.py:180`），
-  但 `server.py` 和 CLI **都没有把它接出来** —— 当前没有卸载端点、没有多版本共存、没有回滚面。
-  安装是"原子换目录"（旧目录移为 `.old` 再删，`installer.py:163-173`），`state.json`
-  只记 active app + version。
+- **有卸载、仍无版本管理 API**：卸载已接出（HTTP `POST /api/appMgr/uninstall`
+  `server.py:513-517` / `do_uninstall:209`，CLI `python3 -m appmgr uninstall <id>`，底层
+  `installer.uninstall:180`：停→清 active→删 app 目录 + per-app venv，共享 models 不动）。
+  但**仍没有多版本共存、没有回滚面**：安装是"原子换目录"（旧目录移为 `.old` 再删，
+  `installer.py:163-173`），`state.json` 只记 active app + version。卸载/`putModel` 的
+  **端到端真机验证仍 gated**（机制在位、单元测试覆盖 `modelstore`，但设备侧 E2E 尚未闭环）。
 - **单活**：同一时刻只有一个 app 运行（摄像头独占），`switch` 会停掉其它。
 - **v1 无沙箱**：app 全部以 root 运行，扩展间无强隔离（规格 §1.1：source_id 防冒充在全 root 下
   "只能防手滑不能防恶意"）。
-- **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:57-59`）。
+- **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:63-65`）。
 - **当前样本**：`apps/` 有 9 个 app 目录，`catalog.json`（现为 CDN 形态）**9 个应用全部已签名收录**
   （face-analysis / facemesh-reader / fall-detection / fitness-trainer / ppocr-reader /
   qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。其中 8 个模型随包 bundle

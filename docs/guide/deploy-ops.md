@@ -157,15 +157,27 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 验界面 / 验后端**不需要**先传应用包。**只传 appmgr 核心（<1 MB）就能起后端 + 验界面与 API**；真正安装应用时才需要那个 **81 MB 的 app 包**。分两步走，界面/接口出问题能立刻定位到底是"框架没起来"还是"应用装不上"，不用每次拖 81 MB。
 
-### 4.4 运行时依赖（rknnlite / interpreter venv）——**app 能跑的前提**
+### 4.4 运行时依赖（rknnlite / interpreter venv / recamera_ext）——**app 能跑的前提**
 
-装好 app 包 **≠** app 能跑。appmgr 只负责分发 + 监督进程；**app 的 Python 运行时依赖不在打包/上架链路内，须由运行时侧预先 provision**：
+装好 app 包 **≠** app 能跑。appmgr 只负责分发 + 监督进程；**app 的 Python 运行时依赖不在打包/上架链路内，须由运行时侧预先 provision**。9 个 app（8 视觉 + voice）的 manifest `interpreter` 都指向 rknn venv `/userdata/rknnenv/bin/python`——app 就在这个解释器下跑。
 
-- **`rknnlite` Python 绑定**：app 在 NPU 上推理走的是 `rknnlite`（Python 层），**固件不自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`，两者不是一回事。设备上没有 `rknnlite`，视觉类 app 起来也推不了理。
-- **解释器 / venv**：supervisor 默认用 appmgr 自己的 `sys.executable`（系统 python）启动 app（`supervisor.py:99-100`）。manifest 可用 `interpreter`（别名 `python`）指定 per-app 绝对路径解释器——**voice-transcribe 用 `/userdata/rknnenv/bin/python`**（sherpa-onnx / ASR 依赖装在该 venv 里）。该路径**必须在设备上存在**，否则 `switch` 时硬报错 `manifest interpreter not found on device`（`supervisor.py:106-113`）。所以部署 voice-transcribe 前，`/userdata/rknnenv` 这个 venv（含 rknnlite + sherpa-onnx 等）必须已就位。
-- **共享模型落位**：voice-transcribe 的模型**不在包里**，装机前由浏览器 `putModel` 落到 `/userdata/local/models/asr`（4 个文件，133 MB rknn + 3 个资源，见 publishing §3/§6）。设备侧确认：`ls -lh /userdata/local/models/asr/`。
+**三件事必须为真，app 才能真正运行（核实自 `market/deploy/provision-runtime.sh` 头注 + `supervisor.py`）**：
 
-> 小结：部署一个"带 venv + 共享模型"的 app（如 voice-transcribe）＝ ①provision `/userdata/rknnenv` venv（含 rknnlite）→ ②`putModel` 共享模型到 `/userdata/local/models/asr` → ③装 app 包 → ④switch。缺 ① 或 ② 都会在 switch/运行时失败，而非安装时。
+1. **`rknnlite` / venv site-packages 可达**：app 在 NPU 上推理走的是 `rknnlite`（Python 层），**固件不自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`，两者不是一回事。`rknnlite` 装在 `/userdata/rknnenv` venv 里，系统 python 看不到它；**由 manifest `interpreter=/userdata/rknnenv/bin/python` 保证**在该 venv 下启动（缺省则用 appmgr 自己的 `sys.executable`，`supervisor.py:106-113`；`interpreter` 路径设备上不存在时 `switch` 硬报错 `manifest interpreter not found on device`）。
+2. **`import recamera_ext` 成立**：官方扩展 API 的 Python 绑定在 SDK 树 `/userdata/sdk/python/recamera_ext`，**不在 venv 默认 sys.path 上**。`provision-runtime.sh` 往 venv site-packages 写一个 `recamera_sdk.pth` 指向 `/userdata/sdk/python`，使该 venv 起的每个进程都能 `import recamera_ext`（取代 per-session `PYTHONPATH export` 的持久做法）。
+3. **native lib `librecamera_ext.so.1` 能加载**：`recamera_ext` 会 dlopen 它，而它在 `/oem/usr/lib`——不在 musl loader 默认搜索路径上。`supervisor.start()` 给**它拉起的每个 app** 注入 `LD_LIBRARY_PATH=/oem/usr/lib:/oem/lib`（`supervisor.py:177-179`），同时注入 `KIT_PARENT` + `PYTHONPATH`（指向共享 kit，`supervisor.py:165-167`），所以 UI / HTTP API / boot-restore 启动的 app 一律继承，无需手敲 `export`。
+
+**基础环境 provision 脚本 `market/deploy/provision-runtime.sh`**（幂等，设备上 `sh provision-runtime.sh`）：校验 (1) venv python 在、(2) SDK 绑定在 + 写 `.pth`、(3) `.so` 在，最后**在 venv 下实跑 `import recamera_ext` 自检**，PASS/FAIL 汇总，硬前提缺失即非零退出。注意 (3) 的 `.so` 与 SDK 绑定树都由**扩展 API 固件**提供（随 `/oem` OTA），本脚本只校验、不安装。
+
+**voice 音频运行时 `market/deploy/provision-voice.sh`**（voice-transcribe 专用，视觉 app 不需要）：在 rknn venv 里从**离线 wheelhouse** 补装音频依赖（`voxedge` / `sherpa_onnx` / `kaldi_native_fbank` / `sentencepiece`，`numpy`+`rknnlite` 复用）→ 把 ASR 模型集 copy 进共享目录 `/userdata/local/models/asr/`（`sensevoice_rv1126b_w4a16.rknn` + `am.mvn` + `embedding.npy` + BPE + `silero_vad.onnx`，KWS 唤醒模型可选）→ 往 `config.json` 写 `asr_backend=rk`、`wake_backend=kws|asr`（`asr_backend` 是内部键、不在 config_schema，故直接落 `config.json`；UI 改配置会丢它，需重跑本脚本）。同样幂等 + 自检。
+
+- **共享模型落位**：voice-transcribe 的模型**不在包里**，生产装机由浏览器 `putModel` 落到 `/userdata/local/models/asr`（catalog `models[]` = **4 个文件**：rknn + am.mvn + embedding.npy + BPE，核实自 `market/catalog/models.json`，见 publishing §3/§6）。`provision-voice.sh` 是设备侧从本地 payload 落模型的等价路径，且**额外**带 `silero_vad.onnx`（VAD 端点检测，必需）与可选的 KWS 唤醒模型集——即 provision 的必需集是 **5 文件**，比 catalog 的浏览器代取集多一个 `silero_vad.onnx`。设备侧确认：`ls -lh /userdata/local/models/asr/`。
+
+> **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类大而通用的依赖走**共享基础环境** `/userdata/rknnenv`（`provision-runtime.sh`，8 视觉 app 复用）；大而共享的**模型**走 catalog `models[]`+`putModel`。app **独有**的增量 Python 依赖（PyAV、特定框架…）不应塞进共享基础环境——见 [per-app-dependencies.md](./per-app-dependencies.md)（**设计文档，尚未实现**：安装时建 per-app venv 从离线 wheel 装入；`installer.uninstall()` 已会一并删 `/userdata/local/venvs/<id>`）。
+
+> 小结：部署一个"带 venv + 共享模型"的 app（如 voice-transcribe）＝ ①`provision-runtime.sh`（venv + recamera_ext 可导入）→ ②`provision-voice.sh`（音频依赖 + `putModel`/copy 共享模型到 `/userdata/local/models/asr`）→ ③装 app 包 → ④switch。视觉 app 只需 ①③④。缺 provision 的那一步会在 switch/运行时失败，而非安装时。
+
+> **卸载**：`POST /api/appMgr/uninstall {id}`（CLI `python3 -m appmgr uninstall <id>`）停→清 active→删 `/userdata/local/apps/<id>/` + per-app venv `/userdata/local/venvs/<id>`（若有），**共享模型 `/userdata/local/models` 不动**（跨 app 资产）。详见 publishing §6/§7。
 
 ---
 
@@ -189,7 +201,8 @@ reboot / 部署后依次核对：
   PY
   ```
 - [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/etc/init.d/S94appmgr status`）
-- [ ] **共享模型 app**（若装 voice-transcribe 类）：`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 四文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）
+- [ ] **运行时 provision**（装任何 app 前）：`sh /userdata/local/appcenter/provision-runtime.sh` 打印 `RESULT: PASS`——venv python 在、`recamera_sdk.pth` 已写、`librecamera_ext.so.1` 在、venv 下 `import recamera_ext` 自检通过
+- [ ] **共享模型 app**（若装 voice-transcribe 类）：先 `sh provision-voice.sh` 打印 `PASS`；`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 必需 5 文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）、音频依赖可导入（`python -c "import voxedge, sherpa_onnx"`）
 - [ ] **dmesg 无 VPSS 崩溃**：`dmesg | grep -iE 'vpss|fifo|Oops|paging request'` 空
 
 ---

@@ -8,6 +8,11 @@
 
 代码基：`project/app/recamera_web/recamera_web_backend/`（C++/cgicc/FastCGI/jwt-cpp）。设备上二进制在 `/oem/usr/www/cgi-bin/entry.cgi`，由 nginx `common_relay.conf` 的 `location /cgi-bin/` 经 `fcgiwrap` 每请求 fork 执行。
 
+> **范围界定（勿与应用中心 API 混淆）**：本文只讲 **entry.cgi 控制面**（`/cgi-bin/entry.cgi/*` 存量域 + `/api/v1/ext/*` 扩展域）。
+> 应用中心的**安装/卸载/单活切换/配置/共享模型写盘**是**另一套 API**——appmgr 的 `/api/appMgr/*`
+> （loopback `127.0.0.1:8130`，含 `install` / `uninstall` / `switch` / `stop` / `upload` / `putModel` / `config` / `mqtt` / `metrics`），
+> 完整端点表见 [app-center-publishing.md](./app-center-publishing.md) §7，本文不覆盖。两者都经 nginx 用同一道官方 JWT 边界把关，但进程与代码基不同（entry.cgi 是 C++ 固件二进制；appmgr 是 `/userdata` 下的 Python 常驻服务）。
+
 ---
 
 ## 0. 调用约定
