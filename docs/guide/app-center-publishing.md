@@ -8,10 +8,11 @@
 >
 > 说明：本文描述的应用中心打包 / 签名 / 分发工具链位于 `market/`，属**发布方私有流程，不随公开仓发布**；下列路径用于说明打包链路各环节，公开仓中只保留 `apps/*/manifest.json` 这类应用侧产物。
 > 打包链路各环节（发布方私有）：
-> - appmgr 后端：`market/appmgr/*.py`
+> - appmgr 后端：`market/appmgr/*.py`（含共享模型写盘原语 `market/appmgr/modelstore.py`）
 > - 打包/签名：`market/packaging/{build.py,sign.py,keygen.sh,SIGNING.md}`
+> - CDN 发布：`market/packaging/publish_oss.sh`（ossutil → SenseCraft CDN）
 > - 目录/签名策略：`market/appmgr/paths.py`
-> - 目录格式：`market/catalog/{catalog.json,gen_catalog.py}`
+> - 目录格式：`market/catalog/{catalog.json,catalog.local.json,gen_catalog.py,models.json}`（`catalog.json`=CDN 版，`catalog.local.json`=设备本地版 base `/appcenter/apps/`）
 > - 真实 manifest：`apps/*/manifest.json`（公开仓内）
 > - 部署脚本：`market/deploy/{S94appmgr,ext_appmgr.conf}`
 
@@ -184,12 +185,42 @@ supervisor 启动 app 时注入 `KIT_PARENT` 和 `PYTHONPATH`（`supervisor.py:1
 所以 app 里 `import kit.app` 能找到。**kit 不打进 app 包**，app 包只有几百 KB～几十 MB
 （模型占大头）。
 
+> **运行时前提（rknnlite / interpreter）**：app 要真正跑起来，设备上需有 **`rknnlite`
+> Python 绑定**（NPU 推理的 Python 层，**非固件自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`）
+> 及对应解释器/venv。默认用 appmgr 自己的 `sys.executable`；manifest 用 `interpreter`
+> 指定 per-app 解释器（如 voice-transcribe 的 `/userdata/rknnenv/bin/python`，
+> `supervisor.py:93-113`，缺失则 switch 硬报错）。这些依赖由**运行时侧 provision**，
+> 打包/上架链路不负责，部署前提详见 [deploy-ops.md](./deploy-ops.md)。
+
 ### 模型放哪、怎么被加载
 
 - 开发时放 `apps/<id>/models/`，manifest `models[].file` 用相对路径 `models/xxx.rknn`。
 - 打包时 `models/` 整个进包（`build.py:28`）。
 - 运行时 supervisor 以 app 安装目录为 cwd，把 `models[0].file` 作为 `--model` 传给
   `app.py`（`supervisor.py:120-128`、`_build_cmd`）。多模型级联由 kit 依 `pipeline[]` 自行加载。
+
+### 两种模型分发形态：随包 bundle vs 共享 `models[]`+`target_path`
+
+上面是**随包分发**（默认，8/9 个 app 走这条）：模型跟着 tar.gz 进包，装到 `apps/<id>/models/`。
+
+但有的模型是**大而共享**的资产——多个 app 复用同一份、又不宜塞进每个包。为此有一条并行链路
+（核实自 `market/appmgr/modelstore.py`、`market/catalog/models.json`、`gen_catalog.py:40-48,135-162`）：
+
+- 这类 app 的 **manifest `models` 写成 `[]`**（不随包带模型，supervisor 因而不传 `--model`，
+  app 自己去约定目录找模型）；
+- 共享文件登记在 `market/catalog/models.json`：`app id → { target_path, files[] }`，
+  文件 staged 在 `market/packaging/models/<app_id>/<filename>`；
+- `gen_catalog.py` 把它们哈希后，作为 **catalog 顶层 `models[]` 条目**发出
+  `{url, filename, sha256, size, target_path}`（**与 manifest 里那份 per-app 的 `models[]` 不是同一个东西**：
+  manifest `models[]` 描述模型元数据供 kit/supervisor 用，catalog `models[]` 描述"装机前要下载并落到哪个目录"）；
+- 安装时**浏览器先把这些文件下载 + sha256 校验，再 `POST /api/appMgr/putModel` 写到 `target_path`，
+  然后才装 app 包**（install 流程见 §6）。
+
+**活样本 voice-transcribe**：manifest `models: []`、`needs_model: false`、
+`interpreter: /userdata/rknnenv/bin/python`；共享模型 4 个文件
+（`sensevoice_rv1126b_w4a16.rknn` 133 MB + `am.mvn` + `embedding.npy` +
+`chn_jpn_yue_eng_ko_spectok.bpe.model`）→ `target_path=/userdata/local/models/asr`
+（`models.json:3-11`）。其余 8 个 app 的 catalog `models[]` 为空（模型仍在包里）。
 
 ---
 
@@ -217,7 +248,15 @@ hooks/ run         ← 若存在
 要点（`build.py`）：
 
 - 只收 `INCLUDE_TOP` 五项，自动剔除 `__pycache__`/隐藏文件/`.pyc`/`kit/`。
-- tar 归一化：`uid=gid=0`、`mtime=0`、成员排序 —— 尽量可复现。
+- **完全确定性（可复现）打包**：同样的输入字节 → 同样的输出字节 → 同样的 sha256，
+  从根上杜绝"catalog 里的 checksum 和实际服务的包对不上"这个 bug。两处非确定性都被钉死
+  （`build.py:82-109`）：
+  1. **tar 成员元数据**：`uid=gid=0`、`uname/gname=""`、`mtime=0`、成员按 arcname 排序、
+     mode 归一化（有执行位 → 0755，否则 0644，抹掉宿主 umask 噪声）。
+  2. **gzip 外壳**：`tarfile.open("w:gz")` 会把**当前时间和输出文件名**写进 gzip 头，
+     导致同一份 tar 每次 gzip 出的字节都不同。故改为**先在内存里打不压缩的 tar
+     （`GNU_FORMAT`），再自己用 `gzip.GzipFile(filename="", mtime=0)` 压**——无 FNAME、无时间戳。
+  （实测：对同一 app 连打两次，两份 tar.gz 的 sha256 完全一致。）
 - 打完打印成员列表、字节数、**md5**。
 - **kit 不入包**（`build.py:6-9`）。
 - 包大小受设备侧限制约束：≤200 MB 压缩包、≤400 MB 解包、≤4096 个成员（`paths.py:57-59`）。
@@ -272,7 +311,8 @@ python3 sign.py --verify    # 可选：拿公钥回验
 **机制完整，生态不完整。** 逐条核实：
 
 - 签名/验签的机制是**完整可用**的：`keygen.sh`/`sign.py`/`signing.py` 全链路能跑，
-  仓库里 `dist/` 的 8 个包都有有效 `.sig` 且已嵌入 `catalog.json`，
+  仓库里 `dist/` 的 **9 个包**都有有效 `.sig` 且已嵌入 `catalog.json`
+  （含较新的 voice-transcribe，现已签名上架），
   `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 公钥。
 - 但这是**单密钥自签模型**，不是 CA / 开发者证书体系：
   - 只有**一对**密钥。谁跑了 `keygen.sh`、谁手里就有能让全设备信任的私钥。仓库里这枚公钥
@@ -294,6 +334,9 @@ python3 sign.py --verify    # 可选：拿公钥回验
 
 ### catalog.json 格式（schema v1，核实自 `catalog.json` + `gen_catalog.py`）
 
+每个 app 条目除 `package` 外，还带一个 **`models[]`**（`gen_catalog.py:214-224`）：随包分发的
+app 该数组为空 `[]`；走共享模型链路的 app（voice-transcribe）在此列出装机前要下载并落盘的文件。
+
 ```json
 {
   "schema": 1,
@@ -307,23 +350,56 @@ python3 sign.py --verify    # 可选：拿公钥回验
       "description": "…",
       "arch": "arm64",
       "package": {
-        "url": "/appcenter/pkgs/fall-detection-0.1.0-arm64.tar.gz",
+        "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/packages/fall-detection-0.1.0-arm64.tar.gz",
         "filename": "fall-detection-0.1.0-arm64.tar.gz",
         "sha256": "7124718d…",
         "size": 2865713,
         "signature": "MEUCIC…",
         "signature_alg": "ecdsa-sha256"
-      }
+      },
+      "models": []
+    },
+    {
+      "id": "voice-transcribe",
+      "name": "Voice Transcribe",
+      "version": "0.1.0",
+      "description": "…",
+      "arch": "arm64",
+      "package": { "url": "…/packages/voice-transcribe-0.1.0-arm64.tar.gz", "…": "…" },
+      "models": [
+        {
+          "url": "…/models/voice-transcribe/sensevoice_rv1126b_w4a16.rknn",
+          "filename": "sensevoice_rv1126b_w4a16.rknn",
+          "sha256": "3fa40ad9…",
+          "size": 133468923,
+          "target_path": "/userdata/local/models/asr"
+        }
+      ]
     }
   ]
 }
 ```
 
+> `url` 的前缀由 `--base-url` 决定，对应**两套 url**：
+> - **CDN 版（生产主分发）**：CDN base，包 url 形如
+>   `https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/packages/…`。仓库里的
+>   `catalog.json` 即此形态，浏览器代取（设备无外网路由）。
+> - **设备本地版（回退）**：`gen_catalog.py` 默认 base `/appcenter/apps/`（整合后布局，nginx
+>   `alias /userdata/local/appcenter/apps/`），包 url 形如 `/appcenter/apps/<file>.tar.gz`；
+>   catalog 本身在设备上 served at `/appcenter/catalog.json`（→ `/userdata/local/catalog/catalog.json`）。
+>   仓库里另存一份 `catalog.local.json`（默认 base 产出），与 CDN 版 `catalog.json` 并存、勿互相覆盖。
+>
+> `models[]` 的 url 前缀默认由包 base 推导（CDN base 把结尾 `packages/`|`pkgs/` 换成 `models/`；
+> 设备本地 base `/appcenter/apps/` 落到 `/appcenter/apps/models/<app_id>/…`，仍在 apps alias 下，
+> `gen_catalog.py:112-122`），也可用 `--models-base-url` 显式覆盖。
+
 ### 怎么把 app 加进 catalog
 
 ```sh
-python3 market/catalog/gen_catalog.py                       # 扫 ../packaging/dist，base /appcenter/pkgs/
-python3 market/catalog/gen_catalog.py --dist DIR --out FILE --base-url https://cdn.example/pkgs/
+python3 market/catalog/gen_catalog.py                       # 扫 ../packaging/dist，base /appcenter/apps/（设备本地版）
+python3 market/catalog/gen_catalog.py --out catalog.local.json              # 设备本地版另存，勿覆盖 CDN 版 catalog.json
+python3 market/catalog/gen_catalog.py --dist DIR --out FILE --base-url https://cdn.example/packages/   # CDN 版
+python3 market/catalog/gen_catalog.py --models-dir DIR --models-base-url https://cdn.example/models/
 ```
 
 `gen_catalog.py` 是目录的唯一真源：扫 `dist/*.tar.gz`，从**包内 manifest** 取
@@ -331,11 +407,28 @@ id/name/version/description，实算 sha256+size，读 `.sig` 边车嵌入 `sign
 url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策略下这类包会被设备拒装）。
 `--base-url` 生产环境指向 CDN/OSS。
 
+**共享模型进 catalog**：`gen_catalog.py` 同时读 `market/catalog/models.json`
+（`app id → {target_path, files[]}`），把 staged 在 `market/packaging/models/<app_id>/` 的
+文件哈希后作为该 app 的 `models[]` 发出（`gen_catalog.py:125-162`）。
+**staged 文件缺失是硬错误**（`SystemExit`）——宁可上架时炸掉，也不让 catalog 指向浏览器取不到的模型。
+不在 `models.json` 里的 app，`models[]` 恒为 `[]`。
+
 ### 装到设备的流程
 
-设备在常见 USB 组网下没有外网路由（`gen_catalog.py:5-10`），所以**由浏览器代下**：
+设备在常见 USB 组网下没有外网路由（`gen_catalog.py:5-10`），所以**由浏览器代下**。
+浏览器侧 install 分两阶段（前端 `AppStore.js` 的 install 逻辑 + `appmgrClient.putModel()`，
+在官方 web-native 前端仓；契约核实自 `server.py`/`modelstore.py`）：
 
 ```
+[阶段 0：共享模型 models-first 循环]  —— 仅当 catalog 该 app 的 models[] 非空
+for m in app.models:
+    浏览器从 m.url 下载文件
+       → 浏览器本地校验 m.sha256
+       → POST /api/appMgr/putModel
+            raw bytes + 头 X-Filename=m.filename, X-Target-Path=m.target_path, X-Sha256=m.sha256
+            → modelstore 白名单校验 + 原子写 + sha256 复核，落到 <target_path>/<filename>
+
+[阶段 1：安装 app 包]
 浏览器从 catalog 的 package.url 下载 .tar.gz
    → 浏览器本地校验 sha256
    → POST /api/appMgr/upload （raw bytes + X-Filename 头）
@@ -343,6 +436,21 @@ url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策
    → POST /api/appMgr/install { "path": "/userdata/appstage/<filename>", "signature": "<base64>" }
         → installer 验签 + zip-slip 防护 + 原子解包到 /userdata/local/apps/<id>/
 ```
+
+**`putModel` 端点契约**（`server.py:459-469` / `do_putmodel:178` / `modelstore.write_model:98`）：
+
+- **入参**：raw model 字节为 body；三个头 —— `X-Filename`（裸 basename，正则
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`，禁路径分隔符/`..`）、`X-Target-Path`（模型落盘目录的绝对路径）、
+  可选 `X-Sha256`（期望摘要）。
+- **返回**：`{path, filename, size, sha256}`。
+- **安全护栏**（`modelstore.py` 逐条）：目标目录必须落在**根白名单** `MODEL_ROOTS`
+  内（默认 `/userdata/local/models`，`APPMGR_MODEL_ROOTS` 可覆盖）——`/etc`、`/oem`、绝对逃逸、
+  `..` 上爬、以及"符号链接组件在建目录后逃逸"全部拒绝（**词法预检 + realpath 后检双保险**）；
+  拒绝覆盖目标处已存在的符号链接；大小 `1..256 MB`（`APPMGR_MAX_MODEL_BYTES`，与 nginx
+  `client_max_body_size 256m` 对齐）；**原子写**（同目录 temp + fsync + `os.replace`）；
+  给了 `X-Sha256` 就复核，**不符即删**（绝不在盘上留半截/被篡改的模型）。
+- **鉴权**：走现有 nginx `/api/appMgr/` 的同一道 JWT 边界（`ext_appmgr.conf`），无新增边界。
+  单元测试见 `market/appmgr/tests/test_modelstore.py`。
 
 设备本地也可直接用 CLI（`__main__.py`）：`python3 -m appmgr install <pkg.tar.gz>`
 （包路径须在允许根 `/userdata` 下，`paths.py:54-56`）。
@@ -353,6 +461,25 @@ url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策
   启动失败会回滚 active 状态（`server.py:180-202`）。
 - `POST /api/appMgr/stop {id?}`：停指定 id，或停当前 active。
 - 开机自恢复：appmgr 启动时会重启上次的 active app（`server._boot_restore`）。
+
+### 发布到 CDN（`publish_oss.sh`）
+
+生产分发照 reCamera 一代的路子：包 + 模型 + catalog 传到 **SenseCraft CDN**，设备离线、
+由用户浏览器代取（浏览器有外网路由，设备没有）。脚本 `market/packaging/publish_oss.sh`
+（核实自该文件）：
+
+- **OSS 桶 / CDN base**：`oss://sensecraft-statics/solution-assets/recamera_pro/`
+  ↔ `https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/`（`publish_oss.sh:24-25`）。
+- **目录结构**：`packages/<pkg>.tar.gz`、`models/<app_id>/<file>`、`catalog.json`
+  （模型 URL 与 catalog 里 `models[]` 的 url 逐字对齐）。
+- **传后回校**：每个对象 `ossutil cp` 上传后**下载回来比对 sha256**——`ossutil` 报成功 ≠ 字节真能从 CDN 取到。
+- **顺序**：先包、再共享模型、**catalog.json 最后传**（等所有包/模型确认 live，目录才不会指向尚未落地的包）。
+- **`.sig` 不上传**：签名嵌在 catalog 里，设备用内置公钥验，边车文件无需上 CDN。
+- **闸门**：默认 dry-run 只打印计划；**只有带 `--yes` 才真推**（生产 CDN 难撤回）。前提是
+  `ossutil` 已配 + 包已 build+sign+catalog 已用 CDN base-url 重新生成。
+
+典型发布链：`build.py`（确定性打包）→ `sign.py` → `gen_catalog.py --base-url <CDN>/packages/`
+→ `publish_oss.sh --yes`。前端 `CAT_DEFAULT` 指向 CDN 的 `catalog.json` url。
 
 ---
 
@@ -368,6 +495,7 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 | POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:435-439` / `do_switch:180` |
 | POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:440-441` / `do_stop:205` |
 | POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:419-427` / `do_upload:122` |
+| POST | `/api/appMgr/putModel` | raw model 字节 + 头 `X-Filename`/`X-Target-Path`/`X-Sha256?` | `{path, filename, size, sha256}`（sha256 不符即删并报 400） | `server.py:459-469` / `do_putmodel:178` / `modelstore.write_model:98` |
 | GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:383-390` / `do_get_config:216` |
 | POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:442-448` / `do_set_config:225` |
 | GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:391-392` / `do_get_mqtt:326` |
@@ -396,7 +524,9 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 - **v1 无沙箱**：app 全部以 root 运行，扩展间无强隔离（规格 §1.1：source_id 防冒充在全 root 下
   "只能防手滑不能防恶意"）。
 - **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:57-59`）。
-- **当前样本**：`apps/` 有 9 个 app 目录，但 `catalog.json` 只收录 **8 个已签名**应用
+- **当前样本**：`apps/` 有 9 个 app 目录，`catalog.json`（现为 CDN 形态）**9 个应用全部已签名收录**
   （face-analysis / facemesh-reader / fall-detection / fitness-trainer / ppocr-reader /
-  qrcode-reader / retail-vision / yolo-detector）。第 9 个 **voice-transcribe** 在 `dist/`
-  有包但**无 `.sig`、未进 catalog**（较新、尚未签名上架）—— 正好是"未签名 = 未上架"的活样本。
+  qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。其中 8 个模型随包 bundle
+  （catalog `models[]` 为空）；**voice-transcribe 是共享模型链路的活样本**——manifest `models: []`、
+  catalog `models[]` 有 4 个文件（133 MB rknn + 3 个资源）→ `/userdata/local/models/asr`，
+  装机前由浏览器 `putModel` 落盘（见 §3、§6）。

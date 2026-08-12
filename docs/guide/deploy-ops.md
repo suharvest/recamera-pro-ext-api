@@ -29,9 +29,11 @@
 **已知缺口**：本轮无阻塞性缺口。早先标注的"关键点 WebSocket 解码缺失"已解决——notify 侧 pb2 / parser 已更新，关键点注入与 WS 解码均通。frame / result / probe 主路径完整。
 
 **应用中心**（App Center，可选，方案 B）另有三块产物，见第 4 节：
-- 前端 SPA（React，静态 shell）→ `/oem/usr/www`（catalog 静态资源）
+- 前端 SPA（React，静态 shell）→ `/userdata/local/appcenter/www/`（nginx `alias`，`ext_appmgr.conf:31-35`）。
+  注：`market/spa/` 这份独立 SPA 已 **LEGACY**（见 `ext_appmgr.conf:25-30` 与 `market/spa/DEPRECATED.md`），
+  当前前端是官方 web-native React 的 `/app-center` 页；下述 appmgr 后端与动态路由仍在用。
 - `appmgr` 后端（Python 常驻服务，`python3 -m appmgr serve`，监听 `127.0.0.1:8130`）→ `/userdata/local`
-- nginx 边缘配置 `ext_appmgr.conf`（catalog 静态 + `/api/appMgr` 反代）→ `/oem/usr/etc/nginx/`
+- nginx 边缘配置 `ext_appmgr.conf`（静态 SPA + `/api/appMgr` 反代）→ `/oem/usr/etc/nginx/`
 
 ---
 
@@ -110,10 +112,18 @@ adb shell "dmesg | grep -iE 'vpss|fifo|Oops' | tail"   # 无 VPSS 崩溃
 
 ### 4.1 三块产物落位
 
-1. **前端 SPA**：`build` 后落 `/userdata/local/appcenter/www/`（nginx `alias`）。用户从官方 dashboard 加外链，或直接访问 `http(s)://<device>/appcenter/`。
-2. **appmgr 后端**：代码 + 状态在 `/userdata/local`（`python3 -m appmgr` 从此解析），`appmgr serve` 监听 loopback `127.0.0.1:8130`，公网面由 nginx 转发。
+1. **前端 SPA**：`build` 后落 `/userdata/local/appcenter/www/`（nginx `alias`，`ext_appmgr.conf:31-35`）。用户从官方 dashboard 加外链，或直接访问 `http(s)://<device>/appcenter/`。**（此独立 SPA 已 LEGACY，当前前端是官方 web-native React `/app-center`；见 §1 与 `market/spa/DEPRECATED.md`。）**
+   > **设备本地服务路径（已对齐官方整合后布局）**：以设备实测的**整合后布局**为权威，repo 侧已对齐——
+   > - **应用包**：URL `/appcenter/apps/<file>.tar.gz` → 设备 `/userdata/local/appcenter/apps/`（nginx `alias`，`ext_appmgr.conf` 新增 `location /appcenter/apps/`）。`gen_catalog.py` 的默认包 base 即 `/appcenter/apps/`（`DEFAULT_BASE_URL`）。
+   > - **catalog**：URL `/appcenter/catalog.json` → 设备 `/userdata/local/catalog/catalog.json`（整合后布局把 catalog 单独放在 `/userdata/local/catalog/`，不在 `appcenter/` 下；`ext_appmgr.conf` 新增 `location = /appcenter/catalog.json`）。
+   >
+   > 早先标注的"repo conf 缺 `/appcenter/apps/`、`/appcenter/catalog.json`、`/userdata/local/catalog/`"分歧**已消除**：这些 location 已补进 repo `ext_appmgr.conf`（注明"以设备/官方 conf 为准，本块为 repo 侧对齐参考"）。
+   > **两套 url**：生产分发走 **CDN（主）**——浏览器代取 CDN 上的 `catalog.json` + 包（见 publishing §6，catalog `url` 指向 `sensecraft-statics.seeed.cc/.../packages/`）；上述 `/appcenter/*` 是**设备本地服务（回退）**，对应仓库里的 `catalog.local.json`（`gen_catalog.py` 默认 base 产出，包 url→`/appcenter/apps/<f>`）。仓库里的 `catalog.json` 是 CDN 版，`catalog.local.json` 是设备本地版，二者并存、勿互相覆盖。
+2. **appmgr 后端**：代码 + 状态在 `/userdata/local`（`python3 -m appmgr` 从此解析），`appmgr serve` 监听 loopback `127.0.0.1:8130`，公网面由 nginx 转发。**新增端点 `POST /api/appMgr/putModel`** 用于装机前把共享模型写到 `/userdata/local/models/<...>`（白名单加固，见 publishing §6）。
 3. **nginx 边缘**：`ext_appmgr.conf` 放 `/oem/usr/etc/nginx/`，被 `common_relay.conf` 的 `include ext_*.conf`（在 `server{ listen 80; }` 块内）自动加载。它**只新增 location，不改任何官方 conf**：
    - `/appcenter/` → 静态 SPA shell（**匿名**，shell 内无秘密）
+   - `/appcenter/apps/` → 应用包（**匿名**，`alias /userdata/local/appcenter/apps/`；整合后布局，浏览器本地回退取包处）
+   - `/appcenter/catalog.json` → 安装目录（**匿名**，`location =` → `alias /userdata/local/catalog/catalog.json`；整合后布局把 catalog 单列）
    - `/appcenter/ws/results` → 检测结果 WS 反代到 `127.0.0.1:8124`（JWT 门）
    - `/appcenter/go2rtc/` → 视频反代到 `127.0.0.1:1984`（JWT 门）
    - `/api/appMgr/` → 管理 API 反代到 `127.0.0.1:8130`（JWT 门，`client_max_body_size 256m` 给 tar.gz 上传留头、`proxy_read_timeout 200s` 给安装/切换留时间）
@@ -147,6 +157,16 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 验界面 / 验后端**不需要**先传应用包。**只传 appmgr 核心（<1 MB）就能起后端 + 验界面与 API**；真正安装应用时才需要那个 **81 MB 的 app 包**。分两步走，界面/接口出问题能立刻定位到底是"框架没起来"还是"应用装不上"，不用每次拖 81 MB。
 
+### 4.4 运行时依赖（rknnlite / interpreter venv）——**app 能跑的前提**
+
+装好 app 包 **≠** app 能跑。appmgr 只负责分发 + 监督进程；**app 的 Python 运行时依赖不在打包/上架链路内，须由运行时侧预先 provision**：
+
+- **`rknnlite` Python 绑定**：app 在 NPU 上推理走的是 `rknnlite`（Python 层），**固件不自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`，两者不是一回事。设备上没有 `rknnlite`，视觉类 app 起来也推不了理。
+- **解释器 / venv**：supervisor 默认用 appmgr 自己的 `sys.executable`（系统 python）启动 app（`supervisor.py:99-100`）。manifest 可用 `interpreter`（别名 `python`）指定 per-app 绝对路径解释器——**voice-transcribe 用 `/userdata/rknnenv/bin/python`**（sherpa-onnx / ASR 依赖装在该 venv 里）。该路径**必须在设备上存在**，否则 `switch` 时硬报错 `manifest interpreter not found on device`（`supervisor.py:106-113`）。所以部署 voice-transcribe 前，`/userdata/rknnenv` 这个 venv（含 rknnlite + sherpa-onnx 等）必须已就位。
+- **共享模型落位**：voice-transcribe 的模型**不在包里**，装机前由浏览器 `putModel` 落到 `/userdata/local/models/asr`（4 个文件，133 MB rknn + 3 个资源，见 publishing §3/§6）。设备侧确认：`ls -lh /userdata/local/models/asr/`。
+
+> 小结：部署一个"带 venv + 共享模型"的 app（如 voice-transcribe）＝ ①provision `/userdata/rknnenv` venv（含 rknnlite）→ ②`putModel` 共享模型到 `/userdata/local/models/asr` → ③装 app 包 → ④switch。缺 ① 或 ② 都会在 switch/运行时失败，而非安装时。
+
 ---
 
 ## 5. 验证清单
@@ -169,6 +189,7 @@ reboot / 部署后依次核对：
   PY
   ```
 - [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/etc/init.d/S94appmgr status`）
+- [ ] **共享模型 app**（若装 voice-transcribe 类）：`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 四文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）
 - [ ] **dmesg 无 VPSS 崩溃**：`dmesg | grep -iE 'vpss|fifo|Oops|paging request'` 空
 
 ---
