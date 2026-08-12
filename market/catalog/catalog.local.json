@@ -1,0 +1,180 @@
+{
+  "schema": 1,
+  "generated": "2026-08-12T12:42:42Z",
+  "source": "recamera_pro/market/packaging/dist",
+  "apps": [
+    {
+      "id": "face-analysis",
+      "name": "Face Analysis",
+      "version": "0.1.0",
+      "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Emits per-face attribute events plus a simple time-windowed demographic aggregation (gender / age / race / emotion histograms). Privacy-first: faces can be flagged for blurring and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/face-analysis-0.1.0-arm64.tar.gz",
+        "filename": "face-analysis-0.1.0-arm64.tar.gz",
+        "sha256": "b0d460cae783ec12cc0a38298d39e43206af82f1b01f41628d490ec468f3c834",
+        "size": 52837091,
+        "signature": "MEQCIDaWSun1587deQF5caTFCg4gYDNVRHCtwMpr6l8sXtjtAiBpa6e6KeH4yTwO8Mptxxbu3ggsT1IHQEi5io9z9UHhqQ==",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "facemesh-reader",
+      "name": "Facemesh Reader",
+      "version": "0.1.0",
+      "description": "On-device drowsiness / fatigue detection with a two-stage face cascade: a YOLOv8n-face detector finds the face, a 468-point MediaPipe FaceMesh landmark model runs on the cropped face ROI, then explainable CPU-only temporal logic derives EAR (eye aspect ratio), MAR (mouth aspect ratio), blinks, yawns and a composite drowsiness state. First reference for the reCamera Pro cascade-pipeline pattern reused by face-analysis.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/facemesh-reader-0.1.0-arm64.tar.gz",
+        "filename": "facemesh-reader-0.1.0-arm64.tar.gz",
+        "sha256": "b6975c654618bebbb4bb8262f68321154e415028f89df82f60a3df3e69c7f1ce",
+        "size": 6841603,
+        "signature": "MEUCIQC8njJYe7QU3ETr2ICB97KhPOpMKK8CtSoRD5JZ5RUAVQIgKyGWHnOndwTzOUh/juVFtQDXaf4oNkBZchgYMcUTl+I=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "fall-detection",
+      "name": "Fall Detection",
+      "version": "0.1.0",
+      "description": "On-device fall detection using YOLO11n-Pose and an explainable geometric + temporal state machine (rapid hip drop + horizontal-posture cue, confirmed across frames to suppress everyday-activity false alarms). Streams keypoints and fall events for the /appcenter overlay.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/fall-detection-0.1.0-arm64.tar.gz",
+        "filename": "fall-detection-0.1.0-arm64.tar.gz",
+        "sha256": "c4ac2089f0a2178ac43b23928af4717a9c2d5aa2965e45b60a716b5c94670948",
+        "size": 2865763,
+        "signature": "MEUCICLY8vx4Tgrk/nAxT6ASJl2KiAbw1/Zs6Jkp0nB5nBSoAiEA44+E4xLepeiPpolLJ+ezogjKUw93X7g4L6dnDfE76ts=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "fitness-trainer",
+      "name": "Fitness Trainer",
+      "version": "0.1.0",
+      "description": "Counts your reps and calls out sloppy form, on-device, using YOLO11n-Pose and joint-angle hysteresis state machines. Pick squats, push-ups or hammer curls, set your reps and sets, and the camera does the rest -- no phone, no wearable, no video leaving the device. Streams keypoints and live rep counts for the /appcenter overlay.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/fitness-trainer-0.1.0-arm64.tar.gz",
+        "filename": "fitness-trainer-0.1.0-arm64.tar.gz",
+        "sha256": "04b78db3135969bc34fee667f81e3c3806382294f5c45ed132cb2bbb2e87a4e1",
+        "size": 2865595,
+        "signature": "MEUCIEqZieWZcGUZ3ZyR4kIpKIjx3lA4VizxEIU0ZMhX3HYBAiEAzth2O+1eEu0vBOAeRBXXPDw8CMlYQ6uI9R2zWL5E4q0=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "ppocr-reader",
+      "name": "PP-OCR Reader",
+      "version": "0.1.0",
+      "description": "On-device OCR text reader: a DBNet detector (PP-OCRv3, 480x480) finds every text region, each region is perspective-cropped to an upright 48x320 strip, then a CTC recognizer (SVTR-LCNet, 6625-class Chinese+English dictionary) reads the characters. Emits one event per text box with the recognized string, its quad and confidence. Everything runs on-device; no image or text leaves the camera. Port of the first-gen SSCMA ppocr-reader C++ solution to the reCamera Pro Python kit.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/ppocr-reader-0.1.0-arm64.tar.gz",
+        "filename": "ppocr-reader-0.1.0-arm64.tar.gz",
+        "sha256": "5b142621bdd53de96ed943a8301b70de6e196819c748f121f8b7e65bf4995ac0",
+        "size": 5193710,
+        "signature": "MEUCIHS4kjWcjvcKmnvdMAjIM+X0rdXID4vFUUPzGavBeJo9AiEArZpYaOS1k3Q805u/IDGp3KJFapdUvlbjVUDkhYJWRUI=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "qrcode-reader",
+      "name": "QR Code Reader",
+      "version": "0.1.0",
+      "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/qrcode-reader-0.1.0-arm64.tar.gz",
+        "filename": "qrcode-reader-0.1.0-arm64.tar.gz",
+        "sha256": "526835a75fb62dee28eaa85a3fa1d622dd6a682add97e269e8a8d06b3a180688",
+        "size": 921888,
+        "signature": "MEYCIQCu105k5GLyRu9KmBGVUsRTuqpSzg9h4r9/o6Lsc9SAMwIhAPvWzx0G+bJxPSg/dqAD1i9C5Ct6jdGhpvPdOgu+YKSL",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "retail-vision",
+      "name": "Retail People Counting",
+      "version": "0.1.0",
+      "description": "On-device retail people-flow analytics. Runs YOLOv8n (person class only) on the RV1126B NPU, tracks each shopper across frames (IoU association + velocity prediction + track id), and turns tracks into the three numbers a store manager asks for: how many came in/out, how many are in the store right now, and who is browsing / engaged / needs assistance. Optional counting zone and directional entry/exit line. Streams tracks + counting events for the /appcenter overlay.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/retail-vision-0.1.0-arm64.tar.gz",
+        "filename": "retail-vision-0.1.0-arm64.tar.gz",
+        "sha256": "970080e7706c9842c30d25232f0777946c37e8773858f13914340f6392ff7fa6",
+        "size": 3021963,
+        "signature": "MEUCIQCAXlGQUK7+zr8XjKM7KLiCabNRQhvQLkdcYGY8kQiTdAIgEpKL0ZJ4kmoQ6rmRqI35tS1Tordm/33+coJurMWiR4k=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "voice-transcribe",
+      "name": "Voice Transcribe",
+      "version": "0.1.0",
+      "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux available as a fallback), spots a wake word with a streaming sherpa-onnx KeywordSpotter, endpoints the following utterance with silero VAD, and transcribes it with SenseVoice int8 -- all on the ARM cores, no NPU. Streams state (idle/listening/transcribing) and transcript text to the /appcenter panel.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/voice-transcribe-0.1.0-arm64.tar.gz",
+        "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
+        "sha256": "607a3e4ef3cb52b16e413c0cef3ae979ee7b3e5162c7916017f374a04f234826",
+        "size": 6340,
+        "signature": "MEYCIQDafVCqqo9YIOQD2S1MBZfH50IW4C8kj/nJYxfcKPvyeQIhANZ9Os/YhZnBn8hk0jygWvbUd4ss5AVdpN5JNWdm920j",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": [
+        {
+          "url": "/appcenter/apps/models/voice-transcribe/sensevoice_rv1126b_w4a16.rknn",
+          "filename": "sensevoice_rv1126b_w4a16.rknn",
+          "sha256": "3fa40ad9ab011f5f4134a355b0104c979d272450a0ff3c17ec34cba97f4f1c12",
+          "size": 133468923,
+          "target_path": "/userdata/local/models/asr"
+        },
+        {
+          "url": "/appcenter/apps/models/voice-transcribe/am.mvn",
+          "filename": "am.mvn",
+          "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+          "size": 11203,
+          "target_path": "/userdata/local/models/asr"
+        },
+        {
+          "url": "/appcenter/apps/models/voice-transcribe/embedding.npy",
+          "filename": "embedding.npy",
+          "sha256": "83cf1fc5680fdf6d7edb411be5ce351cad4eca03b29a5bf5050aa19dfcc12267",
+          "size": 35968,
+          "target_path": "/userdata/local/models/asr"
+        },
+        {
+          "url": "/appcenter/apps/models/voice-transcribe/chn_jpn_yue_eng_ko_spectok.bpe.model",
+          "filename": "chn_jpn_yue_eng_ko_spectok.bpe.model",
+          "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
+          "size": 377341,
+          "target_path": "/userdata/local/models/asr"
+        }
+      ]
+    },
+    {
+      "id": "yolo-detector",
+      "name": "YOLO Detector",
+      "version": "0.1.0",
+      "description": "General-purpose object detection over the live camera. Runs YOLOv8n (COCO-80) on the RV1126B NPU and streams structured detections for the /appcenter overlay.",
+      "arch": "arm64",
+      "package": {
+        "url": "/appcenter/apps/yolo-detector-0.1.0-arm64.tar.gz",
+        "filename": "yolo-detector-0.1.0-arm64.tar.gz",
+        "sha256": "7c7b354b0214cbf2a282e355ff219ff378c184135ad924a10d79126aba1f3e88",
+        "size": 3018724,
+        "signature": "MEUCICO2APRjZFzA+lYqWygO9+X9ChpXnGzYlFES5+7MsHrjAiEAstJmzsYQgeG4gWcbqgQ1zzZOwdxqOCq8jIL8By1nwTs=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    }
+  ]
+}

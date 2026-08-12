@@ -1,0 +1,12 @@
+{
+  "_comment": "Shared-model manifest for gen_catalog.py. Maps an app id to the SHARED model files it needs dropped into a device directory (target_path) at install time -- for apps whose package does NOT bundle the model (one-gen models[]+target_path parity). Files are staged under <models-dir>/<app_id>/<filename> (default market/packaging/models/<app_id>/). gen_catalog hashes the real staged bytes; nothing here is hand-written except the file list + target_path. Apps absent from this map get models: [] (their model is bundled inside the package).",
+  "voice-transcribe": {
+    "target_path": "/userdata/local/models/asr",
+    "files": [
+      "sensevoice_rv1126b_w4a16.rknn",
+      "am.mvn",
+      "embedding.npy",
+      "chn_jpn_yue_eng_ko_spectok.bpe.model"
+    ]
+  }
+}

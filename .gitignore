@@ -11,8 +11,13 @@ __pycache__/
 *.prototxt
 *.onnx
 models/
-market/
 apps/*/models/
+
+# 应用中心后端(market/)：追踪源码，忽略构建产物/大文件/临时
+# (dist/、models/、__pycache__/、*.pyc、_local_backups/、.DS_Store 由上方全局规则覆盖)
+market/packaging/dist/
+market/packaging/models/
+market/_local_backups/
 
 # 大资源目录(应用素材/市场包)
 *.mp4
