@@ -21,8 +21,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DIST="$HERE/dist"
 CATALOG="$HERE/../catalog/catalog.json"
 
-OSS_BASE="oss://sensecraft-statics/solution-assets/recamera_pro"
-CDN_BASE="https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro"
+OSS_BASE="oss://sensecraft-statics/solution-app/recamera_pro"
+CDN_BASE="https://sensecraft-statics.seeed.cc/solution-app/recamera_pro"
 
 DO_IT=0
 [ "${1:-}" = "--yes" ] && DO_IT=1

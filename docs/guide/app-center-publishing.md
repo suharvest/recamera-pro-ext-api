@@ -358,7 +358,7 @@ app 该数组为空 `[]`；走共享模型链路的 app（voice-transcribe）在
       "description": "…",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/packages/fall-detection-0.1.0-arm64.tar.gz",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fall-detection-0.1.0-arm64.tar.gz",
         "filename": "fall-detection-0.1.0-arm64.tar.gz",
         "sha256": "7124718d…",
         "size": 2865713,
@@ -390,7 +390,7 @@ app 该数组为空 `[]`；走共享模型链路的 app（voice-transcribe）在
 
 > `url` 的前缀由 `--base-url` 决定，对应**两套 url**：
 > - **CDN 版（生产主分发）**：CDN base，包 url 形如
->   `https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/packages/…`。仓库里的
+>   `https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/…`。仓库里的
 >   `catalog.json` 即此形态，浏览器代取（设备无外网路由）。
 > - **设备本地版（回退）**：`gen_catalog.py` 默认 base `/appcenter/apps/`（整合后布局，nginx
 >   `alias /userdata/local/appcenter/apps/`），包 url 形如 `/appcenter/apps/<file>.tar.gz`；
@@ -490,8 +490,8 @@ for m in app.models:
 由用户浏览器代取（浏览器有外网路由，设备没有）。脚本 `market/packaging/publish_oss.sh`
 （核实自该文件）：
 
-- **OSS 桶 / CDN base**：`oss://sensecraft-statics/solution-assets/recamera_pro/`
-  ↔ `https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/`（`publish_oss.sh:24-25`）。
+- **OSS 桶 / CDN base**：`oss://sensecraft-statics/solution-app/recamera_pro/`
+  ↔ `https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/`（`publish_oss.sh:24-25`）。
 - **目录结构**：`packages/<pkg>.tar.gz`、`models/<app_id>/<file>`、`catalog.json`
   （模型 URL 与 catalog 里 `models[]` 的 url 逐字对齐）。
 - **传后回校**：每个对象 `ossutil cp` 上传后**下载回来比对 sha256**——`ossutil` 报成功 ≠ 字节真能从 CDN 取到。
