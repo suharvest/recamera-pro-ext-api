@@ -5,9 +5,9 @@
 set -e
 
 PKG=$(cd "$(dirname "$0")" && pwd)
-RKIPC_MD5=de5b3aa41ba5dd02968632823aac29cf
+RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
-SO_MD5=bb9fe0bfff7762c067bf9d502035bc40
+SO_MD5=eca29ac95c2f249545e72c91f1b67b70
 FACTORY_RKIPC_MD5=d5e7ca9365dae553e8c7e4c0a0f436ec   # V1.0.x factory rkipc (verified on ref device)
 
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }

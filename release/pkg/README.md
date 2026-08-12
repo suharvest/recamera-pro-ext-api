@@ -40,7 +40,7 @@ adb shell "sh /userdata/ext-pkg/install.sh"   # backs up factory, md5-verifies, 
 adb reboot                                    # or: install.sh --reboot
 # wait ~1-2 min, then self-check:
 adb shell "ls -l /run/recamera/"          # expect frame.sock result-in.sock probe.sock apps.d/
-adb shell "md5sum /oem/usr/bin/rkipc"     # expect de5b3aa41ba5dd02968632823aac29cf
+adb shell "md5sum /oem/usr/bin/rkipc"     # expect 9826e9ecf8ed543a6dc78e3731102e0f
 ```
 
 `install.sh` is idempotent and md5-checked: it refuses to run with a mismatched artifact, backs up the
