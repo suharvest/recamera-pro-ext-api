@@ -37,7 +37,7 @@ Frame { dmabuf_fd, width, height, format=NV12, pts, stride }
 open(cfg) / acquire() -> Frame / release(Frame) / close()
 ```
 - **今天**：`RtspDecodeSource` — 拉 sub 流 → MPP VDEC 输出 MB(本就是 dma-buf) → 包成 Frame。
-- **官方**：`OfficialFrameSource` — 连 `/var/run/recamera/frames.sock` recv SCM_RIGHTS fd。
+- **官方**：`OfficialFrameSource` — 连 `/run/recamera/frame.sock` recv SCM_RIGHTS fd。
 - **迁移**：Frame 结构已是 dma-buf → 下游 RGA/RKNN **一行不改**，只换 source 实现。
 
 ### 2.2 `ResultSink`（对应 R2）
@@ -76,7 +76,7 @@ subscribe(topic) -> stream of events   // inference / recording / gpio ...
 appmgr 启动时跑一次 **capability probe**，把结果写进注册表：
 ```
 caps = {
-  frame_broker:  exists('/var/run/recamera/frames.sock'),
+  frame_broker:  exists('/run/recamera/frame.sock'),
   result_ingress: probe_official_ingress(),
   audio_broker:  exists('/var/run/recamera/audio.sock'),
   control_api:   probe_versioned_api(),

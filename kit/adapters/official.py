@@ -72,7 +72,7 @@ from .audio_source import AudioSource, PcmFrame
 # Canonical official endpoint paths (spec §1: all extension IPC lives under
 # /run/recamera/; /var/run is the usual symlink to /run). Overridable via env
 # for testing -- see registry.py. Single source of truth for the adapters.
-OFFICIAL_FRAMES_SOCK = "/run/recamera/frame.sock"
+OFFICIAL_FRAME_SOCK = "/run/recamera/frame.sock"
 OFFICIAL_RESULT_SOCK = "/run/recamera/result-in.sock"
 OFFICIAL_AUDIO_SOCK = "/run/recamera/audio.sock"
 
@@ -123,7 +123,7 @@ class OfficialFrameSource(FrameSource):
     """
 
     def __init__(self, url: Optional[str] = None,
-                 sock: str = OFFICIAL_FRAMES_SOCK,
+                 sock: str = OFFICIAL_FRAME_SOCK,
                  width: int = 0, height: int = 0, fps_divisor: int = 0,
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,

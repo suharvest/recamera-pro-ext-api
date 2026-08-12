@@ -138,7 +138,7 @@ class App(ABC):
 一个应用 = `manifest.json`(声明) + `app.py`(继承 App, 只写 `setup` + `on_results` 业务逻辑)。
 
 ## 4. 适配层 = "曲折现在 / 官方将来" 的唯一切换点
-- `kit/adapters/registry.py` 启动探测官方口(frames.sock/audio.sock/结果注入/版本化API)是否存在 → 每个适配器工厂选 `Official*` 或 `Workaround*`。
+- `kit/adapters/registry.py` 启动探测官方口(frame.sock/audio.sock/结果注入/版本化API)是否存在 → 每个适配器工厂选 `Official*` 或 `Workaround*`。
 - **应用只经 App 基类拿帧/发结果，从不直接引用适配器** → 官方到了，改的只有 `adapters/` 下几个实现类 + registry 命中，`apps/` 全不动。
 - 对应 BOOTSTRAP_PATH 的迁移契约：Frame 用 ndarray/dmabuf、结果用官方 protobuf 形状、PCM 用 16k mono —— **今天就按官方形状产出**，切换零转换。
 
