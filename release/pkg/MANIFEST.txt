@@ -1,0 +1,34 @@
+recamera-ext-api  v1.2.0
+Built: 2026-08-12   Target: reCamera Pro (RV1126B / recamera_v2)
+
+ARTIFACTS (md5)
+  rkipc                             de5b3aa41ba5dd02968632823aac29cf   15562632 B  -> /oem/usr/bin/rkipc
+  entry.cgi                         75a693c87c317a49c37c4dddb6b9ac7a    1057168 B  -> /oem/usr/www/cgi-bin/entry.cgi   (M4 control plane, optional)
+  sdk/lib/librecamera_ext.so.1.0.0  bb9fe0bfff7762c067bf9d502035bc40      88848 B  -> /oem/usr/lib/  (+ .so.1, .so symlinks)
+  sdk/python/recamera_ext/          (ctypes bindings)                              -> /userdata/sdk/python/
+  sdk/recamera_ext.h                (C header)                                     -> /userdata/sdk/
+
+FACTORY / ROLLBACK
+  factory rkipc md5                 d5e7ca9365dae553e8c7e4c0a0f436ec    (saved to /userdata/rkipc.factory.bak by install.sh)
+  factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak
+
+CONTENTS OF THIS rkipc
+  M1-M4 + items 2/3 ; frame proxy + result injection + probe ; pool depth default N=6 (the G5/G6 PASS build).
+
+EXTENSION ENDPOINTS (appear under /run/recamera/ after install+reboot)
+  frame.sock       frame proxy (zero-copy frame handoff to solutions)
+  result-in.sock   detection/classification/segmentation/tracking/keypoints injection back into rkipc overlay/stream
+  probe.sock       status/probe
+  apps.d/          per-app control dir
+
+COMPATIBILITY
+  Firmware V1.0.4 and V1.0.10 (cross-build compatible). /oem is ext4 rw -> persistent across normal reboots.
+
+KNOWN GAPS
+  - none outstanding for the main path. This rkipc (de5b3aa4) includes the keypoints-over-WebSocket
+    decode fix and classification box OSD rendering; frame/result/probe/keypoints paths all active.
+
+BOUNDARY / RISK
+  - This is a SIDELOAD overwriting /oem. A full firmware OTA / update.img flash WILL overwrite /oem and revert to factory
+    rkipc -> re-run install.sh after any OTA. Rollback (rollback.sh) restores factory rkipc from /userdata backup.
+  - Does NOT touch partitions, shadow, update.img.
