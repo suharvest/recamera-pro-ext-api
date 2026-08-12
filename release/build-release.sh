@@ -69,6 +69,10 @@ for f in "$RKIPC" "$ENTRY" \
   [ -f "$f" ] || { echo "FATAL: missing input: $f" >&2; exit 1; }
 done
 [ -d "$KIT_SRC" ] && [ -d "$EX_SRC" ] || { echo "FATAL: kit/ or examples/ missing" >&2; exit 1; }
+# rknnlite python runtime wheels (bundled into both packages, offline install on device)
+WHEELS_SRC="$PKG/wheels"
+[ -d "$WHEELS_SRC" ] || { echo "FATAL: missing wheels dir: $WHEELS_SRC" >&2; exit 1; }
+ls "$WHEELS_SRC"/rknn_toolkit_lite2-*.whl >/dev/null 2>&1 || { echo "FATAL: rknn_toolkit_lite2 wheel missing in $WHEELS_SRC" >&2; exit 1; }
 
 # ---- md5s --------------------------------------------------------------------
 RKIPC_MD5=$(md5of "$RKIPC")
@@ -138,6 +142,7 @@ cp "$ENTRY" "$FW/entry.cgi"
 cp "$SDK_SRC/lib/$SO_NAME" "$FW/sdk/lib/$SO_NAME"
 cp "$SDK_SRC/include/recamera_ext.h" "$FW/sdk/recamera_ext.h"
 cp -R "$SDK_SRC/python/recamera_ext" "$FW/sdk/python/recamera_ext"
+cp -R "$WHEELS_SRC" "$FW/wheels"                 # rknnlite runtime wheels (offline install)
 scrub "$FW"
 
 # kit share pkg staging (kit + full sdk w/ symlinks + examples + share files)
@@ -152,6 +157,7 @@ ln -sf "$SO_NAME"                    "$KROOT/sdk/lib/librecamera_ext.so.1"
 ln -sf librecamera_ext.so.1          "$KROOT/sdk/lib/librecamera_ext.so"
 cp "$SDK_SRC/include/recamera_ext.h" "$KROOT/sdk/include/recamera_ext.h"
 cp -R "$SDK_SRC/python/recamera_ext" "$KROOT/sdk/python/recamera_ext"
+cp -R "$WHEELS_SRC" "$KROOT/wheels"                 # rknnlite runtime wheels (offline install)
 cp "$SDK_SRC/VERSION" "$KROOT/sdk/VERSION"
 [ -f "$SDK_SRC/README.md" ]      && cp "$SDK_SRC/README.md"      "$KROOT/sdk/README.md"
 [ -f "$SDK_SRC/CMakeLists.txt" ] && cp "$SDK_SRC/CMakeLists.txt" "$KROOT/sdk/CMakeLists.txt"

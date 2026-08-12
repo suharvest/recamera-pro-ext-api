@@ -6,7 +6,27 @@ It is not a firmware image and does not touch partitions.
 
 ## What's inside
 See `MANIFEST.txt` for md5s and install targets. In short: a patched `rkipc`, an optional `entry.cgi`
-(M4 control plane), and the SDK (`librecamera_ext.so` + Python `recamera_ext` + C header).
+(M4 control plane), the SDK (`librecamera_ext.so` + Python `recamera_ext` + C header), and the
+**Python inference runtime** (`rknnlite` 2.3.2 wheels under `wheels/`).
+
+## Python inference runtime (rknnlite)
+
+`install.sh` now provisions the Python inference runtime so vision apps run out of the box on a
+device with no network. Step `[6/7]` of the install:
+
+1. symlinks `/usr/lib/librknnrt.so -> /oem/usr/lib/librknnrt.so` (stock `rknnlite` hardcodes that path);
+2. creates a venv at `/userdata/rknnenv` with `--system-site-packages` (numpy comes from the system);
+3. offline-installs `rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib` from the bundled `wheels/`;
+4. self-checks `from rknnlite.api import RKNNLite; RKNNLite()`.
+
+This step is **best-effort**: any failure only warns and never blocks the main `rkipc` install.
+Run vision apps with:
+
+```sh
+PYTHONPATH=/userdata/local:/userdata/sdk/python \
+LD_LIBRARY_PATH=/oem/usr/lib \
+/userdata/rknnenv/bin/python3 <app>.py
+```
 
 ## Flash a new device
 

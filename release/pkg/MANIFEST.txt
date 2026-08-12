@@ -8,6 +8,15 @@ ARTIFACTS (md5)
   sdk/python/recamera_ext/          (ctypes bindings)                              -> /userdata/sdk/python/
   sdk/recamera_ext.h                (C header)                                     -> /userdata/sdk/
 
+PYTHON INFERENCE RUNTIME (rknnlite 2.3.2)  -- provisioned by install.sh into /userdata/rknnenv (venv, --system-site-packages)
+  wheels/rknn_toolkit_lite2-2.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl                          5da9258e0c69779707e8a06411c398da    569160 B
+  wheels/psutil-6.1.1-cp36-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl                                        23b188171fafc49916f352205fdc186a    289017 B
+  wheels/ruamel_yaml-0.19.1-py3-none-any.whl                                                                            db65f7e375cd4b465fce6bfad13174e0    118102 B
+  wheels/ruamel_yaml_clib-0.2.15-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl    a51fbd45b7d498f276d08fbfa05a3076    749289 B
+  (numpy comes from the system site-packages, not a wheel.)
+  install.sh also symlinks /usr/lib/librknnrt.so -> /oem/usr/lib/librknnrt.so (stock rknnlite hardcodes that path).
+  vision apps run via: PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib /userdata/rknnenv/bin/python3 <app>.py
+
 FACTORY / ROLLBACK
   factory rkipc md5                 d5e7ca9365dae553e8c7e4c0a0f436ec    (saved to /userdata/rkipc.factory.bak by install.sh)
   factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak

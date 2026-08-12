@@ -19,6 +19,18 @@ if [ -f /userdata/entry.cgi.factory.bak ]; then
 fi
 # ext .so left in place is harmless (nothing loads it unless a solution asks); remove if you want a clean factory:
 # rm -f /oem/usr/lib/librecamera_ext.so /oem/usr/lib/librecamera_ext.so.1 /oem/usr/lib/librecamera_ext.so.1.0.0
+
+# --- rknnlite python runtime rollback (idempotent, best-effort) ---------------
+# Remove only the /usr/lib/librknnrt.so symlink we created (leave a real file untouched),
+# then drop the venv we provisioned. Both are safe to skip if absent.
+if [ -L /usr/lib/librknnrt.so ]; then
+  rm -f /usr/lib/librknnrt.so && echo "removed our /usr/lib/librknnrt.so symlink"
+elif [ -e /usr/lib/librknnrt.so ]; then
+  echo "leaving /usr/lib/librknnrt.so (real file, not our symlink)"
+fi
+if [ -d /userdata/rknnenv ]; then
+  rm -rf /userdata/rknnenv && echo "removed /userdata/rknnenv"
+fi
 sync
 echo "rolled back. post md5: $(md5of /oem/usr/bin/rkipc)"
 echo "reboot now to run factory rkipc."
