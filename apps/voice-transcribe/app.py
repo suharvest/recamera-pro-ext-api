@@ -162,18 +162,35 @@ class VoiceTranscribeApp(App):
                       f"realtime={rt}", flush=True)
             src = WavFileAudioSource(wav, realtime=rt, pad_silence_sec=1.0)
         else:
-            from kit.adapters.audio_source import (RtspAudioSource,
-                                                   DEFAULT_AUDIO_FILTER)
-            rtsp = url or self.config.get("rtsp_url") \
-                or "rtsp://admin:admin@127.0.0.1:5554/live/1"
-            # The rkipc RTSP mic track is very quiet (~-49 dBFS); apply an
-            # adaptive gain filter so KWS/ASR get a normal level. Tunable via the
-            # `audio_filter` config knob ("" / "none" disables -> unity gain).
+            from kit.adapters.audio_source import DEFAULT_AUDIO_FILTER
+            # The live mic is very quiet (~-49 dBFS); apply an adaptive gain
+            # filter so KWS/ASR get a normal level (wake-word detection depends
+            # on it -- see DEFAULT_AUDIO_FILTER). Same knob on every backend:
+            # "" / "none" disables -> unity gain.
             audio_filter = self.config.get("audio_filter", DEFAULT_AUDIO_FILTER)
-            if verbose:
-                print(f"[app:{self.id}] audio source = RtspAudioSource({rtsp}) "
-                      f"audio_filter={audio_filter!r}", flush=True)
-            src = RtspAudioSource(rtsp, audio_filter=audio_filter)
+            # audio_source: "ai_asr" (official, default) or "rtsp" (fallback).
+            #   ai_asr -> ALSA shared-capture PCM: clean, no rkipc transcode hop,
+            #             shares the mic with rkipc via dsnoop (no takeover). Needs
+            #             root/audio group -> OK under appmgr (runs as root).
+            #   rtsp   -> demux rkipc's combined RTSP audio track (kept as a
+            #             fallback / A-B comparison; works even as non-root).
+            audio_backend = str(self.config.get("audio_source", "ai_asr")).lower()
+            if audio_backend == "rtsp":
+                from kit.adapters.audio_source import RtspAudioSource
+                rtsp = url or self.config.get("rtsp_url") \
+                    or "rtsp://admin:admin@127.0.0.1:5554/live/1"
+                if verbose:
+                    print(f"[app:{self.id}] audio source = RtspAudioSource({rtsp}) "
+                          f"audio_filter={audio_filter!r}", flush=True)
+                src = RtspAudioSource(rtsp, audio_filter=audio_filter)
+            else:
+                from kit.adapters.audio_source import AiAsrAudioSource
+                device = self.config.get("ai_asr_device", "ai_asr")
+                if verbose:
+                    print(f"[app:{self.id}] audio source = "
+                          f"AiAsrAudioSource({device}) audio_filter="
+                          f"{audio_filter!r}", flush=True)
+                src = AiAsrAudioSource(device, audio_filter=audio_filter)
 
         if verbose:
             print(f"[app:{self.id}] loading SenseVoice ASR (int8)...", flush=True)

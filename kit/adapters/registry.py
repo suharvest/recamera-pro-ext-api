@@ -141,33 +141,47 @@ def select_result_sink(kind: str = "ws", **kw):
     return WsResultSink(**kw)
 
 
-def select_audio_source(prefer: str = "rtsp", **kw):
+def select_audio_source(prefer: str = "ai_asr", **kw):
     """Pick an AudioSource implementation (16k mono PCM).
 
     Selection order:
-      1. Official R8 clean-PCM broker (`/var/run/recamera/audio.sock`) when
-         probed present (or forced via RECAMERA_ADAPTER_PREFER=official).
-      2. `RtspAudioSource` (DEFAULT workaround) -- demuxes the audio track from
-         rkipc's combined RTSP stream via ffmpeg. Does NOT touch the mic or
-         video, needs no /dev/snd takeover. This is the verified-feasible path
-         on firmware 6.1.157 and therefore the default.
-      3. `AlsaTakeoverSource` (degraded fallback, `prefer="alsa"`) -- direct mic
-         takeover via arecord. On shipping firmware the mic is held exclusively
-         by rkipc, so its `open()` raises `AudioDeviceBusy` unless the caller
-         opts into freeing it (which blips video) -- see audio_source.py verdict.
+      1. Official R8 clean-PCM broker (`/run/recamera/audio.sock`) when probed
+         present (or forced via RECAMERA_ADAPTER_PREFER=official). This is the
+         future VQE-clean broker; still a stub on shipping firmware.
+      2. `AiAsrAudioSource` (DEFAULT, `prefer="ai_asr"`) -- the OFFICIAL audio
+         path: capture the firmware's reserved ALSA `ai_asr` dsnoop PCM via
+         arecord (+ ffmpeg loudnorm/ch0-select). Shares the mic with rkipc (no
+         takeover, no EBUSY, video + RTSP audio untouched). Needs root or the
+         `audio` group -- satisfied because appmgr runs extensions as root. This
+         is cleaner than the RTSP workaround (no rkipc encode/transcode hop) and
+         is therefore the default. NOTE: raw mic, no VQE -- app does its own
+         denoise/AEC (see docs/ext/audio-pcm.md; AEC reference is in ch2/ch3).
+      3. `RtspAudioSource` (fallback / A-B comparison, `prefer="rtsp"`) --
+         demuxes the audio track from rkipc's combined RTSP stream via ffmpeg.
+         Also non-invasive; kept as a fallback for hosts where `/dev/snd` access
+         is unavailable (e.g. running as the SSH `admin` user, not root).
+      4. `AlsaTakeoverSource` (degraded fallback, `prefer="alsa"`) -- direct
+         `hw:0,0` takeover via arecord. On shipping firmware the raw mic is held
+         exclusively by rkipc, so its `open()` raises `AudioDeviceBusy` unless
+         the caller opts into freeing it (which blips video). Prefer ai_asr,
+         which shares the mic instead of fighting for it.
 
     `prefer` selects the workaround backend when no official broker is present:
-    "rtsp" (default) | "alsa". The official broker, when present, supersedes both.
+    "ai_asr" (default) | "rtsp" | "alsa". The official broker, when present,
+    supersedes all three.
     """
     caps = capabilities()
     if _prefer_official(caps.audio_broker):
         from .official import OfficialPcmSource
         return OfficialPcmSource(sock=_audio_sock_path(), **kw)
+    if prefer == "rtsp":
+        from .audio_source import RtspAudioSource
+        return RtspAudioSource(**kw)
     if prefer == "alsa":
         from .audio_source import AlsaTakeoverSource
         return AlsaTakeoverSource(**kw)
-    from .audio_source import RtspAudioSource
-    return RtspAudioSource(**kw)
+    from .audio_source import AiAsrAudioSource
+    return AiAsrAudioSource(**kw)
 
 
 def select_control(**kw):

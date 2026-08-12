@@ -496,6 +496,262 @@ class RtspAudioSource(AudioSource):
                     pass
 
 
+# --- Official path: ALSA `ai_asr` shared-capture PCM ------------------------- #
+class AiAsrAudioSource(AudioSource):
+    """Capture 16 kHz mono PCM from the firmware's reserved ALSA `ai_asr` PCM.
+
+    THIS IS THE OFFICIAL, RECOMMENDED audio path on reCamera Pro (RV1126B) --
+    see docs/ext/audio-pcm.md (authoritative, derived from the firmware's
+    /etc/asound.conf). It supersedes both workarounds (`RtspAudioSource`,
+    `AlsaTakeoverSource`) because it is clean and non-invasive:
+
+      * The mic hardware (`hw:0,0`) is shared across processes via an ALSA
+        `dsnoop` plugin. The firmware pre-declares four named capture PCMs that
+        all read the SAME 6ch/16k dsnoop stream through their own cursor:
+            ai_main  -> held by rkipc (camera+encoder+audio main program)
+            ai_kws   -> held by the official keyword-detection service
+            ai_asr   -> RESERVED for third-party ASR/audio apps  <-- we use this
+            ai_debug -> reserved for debug recording
+        Because dsnoop shares a ring buffer, `ai_asr` does NOT conflict with and
+        does NOT need to stop rkipc: no mic takeover, no `Device or resource
+        busy`, video and the RTSP audio track are untouched (unlike
+        AlsaTakeoverSource, which fights rkipc for `hw:0,0`).
+
+      * Hardware side is fixed at 16 kHz / S16_LE (dsnoop slave). Any higher
+        `-r` would only trigger a software resample of the same 16 kHz source --
+        so we always request exactly 16000 (no extra CPU, no extra information).
+
+    Channel layout (asound.conf `ai_2mic_2ref` route -> 4 output channels):
+        ch0 = Mic 1        ch1 = Mic 2
+        ch2 = Reference    ch3 = Reference (fill)
+    The reference channels (ch2/ch3) are the AEC playback-loopback reference,
+    carried IN the same stream -- reserved here for a FUTURE software AEC
+    (speexdsp / WebRTC AEC: feed ch0 as near-end, ch2 as far-end reference).
+    We do NOT use them for the ASR feed.
+
+    IMPORTANT -- NO VQE: `ai_asr` delivers the RAW microphone signal. rkipc's
+    hardware VQE (AEC / ANS / AGC in librkaudio) runs inside its own RK_MPI_AI
+    path and does NOT reach the dsnoop taps. Any denoise / AEC / AGC is the
+    app's responsibility (the loudnorm gain below is our only current step).
+
+    PERMISSIONS -- needs root or the `audio` group: dsnoop's IPC key is 0666,
+    but every client still opens `/dev/snd/pcmC0D0c` + `/dev/snd/controlC0`,
+    which are `root:audio 0660`. An SSH `admin` user (not in `audio`) fails with
+    `Cannot get card index` / `audio open error`. This is satisfied in the real
+    deployment: appmgr launches extension processes as root. Off-device / as a
+    non-audio user, `open()` surfaces a clear, actionable error.
+
+    Channel-selection policy (default `capture_ch=4`, `mic_channel=0`):
+        We capture the NATIVE 4 channels and deterministically select Mic 1
+        (hw ch0) with ffmpeg `pan=mono|c0=c0`. This is the robust path: the
+        plug layer's own N->1 downmix behaviour is NOT verified in the firmware
+        docs (it might average in the near-silent reference channels, halving
+        mic energy). Set `capture_ch=1` to instead let the ALSA plug layer do
+        the downmix (documented but unverified) and skip ffmpeg's pan.
+
+    GAIN -- loudnorm preserved from RtspAudioSource: the RV1126B mic is very
+    quiet (~-49 dBFS raw; see DEFAULT_AUDIO_FILTER above). Wake-word detection
+    empirically depends on lifting the level -- `loudnorm=I=-16:TP=-1.5` was the
+    only filter that still fired the KeywordSpotter at a stricter threshold. We
+    therefore run the identical ffmpeg loudnorm here (arecord | ffmpeg) so the
+    downstream KWS / VAD / ASR see the SAME normalized 16k-mono frames as the
+    RTSP path -- migrating the source is invisible to the pipeline. Set
+    `audio_filter` to ""/"none" for unity gain.
+
+    Pipeline:
+        arecord -D ai_asr -f S16_LE -r 16000 -c <capture_ch> -t raw -q -
+          | ffmpeg -f s16le -ar 16000 -ac <capture_ch> -i -
+                   -af "pan=mono|c0=c<mic>,loudnorm=I=-16:TP=-1.5"
+                   -ac 1 -ar 16000 -f s16le -
+    When no ffmpeg processing is needed (`capture_ch==1` AND filter disabled),
+    arecord already yields 16k mono and is read directly with no ffmpeg hop.
+
+    ON-DEVICE VERIFICATION TODO (blocked off-device / as non-audio user):
+      1. Run as root (or add the run user to the `audio` group).
+      2. Prove the tap is live & non-silent:
+           arecord -D ai_asr -f S16_LE -r 16000 -c 4 -d 5 /tmp/ai_asr.wav
+         then check ch0 RMS with pcm_stats() (> ~30 / > -60 dBFS = real audio).
+      3. Confirm it does NOT disturb rkipc (video + RTSP audio keep running;
+         no EBUSY -- dsnoop shared).
+      4. End-to-end: run the voice app on `audio_source=ai_asr`, speak the wake
+         word, confirm idle -> listening -> transcribing (loudnorm gives the KWS
+         the same margin it had on the RTSP path).
+      5. (Future AEC) Capture 4ch while the speaker plays; verify ch2/ch3 carry
+         the playback reference (non-zero during playback) before wiring AEC.
+    """
+
+    def __init__(
+        self,
+        device: str = "ai_asr",
+        *,
+        target_rate: int = 16000,
+        target_ch: int = 1,
+        capture_rate: int = 16000,   # dsnoop slave is fixed 16k; do NOT raise
+        capture_ch: int = 4,         # native 4ch (ch0=Mic1..ch3=Ref); select ch0
+        mic_channel: int = 0,        # hw ch0 = Mic 1 -> the ASR feed
+        chunk_ms: int = 100,
+        arecord_bin: str = "arecord",
+        ffmpeg_bin: str = "ffmpeg",
+        audio_filter: Optional[str] = DEFAULT_AUDIO_FILTER,
+    ):
+        self.device = device
+        self.target_rate = int(target_rate)
+        self.target_ch = int(target_ch)
+        self.capture_rate = int(capture_rate)
+        self.capture_ch = int(capture_ch)
+        self.mic_channel = int(mic_channel)
+        self.chunk_ms = int(chunk_ms)
+        self.arecord_bin = arecord_bin or "arecord"
+        self.ffmpeg_bin = ffmpeg_bin or "ffmpeg"
+        # loudnorm (or operator override); None -> unity gain. Same knob/semantics
+        # as RtspAudioSource so the two sources are interchangeable.
+        self.audio_filter = _normalize_filter(audio_filter)
+        self._arecord: Optional[subprocess.Popen] = None
+        self._ffmpeg: Optional[subprocess.Popen] = None
+        self._proc: Optional[subprocess.Popen] = None   # the process we read from
+        self._pending: Optional[bytes] = None
+        # We always read the app-facing target format off the tail of the pipe.
+        self._chunk_bytes = max(
+            2 * self.target_ch,
+            int(self.target_rate * self.chunk_ms / 1000) * 2 * self.target_ch,
+        )
+
+    # -- command assembly ---------------------------------------------------- #
+    def _needs_ffmpeg(self) -> bool:
+        """ffmpeg is needed to pick a single hw channel (pan) or to apply gain.
+
+        The one case we can skip it: arecord already delivers mono (capture_ch
+        == target_ch == 1) and no gain filter is requested -> read arecord raw.
+        """
+        multichannel = self.capture_ch > 1 or self.target_ch != 1
+        return bool(multichannel or self.audio_filter)
+
+    def _arecord_cmd(self) -> list[str]:
+        return [self.arecord_bin, "-D", self.device, "-f", "S16_LE",
+                "-r", str(self.capture_rate), "-c", str(self.capture_ch),
+                "-t", "raw", "-q", "-"]
+
+    def _ffmpeg_filtergraph(self) -> str:
+        parts = []
+        # Deterministic Mic 1 (hw ch0) selection when we captured >1 channel.
+        # `pan=mono|c0=c<mic>` copies exactly one input channel to the mono out
+        # (NOT an average across channels -> reference channels never dilute it).
+        if self.capture_ch > 1:
+            parts.append(f"pan=mono|c0=c{self.mic_channel}")
+        if self.audio_filter:
+            parts.append(self.audio_filter)
+        return ",".join(parts)
+
+    def _ffmpeg_cmd(self) -> list[str]:
+        cmd = [self.ffmpeg_bin, "-loglevel", "error", "-nostdin",
+               "-f", "s16le", "-ar", str(self.capture_rate),
+               "-ac", str(self.capture_ch), "-i", "-"]
+        fg = self._ffmpeg_filtergraph()
+        if fg:
+            cmd += ["-af", fg]
+        cmd += ["-ac", str(self.target_ch), "-ar", str(self.target_rate),
+                "-f", "s16le", "-"]
+        return cmd
+
+    # -- lifecycle ----------------------------------------------------------- #
+    def open(self) -> "AiAsrAudioSource":
+        if shutil.which(self.arecord_bin) is None:
+            raise FileNotFoundError(f"{self.arecord_bin} not found on device")
+
+        use_ffmpeg = self._needs_ffmpeg()
+        if use_ffmpeg and shutil.which(self.ffmpeg_bin) is None:
+            raise FileNotFoundError(f"{self.ffmpeg_bin} not found on device")
+
+        self._arecord = subprocess.Popen(
+            self._arecord_cmd(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            bufsize=self._chunk_bytes,
+        )
+        if use_ffmpeg:
+            self._ffmpeg = subprocess.Popen(
+                self._ffmpeg_cmd(), stdin=self._arecord.stdout,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                bufsize=self._chunk_bytes,
+            )
+            # Let arecord get SIGPIPE if ffmpeg dies (parent keeps its own ref).
+            if self._arecord.stdout:
+                self._arecord.stdout.close()
+            self._proc = self._ffmpeg
+        else:
+            self._proc = self._arecord
+
+        # Probe one chunk so an arecord permission/EBUSY error (or a bad
+        # filtergraph) surfaces at open(), not as a silent empty stream later.
+        first = self._read_exact(self._chunk_bytes)
+        if first is None:
+            msg = self._drain_errors()
+            self.close()
+            low = msg.lower()
+            if ("card index" in low or "no such" in low or "permission" in low
+                    or "audio open error" in low):
+                raise AudioDeviceBusy(
+                    f"arecord could not open ALSA '{self.device}': {msg}. "
+                    "ai_asr is a shared dsnoop PCM (it does NOT go busy), so this "
+                    "is almost always a PERMISSION problem: /dev/snd is "
+                    "root:audio 0660. Run as root or add the user to the 'audio' "
+                    "group (appmgr launches extensions as root, which satisfies "
+                    "this). See docs/ext/audio-pcm.md.")
+            raise RuntimeError(
+                f"ai_asr capture produced no audio from '{self.device}': "
+                f"{msg or 'stream ended'}")
+        self._pending = first
+        return self
+
+    def _drain_errors(self) -> str:
+        """Collect stderr from both stages (arecord perms, ffmpeg filtergraph)."""
+        out = []
+        for name, proc in (("arecord", self._arecord), ("ffmpeg", self._ffmpeg)):
+            if proc and proc.stderr:
+                try:
+                    e = proc.stderr.read() or b""
+                except Exception:
+                    e = b""
+                if e:
+                    out.append(f"[{name}] {e.decode(errors='replace').strip()}")
+        return " ".join(out)
+
+    def _read_exact(self, n: int) -> Optional[bytes]:
+        if not self._proc or not self._proc.stdout:
+            return None
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self._proc.stdout.read(n - len(buf))
+            if not chunk:
+                return None
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def read(self) -> Optional[PcmFrame]:
+        if self._pending is not None:
+            raw, self._pending = self._pending, None
+        else:
+            raw = self._read_exact(self._chunk_bytes)
+        if raw is None:
+            return None
+        return PcmFrame(pcm=raw, rate=self.target_rate, ch=self.target_ch,
+                        pts=time.monotonic())
+
+    def close(self) -> None:
+        # Terminate ffmpeg first (downstream), then arecord (upstream source).
+        for attr in ("_ffmpeg", "_arecord"):
+            proc = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if proc and proc.poll() is None:
+                try:
+                    proc.send_signal(signal.SIGTERM)
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        self._proc = None
+
+
 # --- Test / replay backend: WAV file as an AudioSource ----------------------- #
 class WavFileAudioSource(AudioSource):
     """Replay a WAV file as a `PcmFrame` stream (16 kHz mono), for offline
