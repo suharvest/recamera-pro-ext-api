@@ -1,0 +1,19 @@
+{
+  "_comment": "COPY-PASTE SNIPPET for market/catalog/models.json. Map your app id to the SHARED model files that must be dropped into a device dir (target_path) at install time. Only for apps whose package does NOT bundle the model. Stage the real bytes under market/packaging/models/<app_id>/<filename>; gen_catalog.py hashes them and emits catalog models[]. Everything here is hand-written EXCEPT the hashes (gen_catalog computes those). target_path MUST resolve inside /userdata/local/models (modelstore whitelist).",
+  "voice-transcribe": {
+    "target_path": "/userdata/local/models/asr",
+    "files": [
+      "sensevoice_rv1126b_w4a16.rknn",
+      "am.mvn",
+      "embedding.npy",
+      "chn_jpn_yue_eng_ko_spectok.bpe.model"
+    ]
+  },
+  "your-app-id": {
+    "target_path": "/userdata/local/models/your-app",
+    "files": [
+      "your-model.rknn",
+      "labels.txt"
+    ]
+  }
+}

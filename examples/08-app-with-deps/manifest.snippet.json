@@ -1,0 +1,26 @@
+{
+  "_comment": "SKELETON — NOT YET IMPLEMENTED. The `deps` object below is a DESIGN proposal (see docs/guide/per-app-dependencies.md). appmgr does not read it yet; adding it to a real manifest.json has NO effect today. This snippet only shows the intended shape so solution vendors can prepare. Everything OUTSIDE `deps` (id/version/entry/interpreter) is real and already supported.",
+  "id": "clip-recorder",
+  "name": "Clip Recorder",
+  "version": "0.1.0",
+  "entry": "app.py",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "deps": {
+    "strategy": "bundled",
+    "base_env": "rknnenv",
+    "python": ">=3.11",
+    "wheels": [
+      {
+        "file": "wheels/av-11.0.0-cp311-cp311-linux_aarch64.whl",
+        "sha256": "PLACEHOLDER_64_HEX_gen_or_hash_the_real_wheel_bytes",
+        "size": 18234567
+      },
+      {
+        "file": "wheels/pillow-10.3.0-cp311-cp311-linux_aarch64.whl",
+        "sha256": "PLACEHOLDER_64_HEX",
+        "size": 1123344
+      }
+    ],
+    "pip_args": ["--no-deps"]
+  }
+}

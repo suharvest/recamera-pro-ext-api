@@ -20,8 +20,33 @@
 | [`04-gpio-trigger/`](./04-gpio-trigger/) | Python | notify WS + gmgr | 结果命中即拉高/拉低引脚（继电器/LED/告警） |
 | [`05-cpp-frame/`](./05-cpp-frame/) | C | `rc_ext_frame_*` | C ABI 拿一帧写盘 + 交叉编译 Makefile |
 | [`06-probe/`](./06-probe/) | Python | `ProbeSource` | 观测内建推理流水线各级张量/指标（只读） |
+| [`07-shared-model/`](./07-shared-model/) | JSON/发布流 | catalog `models[]` + `/putModel` | **可用/已实现**：共享大模型不打进包，走 `models[]`+`target_path` 由浏览器代取下发（活样本 voice-transcribe） |
+| [`08-app-with-deps/`](./08-app-with-deps/) | JSON/skeleton | manifest `deps` + per-app venv | **skeleton/未实现**：app 独有 Python 依赖（如 PyAV）随包分发、装进 per-app venv 的设计示范（见设计文档） |
 
 建议阅读顺序：01 → 02 → 03（03 是"方案商自带流水线"的核心示例），04/05/06 按需。
+
+> **07/08 与 01–06 不同层次**：01–06 是「设备上跑自己的进程对接扩展 SDK」的运行时示例；
+> 07/08 是「**应用中心发布 / 上架**」角度——app 包怎么声明并分发**共享模型**（07，已实现）
+> 和 **per-app 依赖**（08，设计中未实现）。不涉及扩展 SDK 调用，事实来源是
+> `market/{catalog/gen_catalog.py,catalog/models.json,appmgr/server.py,appmgr/modelstore.py}`
+> 与 `docs/guide/per-app-dependencies.md`。
+
+### 应用生命周期（install / uninstall）
+
+07/08 提到的下发发生在**安装**前后。安装 / 卸载入口（`market/appmgr`，CLI 与 HTTP 共用
+`server.py` 同一实现）：
+
+| 动作 | CLI | HTTP |
+|---|---|---|
+| 安装 | `python3 -m appmgr install <pkg.tar.gz>` | `POST /api/appMgr/install {path: "/userdata/.../x.tar.gz"}` |
+| 卸载 | `python3 -m appmgr uninstall <id>` | `POST /api/appMgr/uninstall {id}` |
+
+- **install 传的是包路径**（先 `/upload` 原始 tar.gz 拿到设备路径，再 `/install`），
+  **uninstall 传的是 app id**。
+- 卸载序列：running → 先 `stop`；是 single-active → 清 active；再删
+  `/userdata/local/apps/<id>/`（**共享模型 `/userdata/local/models` 不删**，跨 app 资产）。
+  `do_uninstall` 已预留「if present 连带删 per-app venv `/userdata/local/venvs/<id>`」钩子
+  （等 08 的 `deps` 落地生效）。
 
 ### 生产级适配层范本（区别于上面的最小示例）
 
