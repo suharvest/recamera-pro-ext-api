@@ -56,6 +56,10 @@ _EXPORTS = {
     "select_result_sink": "registry",
     "select_audio_source": "registry",
     "select_control": "registry",
+    # control plane (official ABC + CgiControl workaround)
+    "ControlPlane": "official",
+    "OfficialControl": "official",
+    "CgiControl": "cgi_control",
 }
 
 __all__ = list(_EXPORTS)

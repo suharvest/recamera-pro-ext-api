@@ -9,7 +9,7 @@ set:
     FrameSource  = caps.frame_broker   ? OfficialFrameSource  : FfmpegRtspSource
     ResultSink   = caps.result_ingress ? OsdInjectResultSink  : WsResultSink
     AudioSource  = caps.audio_broker   ? OfficialPcmSource     : (workaround TBD)
-    ControlPlane = caps.control_api    ? OfficialControl       : (CgiControl TBD)
+    ControlPlane = caps.control_api    ? OfficialControl       : CgiControl
 
 On today's firmware (6.1.157) none of the official endpoints exist, so every
 factory selects the existing verified workaround and behaviour is byte-for-byte
@@ -173,13 +173,16 @@ def select_audio_source(prefer: str = "rtsp", **kw):
 def select_control(**kw):
     """Pick a ControlPlane implementation.
 
-    Only the official versioned API stub exists today; the `CgiControl`
-    workaround is not implemented yet.
+    The official versioned control API (`OfficialControl`) is preferred when
+    probed present (or forced via RECAMERA_ADAPTER_PREFER=official). On today's
+    firmware it is not present, so this falls back to `CgiControl`, the
+    workaround plane that drives the device's existing `entry.cgi` endpoints
+    (localhost, no JWT) for set_inference and proxies a FrameSource frame for
+    snapshot.
     """
     caps = capabilities()
     if _prefer_official(caps.control_api):
         from .official import OfficialControl
         return OfficialControl(**kw)
-    raise NotImplementedError(
-        "CgiControl (workaround control plane) not implemented yet; no official "
-        "control API probed")
+    from .cgi_control import CgiControl
+    return CgiControl(**kw)

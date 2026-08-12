@@ -103,6 +103,7 @@ class FfmpegRtspSource(FrameSource):
         rtsp_transport: str = "tcp",
         low_latency: bool = True,
         ffmpeg_bin: str = "ffmpeg",
+        **_ignored,
     ):
         self.url = url
         self.rtsp_transport = rtsp_transport
@@ -198,7 +199,8 @@ class SnapshotSource(FrameSource):
     """
 
     def __init__(self, url: str = DEFAULT_SUB_STREAM, interval: float = 0.0,
-                 rtsp_transport: str = "tcp", ffmpeg_bin: str = "ffmpeg"):
+                 rtsp_transport: str = "tcp", ffmpeg_bin: str = "ffmpeg",
+                 **_ignored):
         self.url = url
         self.interval = interval
         self.rtsp_transport = rtsp_transport
