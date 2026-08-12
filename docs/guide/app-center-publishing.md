@@ -4,14 +4,15 @@
 > 读者：想把自己的 AI 应用做成"能装进应用中心、能一键启停、能分发"形态的方案商。
 > 本文只讲**应用中心特有的这条链路**：app 结构 → 打包 → 签名 → 上架 → 安装/管理。
 > app 内部怎么拿帧、回注结果、驱动 GPIO —— 那是扩展 SDK 的能力，见
-> [docs/ext/README.md](./README.md)，本文不重复。
+> [README.md](./README.md)，本文不重复。
 >
-> 事实来源（全部逐行核实自仓库源码）：
+> 说明：本文描述的应用中心打包 / 签名 / 分发工具链位于 `market/`，属**发布方私有流程，不随公开仓发布**；下列路径用于说明打包链路各环节，公开仓中只保留 `apps/*/manifest.json` 这类应用侧产物。
+> 打包链路各环节（发布方私有）：
 > - appmgr 后端：`market/appmgr/*.py`
 > - 打包/签名：`market/packaging/{build.py,sign.py,keygen.sh,SIGNING.md}`
 > - 目录/签名策略：`market/appmgr/paths.py`
 > - 目录格式：`market/catalog/{catalog.json,gen_catalog.py}`
-> - 真实 manifest：`apps/*/manifest.json`
+> - 真实 manifest：`apps/*/manifest.json`（公开仓内）
 > - 部署脚本：`market/deploy/{S94appmgr,ext_appmgr.conf}`
 
 ---

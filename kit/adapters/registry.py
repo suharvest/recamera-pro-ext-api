@@ -1,6 +1,6 @@
 """
-Capability registry for the L0 adapter layer (PYTHON_KIT_DESIGN.md §L0,
-BOOTSTRAP_PATH.md §3).
+Capability registry for the L0 adapter layer (docs/guide/kit-design.md §L0,
+docs/guide/adapter-bootstrap.md §3).
 
 At startup the kit probes whether the *official* firmware endpoints exist, and
 every adapter factory picks its implementation from the resulting capability
@@ -17,7 +17,7 @@ factory selects the existing verified workaround and behaviour is byte-for-byte
 unchanged. When a firmware upgrade adds an official endpoint, the next probe
 hits, the factory returns the `Official*` implementation, and **no application
 code and no repackaging is required** -- exactly the "smooth migration" contract
-in BOOTSTRAP_PATH.md §3.
+in docs/guide/adapter-bootstrap.md §3.
 
 Overrides (both for real deployments and for testing the switch logic)
 ----------------------------------------------------------------------
@@ -27,7 +27,7 @@ Overrides (both for real deployments and for testing the switch logic)
   (currently un-probeable) capabilities on/off.
 * `RECAMERA_ADAPTER_PREFER` = `auto` (default) | `official` | `workaround`
   -- a global manifest-style override of the per-capability auto selection
-  (BOOTSTRAP_PATH.md §3: "可留 manifest 里 prefer: official|workaround 供覆盖").
+  (docs/guide/adapter-bootstrap.md §3: "可留 manifest 里 prefer: official|workaround 供覆盖").
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from typing import Optional
 
 
 # -- capability probing ------------------------------------------------------- #
-# Canonical extension-API socket paths (RECAMERA_PRO_API_SPEC.md §1: all live
+# Canonical extension-API socket paths (docs/api/spec.md §1: all live
 # under /run/recamera/). These are the *real* names the shipped librecamera_ext
 # uses -- singular `frame.sock` and `result-in.sock`.
 def _frame_sock_path() -> str:
@@ -62,7 +62,7 @@ def _env_bool(name: str) -> bool:
 
 @dataclass(frozen=True)
 class Capabilities:
-    """Result of one capability probe (mirrors BOOTSTRAP_PATH.md §3 `caps`)."""
+    """Result of one capability probe (mirrors docs/guide/adapter-bootstrap.md §3 `caps`)."""
     frame_broker: bool = False
     result_ingress: bool = False
     audio_broker: bool = False
@@ -165,7 +165,7 @@ def select_audio_source(prefer: str = "ai_asr", **kw):
          `audio` group -- satisfied because appmgr runs extensions as root. This
          is cleaner than the RTSP workaround (no rkipc encode/transcode hop) and
          is therefore the default. NOTE: raw mic, no VQE -- app does its own
-         denoise/AEC (see docs/ext/audio-pcm.md; AEC reference is in ch2/ch3).
+         denoise/AEC (see docs/guide/audio-pcm.md; AEC reference is in ch2/ch3).
       3. `RtspAudioSource` (fallback / A-B comparison, `prefer="rtsp"`) --
          demuxes the audio track from rkipc's combined RTSP stream via ffmpeg.
          Also non-invasive; kept as a fallback for hosts where `/dev/snd` access

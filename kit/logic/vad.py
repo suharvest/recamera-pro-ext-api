@@ -1,7 +1,7 @@
 """
 Voice Activity Detection (endpointing) for reCamera Pro voice apps.
 
-P2 of the voice pipeline (VOICE_APP_DESIGN.md §2/§3). Wraps sherpa-onnx's
+P2 of the voice pipeline (docs/guide/voice-app.md §2/§3). Wraps sherpa-onnx's
 built-in **silero VAD** (`sherpa_onnx.VoiceActivityDetector`) behind a small,
 app-facing interface so the state machine (`kit.logic.voice_sm`) only ever sees
 "a stream of `PcmFrame` in, complete `SpeechSegment`s out". Its job is

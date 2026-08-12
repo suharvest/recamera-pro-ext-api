@@ -2,7 +2,7 @@
 
 > **读者**：把扩展 API / 应用中心部署到设备、或负责设备维护的人（Seeed 内部 / 集成商）。
 > **对象设备**：reCamera Pro（RV1126B / recamera_v2），kernel 6.1.157、rootfs `/` 与 `/oem` ext4 rw、`/userdata` ext4 rw 无 noexec。
-> **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`market/deploy/`（S94appmgr / ext_appmgr.conf / appmgr-restore.sh）、`CHANGES.md`、`RECAMERA_PRO_API_SPEC.md`、`APP_CENTER_PORT_DESIGN.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。
+> **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`../../CHANGELOG.md`、`../api/spec.md`、`app-center-publishing.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。应用中心部署脚本（`S94appmgr` / `ext_appmgr.conf` / `appmgr-restore.sh`）属发布方私有打包流程，不在公开仓。
 > **状态**：本文的路径 / 命令 / md5 均取自上述 release 脚本与实测记录，可直接照做；边界（OTA 冲掉、半成品）在文中明确标注。
 
 ---
@@ -121,7 +121,7 @@ adb shell "dmesg | grep -iE 'vpss|fifo|Oops' | tail"   # 无 VPSS 崩溃
 
 ### 4.2 持久化 S94appmgr（+ OTA restore 机制）
 
-`S94appmgr`（见 `market/deploy/S94appmgr`）是 SysVinit 启停脚本，排在 nginx（late init）之后（S94）：
+`S94appmgr`（应用中心私有打包内的部署脚本，不在公开仓）是 SysVinit 启停脚本，排在 nginx（late init）之后（S94）：
 - `start` 时先 `seed_s94_master`（把自己镜像到 OTA 存活的主拷贝 `/userdata/config/system/etc/init.d/S94appmgr`）→ `reinject_nginx`（`/oem` 上的 `ext_appmgr.conf` 缺失时从 `/userdata/local/appcenter/ext_appmgr.conf` 主拷贝回注，**`nginx -t` 通过才 reload；不通过则删除回注文件、绝不留坏配置**）→ 直接后台 `python3 -m appmgr serve`（不用 busybox `start-stop-daemon -b`，它 mishandle 需要 cd 的 shell wrapper）。
 
 安装：

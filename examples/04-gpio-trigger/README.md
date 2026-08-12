@@ -7,7 +7,7 @@
 1. **结果输出** — notify WebSocket `ws://127.0.0.1:8123`（本机，无需 token）。消息是 `InferenceResult` JSON，`detection.entries[].{class_name, score, box}`。
 2. **引脚控制** — gmgr API，直连 unix socket `/dev/shm/gmgr.sock`（root 免 JWT）。
 
-本示例是 `docs/ext/gpio-result-trigger.md` 逻辑的可跑脚本版，只用 Python 标准库，无第三方依赖。
+本示例是 `docs/guide/gpio-result-trigger.md` 逻辑的可跑脚本版，只用 Python 标准库，无第三方依赖。
 
 ## 边界（重要）
 
@@ -55,5 +55,5 @@ pin 106 -> 0        # person 离开
 - **拉不动引脚**：先确认 `gpio_settings` 设了 `push-pull`；确认引脚没被别的用途占用；确认以 root 运行。
 - **连不上 gmgr**：`ls -l /dev/shm/gmgr.sock`；gmgr 服务未起则无此文件。
 - **WS 连不上 / 收不到消息**：确认内建推理在跑（有结果才会推 WS）；`127.0.0.1:8123` 是本机 notify，无需 token。
-- **要经外网/nginx 调 gmgr**：改成带 `Cookie: token=<JWT>` 的 HTTPS 请求，端点 `https://<设备IP>/api/v1/gpio/{id}/value`（登录拿 token 见 `docs/ext/result-push.md`）。
-- **要 PWM / 更多引脚**：当前不支持，见 `docs/ext/gpio-result-trigger.md`。
+- **要经外网/nginx 调 gmgr**：改成带 `Cookie: token=<JWT>` 的 HTTPS 请求，端点 `https://<设备IP>/api/v1/gpio/{id}/value`（登录拿 token 见 `docs/guide/result-push.md`）。
+- **要 PWM / 更多引脚**：当前不支持，见 `docs/guide/gpio-result-trigger.md`。

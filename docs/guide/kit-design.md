@@ -1,7 +1,7 @@
 # reCamera Pro 应用套件 — Python 实现 & 通用/应用分层设计
 
 > 决策：**Python 实现**。目标：把"通用层"和"应用独立层"切干净——通用的一次做好、所有应用复用；应用只写自己独有的业务逻辑。**适配层用我们现在的曲折方式（解码/客户端叠加/接管音频），官方接口(R1/R2/R8)到了只换适配层，应用一行不改。**
-> 关联：`BOOTSTRAP_PATH.md`(适配器)、`SOLUTION_PORTING_DESIGN.md`(9 个应用)、`RECAMERA_PRO_INFERENCE_SDK_DESIGN.md`(官方口)。
+> 关联：`adapter-bootstrap.md`(适配器)。应用移植与上游能力分析属内部设计文档，不在公开仓。
 
 ## 0. 一张图看清分层（通用 vs 应用独立）
 
@@ -140,7 +140,7 @@ class App(ABC):
 ## 4. 适配层 = "曲折现在 / 官方将来" 的唯一切换点
 - `kit/adapters/registry.py` 启动探测官方口(frame.sock/audio.sock/结果注入/版本化API)是否存在 → 每个适配器工厂选 `Official*` 或 `Workaround*`。
 - **应用只经 App 基类拿帧/发结果，从不直接引用适配器** → 官方到了，改的只有 `adapters/` 下几个实现类 + registry 命中，`apps/` 全不动。
-- 对应 BOOTSTRAP_PATH 的迁移契约：Frame 用 ndarray/dmabuf、结果用官方 protobuf 形状、PCM 用 16k mono —— **今天就按官方形状产出**，切换零转换。
+- 对应 adapter-bootstrap 的迁移契约：Frame 用 ndarray/dmabuf、结果用官方 protobuf 形状、PCM 用 16k mono —— **今天就按官方形状产出**，切换零转换。
 
 ## 5. 通用 vs 应用独立 —— 明确划分表
 
@@ -192,13 +192,13 @@ class FallApp(App):
 
 ## 8. 迁移顺序（市场 + Kit 先行, 再逐应用）
 - **P0 · 市场骨架 + Kit**：
-  - 市场：appmgr(装/起/停/单实例锁) + tar 打包 + `ext_appmgr.conf` + `S94appmgr` 自启动 + `/appcenter` SPA 外壳 + 鉴权复用（对齐 `APP_CENTER_PORT_DESIGN.md`）。
+  - 市场：appmgr(装/起/停/单实例锁) + tar 打包 + `ext_appmgr.conf` + `S94appmgr` 自启动 + `/appcenter` SPA 外壳 + 鉴权复用（对齐 `app-center-publishing.md`）。
   - Kit：L0 适配(RtspDecode/ClientOverlay/registry) + L1(RknnModel + detect/pose/classify 后处理) + L2 输出 + L3 App基类/Pipeline/Tracker + 转换脚本。**先转 yolo11n。**
 - **P1 · yolo-detector 端到端打样**：经 appmgr 装 → 起 → 取帧→rknn→detect→跟踪→ResultSink→`/appcenter` 看到框。**一条链跑通 = 市场+Kit 一起验证完成。**
 - **P2 · 托管类批量**：weather / qrcode / retail / fall / fitness（复用 detect/pose/classify + logic 库，各写薄 app.py），逐个打包上架本地 catalog。
 - **P3 · 流水线类**：补 db/ctc/landmark 后处理 + Pipeline 级联 → facemesh → face-analysis → ppocr。
 - **P4 · 市场收尾**：catalog 云端目录 + 签名 + 调试面板(指标/热调/回放) + OTA 回注 + 与一代行为回归对照。
-- 并行：`models/convert` 逐个 onnx→rknn（先盘 ONNX 来源，见 SOLUTION_PORTING_DESIGN §3）。
+- 并行：`models/convert` 逐个 onnx→rknn（先盘点 ONNX 来源）。
 
 ## 9. 官方接口到了怎么切
 - 只改 `kit/adapters/` 下实现 + registry 探测命中官方口；

@@ -8,7 +8,7 @@
 
 - C ABI：`sdk/librecamera_ext/include/recamera_ext.h`
 - Python 封装：`sdk/librecamera_ext/python/recamera_ext/__init__.py`
-- 概念/约束：`docs/ext/README.md`（总入口）+ 各分篇
+- 概念/约束：`docs/guide/README.md`（总入口）+ 各分篇
 
 ## 示例索引
 
@@ -53,7 +53,7 @@
 
 ## 通用前置条件
 
-以下对所有示例通用（详见 `docs/ext/README.md` §1.2）：
+以下对所有示例通用（详见 `docs/guide/README.md` §1.2）：
 
 1. **固件必须包含扩展 API。** 扩展 socket（`/run/recamera/frame.sock`、`result-in.sock`）只在**含扩展 API 的 rkipc 固件**里存在。原厂 rkipc 没有这些端点，示例会连接失败。判断方法：
 

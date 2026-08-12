@@ -5,7 +5,7 @@
 > 其余能力各有专篇，见下方能力地图链接。
 >
 > 事实来源：
-> - 规格：`RECAMERA_PRO_API_SPEC.md`（§1 握手/身份/错误码、§2 帧代理、§3 结果注入、§8 架构）
+> - 规格：`../api/spec.md`（§1 握手/身份/错误码、§2 帧代理、§3 结果注入、§8 架构）
 > - C ABI：`sdk/include/recamera_ext.h`
 > - Python 封装：`sdk/python/recamera_ext/__init__.py`
 > - proto：`common/vigil/protocol/ext_api.proto`、`common/vigil/protocol/inference.proto`
@@ -538,7 +538,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 | 控制面（`/api/v1/ext/*` 版本化域 + capabilities + app token） | M4 | 规划中 |
 | 显示（M5）/ 生态框架接入 gstreamer/ffmpeg（M6）/ 沙箱与打包签名分发 | M5/M6 | 规划中 |
 
-细节以 `RECAMERA_PRO_API_SPEC.md` 为准（§2 帧代理、§3 结果注入、§4 观测面、§8 架构与扩展模型）。
+细节以 `../api/spec.md` 为准（§2 帧代理、§3 结果注入、§4 观测面、§8 架构与扩展模型）。
 
 **对方案商的兼容性承诺（规格 §8.2 扩展五规则）**：
 1. **加法优先**：新能力 = 新 socket 路径 + 新 Capability + 新 proto 消息，现有端点线格式/路径/语义不动。

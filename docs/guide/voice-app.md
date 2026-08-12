@@ -1,7 +1,7 @@
 # 语音应用设计:唤醒词 → 采集音频 → 转录(reCamera Pro)
 
 > 新增一个语音应用 `voice-transcribe`:**本地唤醒词唤醒 → 采集本地音频 → STT 转录 → 出文本**。复用本地 `seeed-local-voice`(OpenVoiceStream)的引擎。
-> 关联:`BOOTSTRAP_PATH.md`(AudioSource 适配层)、`RECAMERA_PRO_INFERENCE_SDK_DESIGN.md`(R8 音频代理/VAD)、`PYTHON_KIT_DESIGN.md`(应用分层)、audio 发现(记忆 [[recamera-pro-app-center]])。
+> 关联:`adapter-bootstrap.md`(AudioSource 适配层)、`kit-design.md`(应用分层)。R8 音频代理/VAD 的上游需求属内部设计文档,不在公开仓。
 
 ## 0. 一句话
 `voice-transcribe` = 一个 self-hosted 应用:kit 的 **AudioSource** 拿 16k 单声道 PCM → **KWS 唤醒词**常听 → 触发后录一段 → **voxedge/sherpa ASR** 转录 → 文本经 ResultSink WS 到 `/appcenter`。**复用 voxedge 引擎,不重造 ASR**;音频获取走我们已设计的 AudioSource 适配层(现在接管 mic,官方 R8 到了换成 VQE-clean PCM,应用不改)。

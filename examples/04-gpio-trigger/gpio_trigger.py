@@ -5,7 +5,7 @@
 （继电器/LED/蜂鸣器/告警）。**不需要改固件、不需要官方新增功能**——
 用设备已有的两个零件拼起来：结果输出（notify WS）+ 引脚控制（gmgr API）。
 
-逻辑与 docs/ext/gpio-result-trigger.md 一致，这里做成可跑脚本。
+逻辑与 docs/guide/gpio-result-trigger.md 一致，这里做成可跑脚本。
 
 边界（gpio-result-trigger.md）：
   - 引脚仅 2 根：GPIO3_B2 = pin 106，GPIO3_B3 = pin 107。

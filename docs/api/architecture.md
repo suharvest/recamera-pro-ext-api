@@ -3,9 +3,9 @@
 > 面向新接手 / 想理解整体设计的工程师。目的：一次读懂扩展 API 的系统分层、数据流、组件关系。
 >
 > 事实来源：
-> - 规格：`RECAMERA_PRO_API_SPEC.md`（§1 传输/身份/握手、§2 帧代理、§3 结果注入、§4 观测、§8 架构与扩展模型、M5/M6）
-> - 需求背景：`RECAMERA_PRO_INFERENCE_SDK_DESIGN.md`
-> - 方案商入口：`docs/ext/README.md` 及 `docs/ext/*.md`
+> - 规格：`./spec.md`（§1 传输/身份/握手、§2 帧代理、§3 结果注入、§4 观测、§8 架构与扩展模型、M5/M6）
+> - 需求背景：上游能力分析（内部设计文档，不在公开仓）
+> - 方案商入口：`../guide/README.md` 及 `../guide/*.md`
 > - 源码（wsl2-local）：`RV1126B_Linux_IPC_SDK/project/app/recamera_ipc/`
 >
 > 本文所有组件关系、socket 路径、函数名均从源码核实，带 `file:line`。
@@ -76,7 +76,7 @@
 
 - 三条数据面 socket 全在 **rkipc 进程内**监听，`main.c:414-416` 依次 `rc_result_in_start()` / `frame_export_start()` / `rc_probe_start()`。
 - **notify-server 是独立进程**：监听 `/var/tmp/notify`（`notify_server.py:209` `socket_path="/var/tmp/notify"`），rkipc 侧 `rc_notify` 是它的**客户端**（`rc_notify_client.c:36-52` `connect(AF_UNIX, SOCK_STREAM)`）。结果注入并不直连 WS——而是经 dispatch → rc_notify → notify-server → WS/MQTT/HTTP/UART。
-- **entry.cgi 是 CGI**（nginx 拉起），承载 HTTP 配置/控制 API 与前端扩展挂载；`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，对方案商标注 internal（`docs/ext/rkipc-rpc-status.md`）。
+- **entry.cgi 是 CGI**（nginx 拉起），承载 HTTP 配置/控制 API 与前端扩展挂载；`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，对方案商标注 internal（`../guide/rkipc-rpc-status.md`）。
 
 ---
 
@@ -218,7 +218,7 @@ rc_infer 推理线程（热路径）
               · 内部 RPC /var/tmp/rkipc（internal，勿直连）
 ```
 
-**一句话**：控制/配置走 HTTP，不走数据面 socket——方案商把网页 + 后端用 `ext_<name>.conf` 挂到 nginx 的 `/extension/<name>/`，复用官方 JWT 会话（`auth_request`）；配置类请求经 entry.cgi HTTP API，M4 起提供版本化 `/api/v1/ext/*` 域（`docs/ext/frontend-extension.md`、`docs/ext/control-api.md`、规格 §5.1）。
+**一句话**：控制/配置走 HTTP，不走数据面 socket——方案商把网页 + 后端用 `ext_<name>.conf` 挂到 nginx 的 `/extension/<name>/`，复用官方 JWT 会话（`auth_request`）；配置类请求经 entry.cgi HTTP API，M4 起提供版本化 `/api/v1/ext/*` 域（`../guide/frontend-extension.md`、`../guide/control-api.md`、规格 §5.1）。
 
 ---
 

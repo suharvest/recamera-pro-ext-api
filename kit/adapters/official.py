@@ -4,8 +4,8 @@ Official extension-API adapters for reCamera Pro (Rockchip RV1126B).
 *** This module is the production-grade reference for wiring a self-hosted
     Python app onto the official reCamera Pro extension API. ***
 
-It is the L0 "official" backend described in BOOTSTRAP_PATH.md §2 and
-PYTHON_KIT_DESIGN.md §L0. Where the workaround backends decode the go2rtc RTSP
+It is the L0 "official" backend described in docs/guide/adapter-bootstrap.md §2 and
+docs/guide/kit-design.md §L0. Where the workaround backends decode the go2rtc RTSP
 sub-stream (FfmpegRtspSource) and publish results on our own WebSocket
 (WsResultSink), these adapters use the shipped SDK `librecamera_ext`:
 
@@ -20,7 +20,7 @@ sub-stream (FfmpegRtspSource) and publish results on our own WebSocket
 
 Both classes implement the exact kit ABCs (`FrameSource` / `ResultSink`) with
 the same `Frame` contract as the workaround, so the capability registry
-(registry.py) swaps them in with ZERO application changes (BOOTSTRAP_PATH.md §3:
+(registry.py) swaps them in with ZERO application changes (docs/guide/adapter-bootstrap.md §3:
 "registry 一切换，9 个应用一行不改").
 
 Interface source of truth (verified against the authoritative SDK, not guessed)
@@ -37,7 +37,7 @@ Interface source of truth (verified against the authoritative SDK, not guessed)
                      .send_keypoints(pts_us, instances)
 * SDK C ABI:   sdk/include/recamera_ext.h -- rc_ext_frame_* (96-byte header +
                SCM_RIGHTS dma-buf fd) and rc_ext_result_send_*.
-* API spec:    RECAMERA_PRO_API_SPEC.md §2/§3, docs/ext/README.md §3/§4.
+* API spec:    docs/api/spec.md §2/§3, docs/guide/README.md §3/§4.
 
 RESULT ROUTING (which app output -> which SDK channel; see OfficialResultSink)
 -----------------------------------------------------------------------------
@@ -49,10 +49,10 @@ RESULT ROUTING (which app output -> which SDK channel; see OfficialResultSink)
 
 Contract references
 -------------------
-* OfficialFrameSource  -> API spec §2 (M2 frame proxy), BOOTSTRAP_PATH.md §2.1
-* OfficialResultSink    -> API spec §3 (M1 result injection), BOOTSTRAP_PATH.md §2.2
-* OfficialPcmSource     -> BOOTSTRAP_PATH.md §2.3 (R8 clean 16k PCM broker; stub)
-* OfficialControl       -> BOOTSTRAP_PATH.md §2.4 (R4 versioned control API; stub)
+* OfficialFrameSource  -> API spec §2 (M2 frame proxy), docs/guide/adapter-bootstrap.md §2.1
+* OfficialResultSink    -> API spec §3 (M1 result injection), docs/guide/adapter-bootstrap.md §2.2
+* OfficialPcmSource     -> docs/guide/adapter-bootstrap.md §2.3 (R8 clean 16k PCM broker; stub)
+* OfficialControl       -> docs/guide/adapter-bootstrap.md §2.4 (R4 versioned control API; stub)
 """
 from __future__ import annotations
 
@@ -575,7 +575,7 @@ class OfficialPcmSource(AudioSource):
 
     Connects to `/var/run/recamera/audio.sock` and reads VQE-clean 16k mono PCM
     directly -- no need to take over/close rkipc audio, AEC/denoise handled by
-    the firmware (BOOTSTRAP_PATH.md §2.3, §5). Upper STT/VAD logic is unchanged
+    the firmware (docs/guide/adapter-bootstrap.md §2.3, §5). Upper STT/VAD logic is unchanged
     vs the (future) `AlsaTakeoverSource` workaround.
     """
 
@@ -609,7 +609,7 @@ class ControlPlane(ABC):
 
 
 class OfficialControl(ControlPlane):
-    """R4 versioned control API (BOOTSTRAP_PATH.md §2.4). Migration target for
+    """R4 versioned control API (docs/guide/adapter-bootstrap.md §2.4). Migration target for
     the reverse-engineered `CgiControl` workaround."""
 
     def __init__(self, **_ignored):

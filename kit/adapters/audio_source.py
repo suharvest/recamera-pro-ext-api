@@ -1,7 +1,7 @@
 """
 AudioSource adapter for reCamera Pro (Rockchip RV1126B).
 
-L0 adapter layer (see VOICE_APP_DESIGN.md §4/§5/§6, BOOTSTRAP_PATH.md §2.3).
+L0 adapter layer (see docs/guide/voice-app.md §4/§5/§6, docs/guide/adapter-bootstrap.md §2.3).
 The application only ever sees the `AudioSource` ABC + `PcmFrame` (16k mono PCM);
 the concrete capture backend is swappable. When the official **R8 clean-PCM
 broker** (`/var/run/recamera/audio.sock`, VQE-clean 16k mono) arrives, only a new
@@ -83,7 +83,7 @@ from typing import Callable, Optional
 # --- Contract (canonical; re-exported by official.py) ------------------------ #
 @dataclass
 class PcmFrame:
-    """One chunk of PCM audio (BOOTSTRAP_PATH.md §2.3 contract).
+    """One chunk of PCM audio (docs/guide/adapter-bootstrap.md §2.3 contract).
 
     `pcm` is little-endian signed 16-bit samples. For the app-facing contract
     this is always 16 kHz mono, so `len(pcm) // 2` samples == duration * 16000.
@@ -501,7 +501,7 @@ class AiAsrAudioSource(AudioSource):
     """Capture 16 kHz mono PCM from the firmware's reserved ALSA `ai_asr` PCM.
 
     THIS IS THE OFFICIAL, RECOMMENDED audio path on reCamera Pro (RV1126B) --
-    see docs/ext/audio-pcm.md (authoritative, derived from the firmware's
+    see docs/guide/audio-pcm.md (authoritative, derived from the firmware's
     /etc/asound.conf). It supersedes both workarounds (`RtspAudioSource`,
     `AlsaTakeoverSource`) because it is clean and non-invasive:
 
@@ -694,7 +694,7 @@ class AiAsrAudioSource(AudioSource):
                     "is almost always a PERMISSION problem: /dev/snd is "
                     "root:audio 0660. Run as root or add the user to the 'audio' "
                     "group (appmgr launches extensions as root, which satisfies "
-                    "this). See docs/ext/audio-pcm.md.")
+                    "this). See docs/guide/audio-pcm.md.")
             raise RuntimeError(
                 f"ai_asr capture produced no audio from '{self.device}': "
                 f"{msg or 'stream ended'}")

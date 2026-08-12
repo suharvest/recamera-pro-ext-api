@@ -1,5 +1,5 @@
 """
-Voice interaction state machine for reCamera Pro (VOICE_APP_DESIGN.md §0/§3).
+Voice interaction state machine for reCamera Pro (docs/guide/voice-app.md §0/§3).
 
 This is the one piece of business logic the voice app owns -- everything else
 (audio capture, VAD, KWS, ASR) is a swappable kit building block. It wires them
@@ -9,7 +9,7 @@ into the core interaction:
      ▲                    (VAD collects the utterance)              │
      └──────────────────────── transcript emitted ─────────────────┘
 
-States (VOICE_APP_DESIGN §0):
+States (voice-app §0):
     idle          feed every PcmFrame to the WakeWord detector; wait for a hit.
     listening     wake fired -> feed frames to the VAD until it endpoints one
                   utterance (trailing silence >= vad.min_silence_duration) or a

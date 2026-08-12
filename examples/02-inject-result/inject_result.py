@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """02-inject-result -- 用 ResultSink 把结果注入固件。
 
-注入的结果走与内建推理完全相同的三路分发（docs/ext/README.md §4）：
+注入的结果走与内建推理完全相同的三路分发（docs/guide/README.md §4）：
   1. OSD 叠加   -> 出现在 RTSP/预览的叠加层（按 source_id 哈希分配颜色）
   2. 录像       -> 进 vigil 录像队列，回放可见
   3. 推送       -> WS(127.0.0.1:8123 / /ws/inference/results) / MQTT / HTTP / UART
@@ -18,14 +18,14 @@ API 逐一核实自 sdk/librecamera_ext/python/recamera_ext/__init__.py：
     points 元素=(x, y, score, keypoint_id)
   - send_segmentation(pts_us, items)   见 __init__.py L280（含 mask，示例从略）
 
-坐标契约（recamera_ext.h v1.2.0 / docs/ext/README.md §4）：
+坐标契约（recamera_ext.h v1.2.0 / docs/guide/README.md §4）：
   - 所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）以及关键点 point 的
     x/y 均为**归一化 [0,1]**——相对画面宽高的比例（左上 x1/y1、右下 x2/y2，如
     0.5=居中）。OSD 会先 clamp 到 [0,1] 再乘画面宽高，**传像素值会被压成 1px 隐形框**，
     务必发比例。分割 mask 是行主序原始字节（非坐标）。
   - 若你手头是像素坐标，除以画面宽/高即可：x/宽、y/高。
 
-约束（docs/ext/README.md §4.3）：
+约束（docs/guide/README.md §4.3）：
   - source_id 不能用保留字 "builtin"（会被拒 EAUTH）。
   - 限速：每连接 60 msg/s（burst 15）；单条 payload <= 64KB。别超过帧率发。
   - pts_us=0 表示不与具体帧关联（照常叠加/推送）；要与某帧对齐叠加时传 frame.pts_us。

@@ -1,7 +1,7 @@
 """
 CgiControl -- workaround control plane over the device's existing entry.cgi.
 
-L0 adapter layer (BOOTSTRAP_PATH.md §2.4 R4). This is the reverse-engineered
+L0 adapter layer (docs/guide/adapter-bootstrap.md §2.4 R4). This is the reverse-engineered
 counterpart to `OfficialControl`: instead of a future versioned control API it
 drives the endpoints the shipped firmware already exposes through nginx +
 `entry.cgi`, so the 9 kit apps get a working `ControlPlane` on TODAY's firmware
@@ -21,7 +21,7 @@ Two capabilities, two very different mechanisms
       the gmgr unix socket.
 
 * snapshot()  -- entry.cgi has NO frame-grab endpoint (confirmed). So snapshot
-      is implemented as a FRAME PROXY (BOOTSTRAP_PATH decision "方案 A"): pull a
+      is implemented as a FRAME PROXY (adapter-bootstrap decision "方案 A"): pull a
       single frame through the kit's own FrameSource (whichever the registry
       selects -- official dma-buf broker or the ffmpeg RTSP workaround), then
       JPEG-encode it with OpenCV. No new frame-connection logic is invented here.

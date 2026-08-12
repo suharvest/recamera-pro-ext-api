@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-yolo-detector -- the first reCamera Pro self-hosted app (PYTHON_KIT_DESIGN §6).
+yolo-detector -- the first reCamera Pro self-hosted app (kit-design §6).
 
 Deliberately thin: all of frame grab / preprocess / RKNN infer / detect
 post-process / result publishing lives in the Kit base loop (`kit.app.App`).

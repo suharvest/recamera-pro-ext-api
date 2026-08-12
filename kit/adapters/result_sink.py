@@ -1,7 +1,7 @@
 """
 ResultSink adapter for reCamera Pro (Rockchip RV1126B).
 
-L0 adapter layer (see PYTHON_KIT_DESIGN.md §0 / §0.5). The application never
+L0 adapter layer (see docs/guide/kit-design.md §0 / §0.5). The application never
 touches a sink directly -- the `App` base class owns one and calls `emit()` for
 every processed frame. The concrete backend is swappable behind the `ResultSink`
 ABC:

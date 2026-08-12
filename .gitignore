@@ -18,11 +18,8 @@ apps/*/models/
 *.mp4
 *.avi
 
-# 开发临时工作区(各阶段 agent 的 scratch,非交付物)
-_m4_work/
-_stage_3b/
-_g5g6/
-_verify_artifacts/
+# 内部规划/设计/交付报告(本地留存,不进公开仓)
+internal/
 
 # 本地备份(移入的 *.bak / 旧 scratch,保留可回溯,不进 git)
 _local_backups/

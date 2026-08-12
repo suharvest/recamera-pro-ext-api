@@ -1,7 +1,7 @@
 """
 Wake-word / keyword-spotting for reCamera Pro voice apps.
 
-P2 of the voice pipeline (VOICE_APP_DESIGN.md §2/§3). Sits in front of the
+P2 of the voice pipeline (docs/guide/voice-app.md §2/§3). Sits in front of the
 state machine's `idle` state: continuously consumes the `PcmFrame` stream and
 fires a `WakeEvent` when the configured wake word is heard. Hidden behind the
 `WakeWord` ABC so the state machine never cares which backend detected the wake

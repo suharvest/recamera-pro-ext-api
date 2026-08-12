@@ -1,5 +1,5 @@
 """
-Offline unit tests for the L0 capability registry (BOOTSTRAP_PATH.md §3).
+Offline unit tests for the L0 capability registry (docs/guide/adapter-bootstrap.md §3).
 
 Run:  python3 -m kit.adapters.test_registry     (from repo root)
 No device, no network: FfmpegRtspSource is constructed with explicit

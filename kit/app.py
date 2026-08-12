@@ -1,5 +1,5 @@
 """
-App base class + generic main loop for reCamera Pro Kit (see PYTHON_KIT_DESIGN.md §3).
+App base class + generic main loop for reCamera Pro Kit (see docs/guide/kit-design.md §3).
 
 An application is a thin subclass that overrides at most two hooks:
 
@@ -308,7 +308,7 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--mqtt-discovery-prefix", default=None)
     args = ap.parse_args(argv)
 
-    # Unified config load (PYTHON_KIT_DESIGN / parameter hot-tuning): manifest
+    # Unified config load (kit-design / parameter hot-tuning): manifest
     # config_schema defaults overlaid by <app_dir>/config.json. Explicit CLI
     # --conf/--iou win over that (manual debugging override).
     from kit import config as _cfg

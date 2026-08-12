@@ -1,6 +1,6 @@
 # reCamera Pro 扩展 API 规格（v0.3）
 
-> **文档性质**：实施规格。上游分析见 `RECAMERA_PRO_INFERENCE_SDK_DESIGN.md`（下称"设计文档"），本文把其 6.2/6.3 落成可开发的契约定义与实现方案。
+> **文档性质**：实施规格。本文把上游能力分析（内部设计文档）的 6.2/6.3 落成可开发的契约定义与实现方案。
 > **代码基**：`recamera_v2` manifest main 分支（2026-08-10 sync，82 仓库），路径基于 `project/app/`。
 > **状态**：v0.1 评审 REDESIGN-NEEDED（7 条）→ v0.2 复审 **SHIP-WITH-FIXES**（3 CLOSED / 4 PARTIAL / 3 新发现）→ v0.3 吸收全部剩余项（两轮修订记录见文末）→ **v0.4 增补 §8 架构与扩展模型**（服务端核心库、扩展五规则、兼容性工程）。**本版为开工基线**：M0 即刻开工；M1 待门禁 G3/G4；M2 核心待 G1/G2。字段编号、socket 路径、结构体布局实现后冻结。
 
@@ -289,7 +289,7 @@ message ProbeData {
 
 ## 5. M0 存量文档化（清单）
 
-交付四篇短文档（放 `docs/ext/`，随固件发布）：
+交付四篇短文档（放 `../guide/`，随固件发布）：
 
 1. **音频接入**：`arecord -D ai_asr -r 16000 -c 4 -f S16_LE` 采 4 通道后软件取 ch0（Mic1）——**不要 `-c 1`**：route 层输出是 [Mic1, Mic2, Ref, Ref]，单声道下混会把扬声器参考混进人声（M0 文档实核修正）。说明 dsnoop 共享原理、与 rkipc 的 `ai_main` 互不干扰、无 VQE 的边界（AEC/NS 需自理；ch2/ch3 就是做 AEC 的参考信号）。
 2. **结果推送接入**：`/var/tmp/notify` 的 `<le32 len><InferenceResult>` 帧格式 + proto 文件下载 + 四种 notifier 的配置；明确其"不上 OSD、无特权、受全局限速"的定位。
@@ -540,8 +540,8 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 - (可选)v4l2loopback:`gst v4l2src` / `ffmpeg -f v4l2` 标准接口读到帧
 
 ## M6 实测结论(2026-08-11 真机)
-- **GStreamer 1.22.6**:`appsrc`+`GstDmaBufAllocator`+`GstVideoMeta` 齐全(C 和 Python gi)。**dma-buf 零拷贝拿帧实测 PASS**:`appsrc!videoconvert!pngenc!filesink` 出 1280×720 正确 PNG;`!fakesink` 吞吐 29.8fps 满帧。示例 `docs/ext/gstreamer-integration.md`。**但无 RK 硬件编码 plugin(mpph264enc/rockchipmpp)、无 kmssink**。
-- **FFmpeg 4.4.4**:有 `drm_prime`(DRM_PRIME import 编入)。rawvideo→mjpeg 实测 PASS。**但未编 rkmpp**,`h264_v4l2m2m` 不可用(RK 编码器走 `/dev/mpp_service` MPP,非标准 V4L2 M2M)。示例 `docs/ext/ffmpeg-integration.md`。
+- **GStreamer 1.22.6**:`appsrc`+`GstDmaBufAllocator`+`GstVideoMeta` 齐全(C 和 Python gi)。**dma-buf 零拷贝拿帧实测 PASS**:`appsrc!videoconvert!pngenc!filesink` 出 1280×720 正确 PNG;`!fakesink` 吞吐 29.8fps 满帧。示例 `../guide/gstreamer-integration.md`。**但无 RK 硬件编码 plugin(mpph264enc/rockchipmpp)、无 kmssink**。
+- **FFmpeg 4.4.4**:有 `drm_prime`(DRM_PRIME import 编入)。rawvideo→mjpeg 实测 PASS。**但未编 rkmpp**,`h264_v4l2m2m` 不可用(RK 编码器走 `/dev/mpp_service` MPP,非标准 V4L2 M2M)。示例 `../guide/ffmpeg-integration.md`。
 - **含义**:方案商**拿帧+软件处理**用标准 gst/ffmpeg 零改源码即可(实测通)。**硬件编码回推**(闭环的"出")标准框架里缺——要走 ①rkipc 官方 VENC(整帧回注入口,待补)②或方案商自带 rkmpp-enabled ffmpeg / gstreamer1-rockchip plugin。OpenCV 直接 `frame.to_bgr()`→cv2 无需桥接。
 
 ---

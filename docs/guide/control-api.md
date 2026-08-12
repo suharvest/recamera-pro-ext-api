@@ -39,7 +39,7 @@ POST /cgi-bin/entry.cgi/system/login          body {"sUserName":"admin","sPasswo
 
 ### 1.1 `GET /api/v1/ext/capabilities`
 
-返回扩展 API 的能力集，与 rkipc 握手 `HelloAck.capabilities`（`RECAMERA_PRO_API_SPEC.md` §1.2）一致。**能力集由 entry.cgi 静态提供**（硬编码于 `ext_api.cpp`）——entry.cgi 与 rkipc 是独立进程，不跨进程查询 rkipc；这些值是 v1 冻结基线契约，rkipc 侧 limits 变更时本表须同步。
+返回扩展 API 的能力集，与 rkipc 握手 `HelloAck.capabilities`（`../api/spec.md` §1.2）一致。**能力集由 entry.cgi 静态提供**（硬编码于 `ext_api.cpp`）——entry.cgi 与 rkipc 是独立进程，不跨进程查询 rkipc；这些值是 v1 冻结基线契约，rkipc 侧 limits 变更时本表须同步。
 
 鉴权：走 `auth_verify`（本机直通 / JWT Cookie），与其他域一致。
 
