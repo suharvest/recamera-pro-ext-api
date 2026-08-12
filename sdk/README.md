@@ -15,10 +15,33 @@ Python: `ResultSink(source_id).send_{detections,classification,tracking,keypoint
 → 上官方 OSD(检测框/关键点/分类标签/跟踪)+ 录像 + WS/MQTT/HTTP/UART。
 （注:keypoints/classification 的 OSD 绘制代码已在 osd_infer.c,真机端到端验证待补。）
 
+**坐标契约:所有 box 坐标(检测/分类 ROI/分割 ROI/跟踪/关键点对象框)以及关键点 point 的 x/y 均为归一化 [0,1]**,即相对画面宽高的比例(左上 x1/y1、右下 x2/y2,0..1;如 0.5 = 居中)。OSD 渲染器会先 clamp 到 [0,1] 再乘画面宽高,**传像素值会被压成 1px 隐形框**,务必发比例。分割的 `mask` 是行主序原始字节(非坐标)。示例:`send_detections(0, [(0.05, 0.07, 0.62, 0.94, 0.92, "person")])`。
+
+**classification 支持可选 ROI box(v1.1.0+)**:每条分类结果可附一个源框(如 per-face 属性)。
+C:`rc_ext_class_t` 置 `has_box=1` 并填 `x1/y1/x2/y2`;`has_box=0`(默认)保持原 box-less 行为。
+Python:items 元素用 `(score, class_id, label)` 无框,或 `(score, class_id, label, (x1,y1,x2,y2))` 附框。
+向后兼容(新增可选字段,soname 不变),但 header/.so/python 三者必须成套升级(ABI 结构体大小已变)。
+
 ## 帧代理
 `FrameSource` / `rc_ext_frame_*` 连 `/run/recamera/frame.sock`。
 **帧源给 VI 原始帧(全分辨率,不预 letterbox)**——letterbox/resize/量化等预处理由你的管线负责(后处理坐标映射、级联 ROI、OSD 叠加都需要原图)。
 `frame.array` 零拷贝视图,只在当前迭代有效,跨帧保留必须 `.copy()`。
+
+## Probe 观测面(v1.2.0+)
+`ProbeSource` / `rc_ext_probe_*` 连 `/run/recamera/probe.sock`,订阅推理管线各阶段的样本(只读观测,不影响推理)。
+- stage id:`"preproc.out"` / `"npu.raw"` / `"postproc.out"` / `"metrics"`;`sample_every=N` 每 N 次推理采 1 个。
+- 握手同 frame/result(Hello/HelloAck),再发 `ProbeSubscribe`,server 单向推 `ProbeData` 流。
+- **小样本**(metrics/postproc.out):数据内联在 `payload`(`fd_size==0`)。metrics 是 JSON。
+- **大张量**(preproc.out/npu.raw):数据在随 datagram 传来的 memfd(SCM_RIGHTS),`payload_len==fd_size`,SDK 内部 `mmap` 只读映射(普通 memfd,非 dma-buf,无需 cache sync)。`meta` 带 shape/dtype/width/height/stride/fourcc/scale/zero_point。
+
+```python
+from recamera_ext import ProbeSource
+with ProbeSource(stages=["metrics", "preproc.out"], sample_every=1) as probe:
+    for s in probe:
+        print(s.stage_id, s.seq, s.payload_len, s.meta)
+        arr = s.array   # 零拷贝 ndarray(有 meta 时按 dtype/shape,否则 uint8);仅当前迭代有效
+```
+纯新增能力,soname 不变(.so.1),仅新增符号,对旧 header/.so 的消费者 ABI 向后兼容。
 
 ## 部署到设备
 - Python: 把 `python/recamera_ext/` 拷到设备 site-packages 或 PYTHONPATH;`lib/librecamera_ext.so.1*` 拷到 `/oem/usr/lib` 或设 LD_LIBRARY_PATH。

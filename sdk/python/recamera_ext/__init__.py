@@ -49,7 +49,25 @@ __all__ = [
     "FrameSource",
     "Frame",
     "FrameConfig",
+    "ProbeSource",
+    "ProbeSample",
 ]
+
+# ProbeSubscribeAck.subscribed_mask bits (mirror of RC_EXT_PROBE_MASK_*).
+PROBE_MASK_PREPROC = 0x1
+PROBE_MASK_NPU = 0x2
+PROBE_MASK_POSTPROC = 0x4
+PROBE_MASK_METRICS = 0x8
+
+# TensorMeta.dtype -> numpy dtype string.
+_PROBE_DTYPES = {
+    0: "uint8",
+    1: "int8",
+    2: "uint16",
+    3: "int16",
+    4: "float32",
+    5: "float16",
+}
 
 FOURCC_NV12 = 0x3231564E  # 'N','V','1','2' little-endian
 
@@ -75,6 +93,11 @@ class Classification(Structure):
         ("score", c_float),
         ("class_id", c_int),
         ("label", c_char_p),
+        ("has_box", c_int),
+        ("x1", c_float),
+        ("y1", c_float),
+        ("x2", c_float),
+        ("y2", c_float),
     ]
 
 
@@ -171,6 +194,34 @@ class _Cfg(Structure):
     ]
 
 
+class _ProbeSample(Structure):
+    """Mirror of rc_ext_probe_sample_t (natural alignment, matches the C ABI)."""
+
+    _fields_ = [
+        ("stage_id", c_char_p),
+        ("seq", c_uint64),
+        ("pts_us", c_uint64),
+        ("payload", c_void_p),
+        ("payload_len", c_size_t),
+        ("flags", c_uint32),
+        ("has_meta", c_int),
+        ("shape", c_uint32 * 8),
+        ("n_shape", c_uint32),
+        ("dtype", c_uint32),
+        ("layout", c_uint32),
+        ("fourcc", c_uint32),
+        ("width", c_uint32),
+        ("height", c_uint32),
+        ("stride", c_uint32),
+        ("scale", c_float),
+        ("zero_point", c_int),
+        ("_fd", c_int),
+        ("_base", c_void_p),
+        ("_map_len", c_size_t),
+        ("_pb", c_void_p),
+    ]
+
+
 class FrameConfig:
     """Optional subscription config; omit for the NPU-matched defaults."""
 
@@ -210,6 +261,18 @@ def _bind(lib):
     lib.rc_ext_frame_release.argtypes = [c_void_p, POINTER(_FrameBuf)]
     lib.rc_ext_frame_close.restype = None
     lib.rc_ext_frame_close.argtypes = [c_void_p]
+    # Probe source (optional -- older libs may lack these symbols).
+    if hasattr(lib, "rc_ext_probe_open"):
+        lib.rc_ext_probe_open.restype = c_void_p
+        lib.rc_ext_probe_open.argtypes = [POINTER(c_char_p), c_size_t, c_uint32, POINTER(c_int)]
+        lib.rc_ext_probe_info.restype = c_int
+        lib.rc_ext_probe_info.argtypes = [c_void_p, POINTER(c_uint32), POINTER(c_uint32)]
+        lib.rc_ext_probe_next.restype = c_int
+        lib.rc_ext_probe_next.argtypes = [c_void_p, POINTER(_ProbeSample), c_int]
+        lib.rc_ext_probe_release.restype = None
+        lib.rc_ext_probe_release.argtypes = [c_void_p, POINTER(_ProbeSample)]
+        lib.rc_ext_probe_close.restype = None
+        lib.rc_ext_probe_close.argtypes = [c_void_p]
     return lib
 
 
@@ -239,7 +302,12 @@ class ResultSink:
         self._labels = []
 
     def send_detections(self, pts_us, boxes):
-        """boxes: iterable of (x1, y1, x2, y2, score, label[, class_id])."""
+        """boxes: iterable of (x1, y1, x2, y2, score, label[, class_id]).
+
+        Coordinates are normalized [0,1] (top-left x1/y1, bottom-right x2/y2, as
+        a fraction of frame width/height). The OSD renderer clamps to [0,1] and
+        multiplies by frame size, so pixel values collapse to a 1px box -- always
+        send fractions, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, "person")."""
         boxes = list(boxes)
         n = len(boxes)
         arr = (Box * n)()
@@ -262,7 +330,13 @@ class ResultSink:
         return label or b""
 
     def send_classification(self, pts_us, items):
-        """items: iterable of (score, class_id, label)."""
+        """items: iterable of (score, class_id, label[, box]).
+
+        The optional 4th element is a box (x1, y1, x2, y2); omit it or pass
+        None to leave the entry box-less (original behaviour). A box attaches
+        a source ROI to the entry (e.g. per-face attributes). When present, the
+        box coordinates are normalized [0,1] (fraction of frame width/height),
+        e.g. (0.30, 0.20, 0.55, 0.60)."""
         items = list(items)
         n = len(items)
         arr = (Classification * n)()
@@ -271,7 +345,15 @@ class ResultSink:
             score, class_id, label = it[0], it[1], it[2]
             lb = self._enc(label)
             self._labels.append(lb)
-            arr[i] = Classification(float(score), int(class_id), lb)
+            c = Classification(float(score), int(class_id), lb)
+            box = it[3] if len(it) > 3 else None
+            if box is not None:
+                c.has_box = 1
+                c.x1, c.y1, c.x2, c.y2 = (float(box[0]), float(box[1]),
+                                          float(box[2]), float(box[3]))
+            else:
+                c.has_box = 0
+            arr[i] = c
         rc = self._lib.rc_ext_result_send_classification(self._h, c_uint64(pts_us), arr, c_size_t(n))
         if rc != 0:
             raise RuntimeError("send_classification failed: rc=%d" % rc)
@@ -280,7 +362,10 @@ class ResultSink:
     def send_segmentation(self, pts_us, items):
         """items: iterable of
         (x1, y1, x2, y2, score, class_id, label, mask_bytes, mask_w, mask_h).
-        mask_bytes may be None/empty (with mask_w=mask_h=0)."""
+        The ROI box x1/y1/x2/y2 is normalized [0,1] (fraction of frame
+        width/height), e.g. (0.05, 0.07, 0.62, 0.94). mask_bytes is raw
+        row-major bytes (not coordinates) and may be None/empty (with
+        mask_w=mask_h=0)."""
         items = list(items)
         n = len(items)
         arr = (Segmentation * n)()
@@ -305,7 +390,11 @@ class ResultSink:
         return rc
 
     def send_tracking(self, pts_us, items):
-        """items: iterable of (x1, y1, x2, y2, score, class_id, label, track_id)."""
+        """items: iterable of (x1, y1, x2, y2, score, class_id, label, track_id).
+
+        Coordinates are normalized [0,1] (fraction of frame width/height), same
+        contract as send_detections, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, 0,
+        "person", 7)."""
         items = list(items)
         n = len(items)
         arr = (Tracking * n)()
@@ -332,7 +421,10 @@ class ResultSink:
               "box": (x1, y1, x2, y2),   # optional; omit -> no object box
               "score": float, "class_id": int, "label": str,  # object-level
             }
-        A missing "box" leaves the whole object_info group unset on the wire."""
+        Both the point x/y and the optional object box x1/y1/x2/y2 are
+        normalized [0,1] (fraction of frame width/height), same contract as
+        send_detections. A missing "box" leaves the whole object_info group
+        unset on the wire."""
         instances = list(instances)
         n = len(instances)
         arr = (KeypointInstance * n)()
@@ -515,6 +607,140 @@ class FrameSource:
         h = getattr(self, "_h", None)
         if h:
             self._lib.rc_ext_frame_close(h)
+            self._h = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+class ProbeSample:
+    """A borrowed probe sample. Valid only inside the current iteration step;
+    the underlying buffer (inline copy or memfd mmap) is released when the loop
+    advances or exits."""
+
+    def __init__(self, src, csample):
+        self._src = src
+        self._c = csample
+        sid = csample.stage_id
+        self.stage_id = sid.decode() if sid else ""
+        self.seq = csample.seq
+        self.pts_us = csample.pts_us
+        self.flags = csample.flags
+        self.dropped = bool(csample.flags & 1)
+        self.payload_len = int(csample.payload_len)
+        self._ptr = csample.payload
+        if csample.has_meta:
+            self.meta = {
+                "shape": [int(csample.shape[i]) for i in range(csample.n_shape)],
+                "dtype": int(csample.dtype),
+                "layout": int(csample.layout),
+                "fourcc": int(csample.fourcc),
+                "width": int(csample.width),
+                "height": int(csample.height),
+                "stride": int(csample.stride),
+                "scale": float(csample.scale),
+                "zero_point": int(csample.zero_point),
+            }
+        else:
+            self.meta = None
+
+    @property
+    def payload(self):
+        """The sample bytes (a copy). Valid only for this iteration step."""
+        if not self._ptr or self.payload_len == 0:
+            return b""
+        return ctypes.string_at(self._ptr, self.payload_len)
+
+    @property
+    def array(self):
+        """Zero-copy numpy view over the payload. When meta is present the view
+        is typed/shaped by the TensorMeta (dtype + shape); otherwise a flat
+        uint8 array. The view is valid only until the loop advances."""
+        import numpy as np
+
+        if not self._ptr or self.payload_len == 0:
+            return np.empty((0,), dtype=np.uint8)
+        if self.meta is not None:
+            npdt = np.dtype(_PROBE_DTYPES.get(self.meta["dtype"], "uint8"))
+            count = self.payload_len // npdt.itemsize
+            carr = (c_ubyte * self.payload_len).from_address(self._ptr)
+            flat = np.frombuffer(carr, dtype=npdt, count=count)
+            shape = self.meta["shape"]
+            if shape and int(np.prod(shape)) == count:
+                return flat.reshape(shape)
+            return flat
+        carr = (c_ubyte * self.payload_len).from_address(self._ptr)
+        return np.frombuffer(carr, dtype=np.uint8)
+
+
+class ProbeSource:
+    """Probe observability tap over /run/recamera/probe.sock (spec §4).
+
+    Iterating yields ProbeSample objects; each is released automatically when
+    the loop advances to the next sample or the context exits.
+
+        from recamera_ext import ProbeSource
+        with ProbeSource(stages=["metrics"]) as probe:
+            for s in probe:
+                print(s.stage_id, s.seq, s.payload_len)
+    """
+
+    def __init__(self, stages, sample_every=1, timeout_ms=1000, lib_path=None):
+        self._lib = _load(lib_path)
+        if not hasattr(self._lib, "rc_ext_probe_open"):
+            raise RuntimeError("librecamera_ext lacks probe support (rebuild >= 1.2.0)")
+        stages = list(stages)
+        if not stages:
+            raise ValueError("stages must be a non-empty list of stage ids")
+        arr = (c_char_p * len(stages))()
+        for i, s in enumerate(stages):
+            arr[i] = s.encode() if isinstance(s, str) else s
+        err = c_int(0)
+        self._h = self._lib.rc_ext_probe_open(arr, c_size_t(len(stages)),
+                                              c_uint32(sample_every), byref(err))
+        if not self._h:
+            raise RuntimeError("rc_ext_probe_open failed: err=%d" % err.value)
+        se, mask = c_uint32(), c_uint32()
+        self._lib.rc_ext_probe_info(self._h, byref(se), byref(mask))
+        self.sample_every = se.value
+        self.subscribed_mask = mask.value
+        self._timeout = timeout_ms
+        self._cur = None  # _ProbeSample currently borrowed
+
+    def _release_cur(self):
+        if self._cur is not None:
+            self._lib.rc_ext_probe_release(self._h, byref(self._cur))
+            self._cur = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._release_cur()
+        while True:
+            csample = _ProbeSample()
+            rc = self._lib.rc_ext_probe_next(self._h, byref(csample), self._timeout)
+            if rc == 0:
+                self._cur = csample
+                return ProbeSample(self, csample)
+            if rc > 0:
+                continue  # timeout, keep waiting
+            raise StopIteration  # EOF / server error
+
+    def close(self):
+        self._release_cur()
+        h = getattr(self, "_h", None)
+        if h:
+            self._lib.rc_ext_probe_close(h)
             self._h = None
 
     def __enter__(self):

@@ -558,3 +558,16 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 - **理由**：现阶段服务少数可信方案商，威胁模型防手滑不防恶意；任何 v1 手段都防不住恶意 root（能直接写 socket/改 cmdline）。exe 路径比裸 pid 稳（pid 会回收复用）。
 - **订正**：限速记账是 **per-connection + 进程全局**（`ext_ratelimit.h`），**不受全 root 影响**；R7 真正受影响的只有 source_id 归属与 OSD 配色。
 - **P1 演进**：`HelloAck.auth_mode` 已是协商字段，token 将来作为新增模式并行，peercred/exe 兜底保留为诊断或退役，不构成技术债。
+
+---
+
+# 反馈待办:分类通道应支持可选 box(应用方 2026-08-12 反馈)
+
+**缺陷**:`InferenceClassificationEntry { score, class_id, class_name }` **无 box 字段**(而 detection/segmentation/tracking 都有 InferenceBox)。face-analysis 多张脸的属性(如 "Male,30-39,Happy")注入时丢位置信息——不知道属性属于画面里哪张脸。
+
+**根因**:proto 设计限制,classification entry 本就无位置概念。
+
+**修法**:
+- 短期绕过(不改 proto,已用):face-analysis 这类"检测+属性"本质用 `send_detections`,属性拼进 class_name label → 天然有框有属性。
+- 正式修(需 wsl 编译机,待恢复):`InferenceClassificationEntry` 加 `InferenceBox box=4`(proto3 optional,向后兼容,老消费端忽略);SDK `send_classification` 加可选 box 参数;OSD 渲染 classification 时若有 box 画在框位置。支持"按区域分类"场景(人脸属性、区域识别:某区域=货架/通道)。
+- 属低成本兼容改动。改动面:vigil/inference.proto + pb-c 三份重生成 + SDK + osd_infer 渲染分支。

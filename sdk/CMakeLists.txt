@@ -10,6 +10,7 @@ get_filename_component(RKIPC_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../../common" A
 add_library(recamera_ext SHARED
 	recamera_ext.c
 	frame_recv.c
+	probe_recv.c
 	${RKIPC_COMMON}/rc_notify/inference.pb-c.c
 	${RKIPC_COMMON}/rc_ext_core/ext_api.pb-c.c
 )
