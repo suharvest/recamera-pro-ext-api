@@ -6,10 +6,29 @@
 
 | 包 | 内容 | 给谁 | 装到哪 |
 |---|---|---|---|
-| `release/recamera-ext-api-v<ver>.tar` | **固件 sideload 包**：patched `rkipc` + `entry.cgi` + SDK + `install.sh`/`rollback.sh`/`MANIFEST.txt` | 给设备刷入扩展 API 固件的人 | 覆盖 `/oem`（持久，OTA 会还原）。设备端步骤见 `release/pkg/README.md` |
-| `release/recamera-ext-kit-v<ver>.tar.gz` | **kit 分享包**：`kit/` + `sdk/`（含 `.so` 软链）+ `examples/` + `INSTALL.sh` + `SHARE-README.md`。**不含固件** | 给已刷好固件、要在设备上开发 app 的方案商 | `INSTALL.sh` 装到 `/userdata/local/kit` + `/userdata/sdk` |
+| `release/recamera-ext-api-v<ver>.tar` | **固件 sideload 包**：patched `rkipc` + `entry.cgi` + SDK + **`wheels/`（rknnlite 运行时）** + `install.sh`/`rollback.sh`/`MANIFEST.txt` | 给设备刷入扩展 API 固件的人 | 覆盖 `/oem`（持久，OTA 会还原）+ provision `/userdata/rknnenv`。设备端步骤见 `release/pkg/README.md` |
+| `release/recamera-ext-kit-v<ver>.tar.gz` | **kit 分享包**：`kit/` + `sdk/`（含 `.so` 软链）+ `examples/` + **`wheels/`（rknnlite 运行时）** + `INSTALL.sh` + `SHARE-README.md`。**不含固件** | 给已刷好固件、要在设备上开发 app 的方案商 | `INSTALL.sh` 装到 `/userdata/local/kit` + `/userdata/sdk` + provision `/userdata/rknnenv` |
 
 两者都由 `release/build-release.sh` 从仓内源可复现地组装。
+
+## Python 推理运行时 (rknnlite) 随包 provision
+
+两个包都带 `wheels/`（源在 `release/pkg/wheels/`，`git` tracked），`install.sh` / `INSTALL.sh` 在设备上按以下配方离线装好 Python 推理运行时，vision app 开箱能跑（设备无网）：
+
+1. `ln -sf /oem/usr/lib/librknnrt.so /usr/lib/librknnrt.so`（stock `rknnlite` 硬编码此路径）；
+2. `python3 -m venv --system-site-packages /userdata/rknnenv`（numpy 用系统的，不打 wheel）；
+3. `/userdata/rknnenv/bin/pip install --no-index --find-links wheels/ rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib`；
+4. 自检 `from rknnlite.api import RKNNLite; RKNNLite()`。
+
+该段是 **best-effort**：失败仅告警，不阻塞主 `rkipc`/kit 安装。设备运行 vision app：
+
+```sh
+PYTHONPATH=/userdata/local:/userdata/sdk/python \
+LD_LIBRARY_PATH=/oem/usr/lib \
+/userdata/rknnenv/bin/python3 <app>.py
+```
+
+换 rknnlite 版本 → 替换 `release/pkg/wheels/` 下 wheel + 更新 `MANIFEST.txt` 的 md5/size，重打两个包即可。
 
 ## 何时重打
 
@@ -56,6 +75,8 @@ release/build-release.sh \
 # 脚本末尾已打印两个 tar 的 size + md5；再核对随包内容：
 tar tzf release/recamera-ext-kit-v<ver>.tar.gz | grep -iE 'rkipc|entry.cgi|market|models|internal'   # 应为空（kit 包不含固件/权重）
 tar tf  release/recamera-ext-api-v<ver>.tar                                                          # rkipc/entry.cgi/sdk/install.sh 齐全
+tar tf  release/recamera-ext-api-v<ver>.tar | grep wheels                                            # 4 个 rknnlite wheel 在包内
+tar tzf release/recamera-ext-kit-v<ver>.tar.gz | grep wheels                                         # kit 包同样带 wheels
 
 # 重复跑一次，两次 md5 应完全相同（确定性）：
 release/build-release.sh --rkipc release/pkg/rkipc --entry-cgi release/pkg/entry.cgi --version <ver>

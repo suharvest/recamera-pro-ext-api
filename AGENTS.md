@@ -61,11 +61,12 @@ python3 examples/02-inject-result/inject_result.py --task detection
 - SDK 装在 `/userdata/sdk`（`python/` + `lib/` + `recamera_ext.h`）；共享 kit 装在 `/userdata/local/kit`（使 `/userdata/local` 在 `sys.path`，`import kit` 生效）。
 - 环境变量：`PYTHONPATH=/userdata/local:/userdata/sdk/python`、`LD_LIBRARY_PATH=/userdata/sdk/lib:/oem/usr/lib:/usr/lib:$LD_LIBRARY_PATH`。
 - 前置：固件必须含扩展 API（`ls -l /run/recamera/` 应有 `frame.sock`/`result-in.sock`/`probe.sock`）。
+- **NPU 推理 (rknnlite)**：需要 NPU 的 vision app 用 release 包 provision 的运行时 `/userdata/rknnenv/bin/python3`（含 `rknnlite`），配 `PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib`。该 venv 由固件包 `install.sh` 或 kit 包 `INSTALL.sh` 离线装好（wheels 随包）；`init_runtime()` 无参即可。
 - 烟雾 demo：`examples/02-inject-result`，然后 RTSP（`rtsp://<ip>:8554/...`）或 WS（`127.0.0.1:8123 /ws/inference/results`）看注入的框。
 - 端到端自检清单见 `docs/guide/deploy-ops.md` §5。
 
 ## release（发布物）
 
-- `release/recamera-ext-api-v<ver>.tar` = 固件 sideload 包（rkipc + entry.cgi + SDK）；设备端步骤见 `release/pkg/README.md`。
-- `release/recamera-ext-kit-v<ver>.tar.gz` = kit 分享包（kit + sdk + examples + INSTALL.sh，不含固件）。
+- `release/recamera-ext-api-v<ver>.tar` = 固件 sideload 包（rkipc + entry.cgi + SDK + rknnlite wheels）；设备端步骤见 `release/pkg/README.md`。安装后 `/userdata/rknnenv` 里有 Python 推理运行时。
+- `release/recamera-ext-kit-v<ver>.tar.gz` = kit 分享包（kit + sdk + examples + rknnlite wheels + INSTALL.sh，不含固件）。
 - 如何更新两个包 → 见根目录 `RELEASING.md`（用 `release/build-release.sh` 可复现重打）。
