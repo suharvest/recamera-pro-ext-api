@@ -24,9 +24,11 @@ MQTT state document (published to <base_topic>/<app>/state each processed frame)
       "app": "yolo-detector",
       "pts": 123.456, "seq": 42,
       "results_count": 3,                 # len(results)
+      "person_count": 2,                  # visible person pose results
+      "fallen_count": 1,                  # visible person results in fall state
       "counts_by_kind": {"detection": 3}, # tally of events[].kind
       "class_counts": {"person": 1, ...}, # tally of results[].cls_name
-      "summary": { ... },                 # scalar event fields, last-wins union
+      "summary": { ... },                 # scalar event fields (fall aggregate-safe)
       "events": [ ... ]                   # app events (no pixel boxes dropped;
                                           #   kept small -- raw results omitted)
     }
@@ -341,6 +343,24 @@ class MqttSink(ResultSink):
 
     # -- ResultSink ------------------------------------------------------- #
     @staticmethod
+    def _is_person_result(result: dict) -> bool:
+        """Return whether a result represents a person.
+
+        Fall detection marks every pose with ``kind=person``.  The class-name
+        checks preserve useful counts for generic YOLO results, while the
+        track/state shape is a compatibility fallback for older fall app
+        payloads that did not set ``kind``.
+        """
+        if not isinstance(result, dict):
+            return False
+        for key in ("kind", "cls_name", "label"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip().lower() == "person":
+                return True
+        return (result.get("track_id") is not None and
+                ("fall_detected" in result or "state" in result))
+
+    @staticmethod
     def _build_state(app_id: str, seq: int, pts: float,
                      results: List[dict], events: List[dict]) -> dict:
         counts_by_kind: Dict[str, int] = {}
@@ -360,11 +380,38 @@ class MqttSink(ResultSink):
             name = r.get("cls_name")
             if isinstance(name, str):
                 class_counts[name] = class_counts.get(name, 0) + 1
+        person_results = [r for r in results
+                          if MqttSink._is_person_result(r)]
+        person_count = len(person_results)
+        fallen_count = sum(1 for r in person_results
+                           if bool(r.get("fall_detected")))
+        # Keep the counts in summary too: existing HA/custom consumers often
+        # read all app-level values from that object, while the top-level keys
+        # make the new values unambiguous and easy to template.
+        summary["person_count"] = person_count
+        summary["fallen_count"] = fallen_count
+        if person_results:
+            # The old single-person template reads summary.fall_detected.  Keep
+            # that compatibility field aggregate-safe for multi-person frames
+            # instead of letting the last pose_state event win.
+            summary["fall_detected"] = fallen_count > 0
+        fall_event_ids = [
+            int(ev["event_id"])
+            for ev in events
+            if isinstance(ev, dict) and ev.get("kind") == "fall"
+            and isinstance(ev.get("event_id"), (int, float))
+        ]
+        if fall_event_ids:
+            # A later normal person's pose_state must not erase the edge event
+            # id emitted for another person in this same frame.
+            summary["event_id"] = max(fall_event_ids)
         return {
             "app": app_id,
             "pts": pts,
             "seq": seq,
             "results_count": len(results),
+            "person_count": person_count,
+            "fallen_count": fallen_count,
             "counts_by_kind": counts_by_kind,
             "class_counts": class_counts,
             "summary": summary,
