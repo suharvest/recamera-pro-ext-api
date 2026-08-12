@@ -252,6 +252,8 @@ sink.send_detections(pts_us=frame.pts_us,
 
 C 侧对应 `rc_ext_result_open/send/close`。SDK 内部完成 proto 组包，方案商不接触 protobuf。
 
+> **坐标契约**：所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）及关键点 point 的 x/y 均为**归一化 [0,1]**（相对画面宽高的比例），与 `docs/guide/README.md` §4.4 一致。OSD 先 clamp 到 [0,1] 再乘画面宽高——传像素值会被压成 1px 隐形框。分割 mask 是行主序原始字节（非坐标）。
+
 ---
 
 ## 4. M3 观测面（`probe.sock`）
@@ -561,13 +563,15 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 
 ---
 
-# 反馈待办:分类通道应支持可选 box(应用方 2026-08-12 反馈)
+# 已解决(v1.1.0):分类通道支持可选 box(应用方 2026-08-12 反馈)
 
-**缺陷**:`InferenceClassificationEntry { score, class_id, class_name }` **无 box 字段**(而 detection/segmentation/tracking 都有 InferenceBox)。face-analysis 多张脸的属性(如 "Male,30-39,Happy")注入时丢位置信息——不知道属性属于画面里哪张脸。
+> **状态:已实现(v1.1.0)。** `rc_ext_class_t` 增 `has_box` + `x1/y1/x2/y2`;`send_classification` 支持可选第 4 元素 box `(score, class_id, label[, (x1,y1,x2,y2)])`;OSD 渲染 classification 时若有 box 画在框位置。box 坐标同为归一化 [0,1]。`InferenceClassificationEntry` 加 `InferenceBox box=4`(proto3 optional,向后兼容,老消费端忽略;`has_box=0` 保持原 box-less 行为)。以下为原始反馈脉络,保留备查。
+
+**缺陷(原始反馈)**:`InferenceClassificationEntry { score, class_id, class_name }` 曾**无 box 字段**(而 detection/segmentation/tracking 都有 InferenceBox)。face-analysis 多张脸的属性(如 "Male,30-39,Happy")注入时丢位置信息——不知道属性属于画面里哪张脸。
 
 **根因**:proto 设计限制,classification entry 本就无位置概念。
 
-**修法**:
-- 短期绕过(不改 proto,已用):face-analysis 这类"检测+属性"本质用 `send_detections`,属性拼进 class_name label → 天然有框有属性。
-- 正式修(需 wsl 编译机,待恢复):`InferenceClassificationEntry` 加 `InferenceBox box=4`(proto3 optional,向后兼容,老消费端忽略);SDK `send_classification` 加可选 box 参数;OSD 渲染 classification 时若有 box 画在框位置。支持"按区域分类"场景(人脸属性、区域识别:某区域=货架/通道)。
+**修法(已落地)**:
+- 短期绕过(不改 proto):face-analysis 这类"检测+属性"本质用 `send_detections`,属性拼进 class_name label → 天然有框有属性。
+- 正式修(v1.1.0 已实现):`InferenceClassificationEntry` 加 `InferenceBox box=4`(proto3 optional,向后兼容,老消费端忽略);SDK `send_classification` 加可选 box 参数;OSD 渲染 classification 时若有 box 画在框位置。支持"按区域分类"场景(人脸属性、区域识别:某区域=货架/通道)。
 - 属低成本兼容改动。改动面:vigil/inference.proto + pb-c 三份重生成 + SDK + osd_infer 渲染分支。

@@ -165,7 +165,7 @@ reboot / 部署后依次核对：
   python3 - <<'PY'
   import recamera_ext as re
   s = re.ResultSink("selftest")   # 打开 result-in.sock 握手
-  print("rc =", s.send_detections(123456, [(10,20,110,220,0.9,"person",0)]))  # 0 = accepted
+  print("rc =", s.send_detections(123456, [(0.05,0.07,0.62,0.94,0.9,"person",0)]))  # 归一化 [0,1]; 0 = accepted
   PY
   ```
 - [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/etc/init.d/S94appmgr status`）

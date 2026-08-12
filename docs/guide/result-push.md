@@ -72,6 +72,8 @@ message InferenceResult {
 
 坐标为 float 像素坐标（与官方内建推理同语义）。规划中的 `source_id`/`pts_us` 字段（tag 4/5）尚未合入当前 proto——不要自行占用这两个 tag。
 
+> **注**：此为 **notify 出站**（内建推理原生坐标），与 `result-in.sock` 注入的**归一化 [0,1]** 契约不是同一条路径——notify 不经 result-in.sock、不上 OSD、无 clamp。其坐标单位以内建推理为准（需核实），不要照搬 result-in.sock 的归一化约定。
+
 ## 注入示例（Python）
 
 ```python

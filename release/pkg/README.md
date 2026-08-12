@@ -35,7 +35,7 @@ export PYTHONPATH=/userdata/sdk/python:$PYTHONPATH
 python3 - <<'PY'
 import recamera_ext as re
 s = re.ResultSink("selftest")                 # opens /run/recamera/result-in.sock (handshake)
-print("rc =", s.send_detections(123456, [(10,20,110,220,0.9,"person",0)]))  # 0 = accepted
+print("rc =", s.send_detections(123456, [(0.05,0.07,0.62,0.94,0.9,"person",0)]))  # normalized [0,1]; 0 = accepted
 PY
 ```
 
