@@ -1,13 +1,29 @@
 {
-  "_comment": "Shared-model manifest for gen_catalog.py. Maps an app id to the SHARED model files it needs dropped into a device directory (target_path) at install time -- for apps whose package does NOT bundle the model (one-gen models[]+target_path parity). Files are staged under <models-dir>/<app_id>/<filename> (default market/packaging/models/<app_id>/). gen_catalog hashes the real staged bytes; nothing here is hand-written except the file list + target_path. Apps absent from this map get models: [] (their model is bundled inside the package).",
+  "_comment": "Shared-model manifest for gen_catalog.py. Maps an app id to the SHARED model files it needs dropped into device directories at install time -- for apps whose package does NOT bundle the model (one-gen models[]+target_path parity). gen_catalog hashes the real staged bytes; nothing here is hand-written except the file list + target_path. Apps absent from this map get models: [] (their model is bundled inside the package).",
+  "_schema": "Two accepted per-app forms. (a) SINGLE target (backward compatible): {\"target_path\": \"/abs/dir\", \"files\": [\"a\", \"b\"]} -- files staged at <models-dir>/<app_id>/<file>. (b) MULTI target: {\"groups\": [{\"target_path\": \"/abs/dir\", \"files\": [...]}, {\"target_path\": \"/abs/dir/sub\", \"subdir\": \"sub\", \"files\": [...]}]} -- each group has its OWN target_path so different files can land in different device subdirs. Optional per-group \"subdir\" is the staging path segment under <models-dir>/<app_id>/ AND the URL path segment (default \"\", i.e. files directly under the app stage). Filenames are always bare basenames. Each staged file becomes one catalog models[] entry {url, filename, sha256, size, target_path} -- the entry shape is identical for both forms; groups only change where the bytes come from and where they land.",
   "voice-transcribe": {
-    "target_path": "/userdata/local/models/asr",
-    "files": [
-      "sensevoice_rv1126b_w4a16.rknn",
-      "am.mvn",
-      "embedding.npy",
-      "chn_jpn_yue_eng_ko_spectok.bpe.model",
-      "silero_vad.onnx"
+    "groups": [
+      {
+        "target_path": "/userdata/local/models/asr",
+        "files": [
+          "sensevoice_rv1126b_w4a16.rknn",
+          "am.mvn",
+          "embedding.npy",
+          "chn_jpn_yue_eng_ko_spectok.bpe.model",
+          "silero_vad.onnx"
+        ]
+      },
+      {
+        "target_path": "/userdata/local/models/asr/kws",
+        "subdir": "kws",
+        "files": [
+          "encoder.int8.onnx",
+          "decoder.int8.onnx",
+          "joiner.int8.onnx",
+          "tokens.txt",
+          "keywords.txt"
+        ]
+      }
     ]
   }
 }

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-12T14:33:46Z",
+  "generated": "2026-08-12T23:07:23Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -164,6 +164,41 @@
           "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
           "size": 2327524,
           "target_path": "/userdata/local/models/asr"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/kws/encoder.int8.onnx",
+          "filename": "encoder.int8.onnx",
+          "sha256": "1e721676515bcd42a186979733981213c66c80db680e1cc582dfedf3be76e678",
+          "size": 4807159,
+          "target_path": "/userdata/local/models/asr/kws"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/kws/decoder.int8.onnx",
+          "filename": "decoder.int8.onnx",
+          "sha256": "e40ff43297abe815e8898494c17e71bba2152d9d40fa3eb803f75d0f7533329a",
+          "size": 277985,
+          "target_path": "/userdata/local/models/asr/kws"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/kws/joiner.int8.onnx",
+          "filename": "joiner.int8.onnx",
+          "sha256": "eae9da0c7e1e6c6a3f4cc42d167899c388f6c6701b94cb96320e4f55df79624c",
+          "size": 163380,
+          "target_path": "/userdata/local/models/asr/kws"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/kws/tokens.txt",
+          "filename": "tokens.txt",
+          "sha256": "fd2ded4050a55d2b1578870ba8697d02371980217806b7558bd0a5cc60f3ba53",
+          "size": 5006,
+          "target_path": "/userdata/local/models/asr/kws"
+        },
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-assets/recamera_pro/models/voice-transcribe/kws/keywords.txt",
+          "filename": "keywords.txt",
+          "sha256": "6952c427ca8bd27b20c79c22d6bd611cf62401fa72fda14a447960f1b74c8a8d",
+          "size": 22,
+          "target_path": "/userdata/local/models/asr/kws"
         }
       ]
     },

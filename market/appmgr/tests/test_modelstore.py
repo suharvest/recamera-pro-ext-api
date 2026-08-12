@@ -43,6 +43,22 @@ class WriteModelTests(unittest.TestCase):
         self.assertEqual(res["path"], os.path.join(target, "embedding.npy"))
         self.assertTrue(os.path.isdir(target))
 
+    def test_write_into_nested_subdir_creates_tree(self):
+        # A deeper whitelisted subdir (e.g. .../models/asr/kws) must be accepted
+        # and its full tree auto-created -- this is exactly the voice-transcribe
+        # KWS case (files land in /userdata/local/models/asr/kws).
+        target = os.path.join(self.root, "asr", "kws")
+        res = modelstore.write_model(target, "encoder.int8.onnx", self.data, self.sha)
+        self.assertEqual(res["path"], os.path.join(target, "encoder.int8.onnx"))
+        self.assertTrue(os.path.isdir(target))
+        self.assertTrue(os.path.isfile(res["path"]))
+
+    def test_reject_dotdot_escape_from_subdir(self):
+        # A subdir path that uses `..` to climb back out of the root is refused
+        # even though a prefix of it is whitelisted.
+        with self.assertRaises(modelstore.ModelStoreError):
+            modelstore.write_model(self.root + "/asr/../../etc", "m.onnx", self.data)
+
     def test_no_sha_supplied_still_writes(self):
         res = modelstore.write_model(self.root, "x.rknn", self.data)
         self.assertEqual(res["sha256"], self.sha)

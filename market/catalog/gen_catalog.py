@@ -42,10 +42,14 @@ packages bundle their model(s) inside the tar (see packaging/build.py), so their
 `models` list is empty. But some apps (voice-transcribe) ship a LARGE, SHARED
 model that lives in a well-known device dir (/userdata/local/models/asr) reused
 by several apps -- bundling it in every package would be wasteful. Those files
-are declared in `models.json` (app id -> {target_path, files[]}), staged under
-`<models-dir>/<app_id>/`, hashed here, and emitted as `models[]` entries
-{url, filename, sha256, size, target_path}. The browser downloads each, verifies
-the sha256, and drops it into target_path via appmgr's /putModel before install.
+are declared in `models.json` (app id -> single-target {target_path, files[]},
+or multi-target {groups:[{target_path, files[], subdir?}, ...]} so one app's
+files can land in several device dirs -- e.g. voice-transcribe drops ASR files
+in …/asr and KWS files in …/asr/kws), staged under `<models-dir>/<app_id>/`
+(plus the group's optional `subdir`), hashed here, and emitted as `models[]`
+entries {url, filename, sha256, size, target_path} -- one entry per file, each
+carrying its own group's target_path. The browser downloads each, verifies the
+sha256, and drops it into target_path via appmgr's /putModel before install.
 
 Stdlib only (hashlib, tarfile, json).
 
@@ -127,7 +131,9 @@ def _derive_models_base(base_url: str, override: str | None) -> str:
 
 
 def _load_models_spec(spec_path: str) -> dict:
-    """Read models.json (app id -> {target_path, files[]}). Missing file -> {}."""
+    """Read models.json (app id -> single-target {target_path, files[]} OR
+    multi-target {groups:[{target_path, files[], subdir?}, ...]}); see
+    _spec_groups. Missing file -> {}."""
     try:
         with open(spec_path) as f:
             spec = json.load(f)
@@ -136,33 +142,74 @@ def _load_models_spec(spec_path: str) -> dict:
     return {k: v for k, v in spec.items() if not k.startswith("_")}
 
 
+def _spec_groups(app_id: str, entry: dict) -> list:
+    """Normalize an app's models.json entry into a list of groups.
+
+    Two accepted forms (see models.json `_schema`):
+      * single target (backward compatible): {"target_path", "files"}
+        -> one group with subdir "".
+      * multi target: {"groups": [{"target_path", "files", "subdir"?}, ...]}
+        -> each group carries its OWN target_path (so different files land in
+        different device subdirs) and an optional staging/URL `subdir`.
+    Every returned group is {"target_path", "subdir", "files"}."""
+    if "groups" in entry:
+        groups = entry["groups"]
+        if not isinstance(groups, list) or not groups:
+            raise SystemExit(f"models.json: {app_id} 'groups' must be a non-empty list")
+        norm = []
+        for i, g in enumerate(groups):
+            if "target_path" not in g or "files" not in g:
+                raise SystemExit(
+                    f"models.json: {app_id} group #{i} needs 'target_path' and 'files'")
+            norm.append({
+                "target_path": g["target_path"],
+                "subdir": g.get("subdir", ""),
+                "files": g["files"],
+            })
+        return norm
+    # Single-target backward-compatible form.
+    if "target_path" not in entry or "files" not in entry:
+        raise SystemExit(
+            f"models.json: {app_id} needs 'target_path'+'files' or 'groups'")
+    return [{"target_path": entry["target_path"], "subdir": "", "files": entry["files"]}]
+
+
 def _build_models(app_id: str, spec: dict, models_dir: str, models_base: str) -> list:
     """Resolve one app's shared-model files into catalog `models[]` entries.
 
-    Files are staged at <models-dir>/<app_id>/<filename>; each is hashed for its
-    real sha256/size. A missing staged file is a hard error -- shipping a catalog
-    that points at a model the browser can't fetch is worse than failing loudly."""
+    Files are staged at <models-dir>/<app_id>/<subdir>/<filename> (subdir empty
+    for the common case); each is hashed for its real sha256/size. A missing
+    staged file is a hard error -- shipping a catalog that points at a model the
+    browser can't fetch is worse than failing loudly. Each entry carries its own
+    group's target_path, so one app can drop files into several device dirs (e.g.
+    voice-transcribe: .../asr plus .../asr/kws). The emitted entry shape
+    {url, filename, sha256, size, target_path} is unchanged -- the browser still
+    fetches `url`, verifies `sha256`, and pushes `filename` into `target_path`."""
     entry = spec.get(app_id)
     if not entry:
         return []
-    target_path = entry["target_path"]
     out = []
     app_stage = os.path.join(models_dir, app_id)
-    for fname in entry["files"]:
-        fpath = os.path.join(app_stage, fname)
-        if not os.path.isfile(fpath):
-            raise SystemExit(
-                f"models.json: {app_id} needs {fname} but it is not staged at {fpath}")
-        sha, size = _sha256_and_size(fpath)
-        out.append({
-            "url": models_base + app_id + "/" + fname,
-            "filename": fname,
-            "sha256": sha,
-            "size": size,
-            "target_path": target_path,
-        })
-        print(f"  model {fname:40s} {size/1024:10.1f} KiB  {sha[:12]}… -> {target_path}",
-              file=sys.stderr)
+    for group in _spec_groups(app_id, entry):
+        target_path = group["target_path"]
+        subdir = group["subdir"].strip("/")
+        stage_dir = os.path.join(app_stage, subdir) if subdir else app_stage
+        url_prefix = models_base + app_id + "/" + (subdir + "/" if subdir else "")
+        for fname in group["files"]:
+            fpath = os.path.join(stage_dir, fname)
+            if not os.path.isfile(fpath):
+                raise SystemExit(
+                    f"models.json: {app_id} needs {fname} but it is not staged at {fpath}")
+            sha, size = _sha256_and_size(fpath)
+            out.append({
+                "url": url_prefix + fname,
+                "filename": fname,
+                "sha256": sha,
+                "size": size,
+                "target_path": target_path,
+            })
+            print(f"  model {fname:40s} {size/1024:10.1f} KiB  {sha[:12]}… -> {target_path}",
+                  file=sys.stderr)
     return out
 
 
