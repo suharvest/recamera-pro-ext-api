@@ -503,6 +503,14 @@ for m in app.models:
 典型发布链：`build.py`（确定性打包）→ `sign.py` → `gen_catalog.py --base-url <CDN>/packages/`
 → `publish_oss.sh --yes`。前端 `CAT_DEFAULT` 指向 CDN 的 `catalog.json` url。
 
+**v1.3.0 发布记录（2026-08-13）**：9 个 app 包本轮加入 manifest `output` 块（结果输出
+sink 配置，见 [output-sink.md](./output-sink.md)）+ app.py 的 `on_config_reload`（配置热重载），
+因此**全部 9 包重打 + 重签 + catalog 用 CDN base 重新生成并发布**。注意 `output` 块随包内
+`manifest.json` 分发，**不写进 catalog.json**（catalog 每 app 只含 id/name/version/description/
+arch/package/models，`gen_catalog.py:265-275`）；设备安装后从包里读 `output`。本轮 `fall-detection`
+升到 **0.2.0**，其余 8 app 仍 0.1.0。catalog live 地址：
+`https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/catalog.json`。
+
 ---
 
 ## 7. 安装/管理 API 参考

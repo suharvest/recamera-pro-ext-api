@@ -72,6 +72,52 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 2baebbb55155efb0def2c
 
 正式发布形态是把扩展改动全量编进 rootfs，打成 `update_ota.tar` / `update.img`，走 RKDevTool / upgrade_tool 或官方 OTA 分发。这属于**打包分发范畴，本轮暂未做**——此处仅标注方向：编译入口 `./build.sh app`（编 rkipc）→ `./build.sh firmware`（打包分区）→ `./build.sh updateimg` / `allsave`（整包），产物在 `output/image/`（见 `recamera-rk-build` skill）。做成 OTA 后，`/oem` 覆盖就成了固件的一部分，不再需要 sideload。
 
+### 2.3 v1.3.0 一键部署（应用层，`deploy-app.sh`，推荐）
+
+`release/deploy/deploy-app.sh` 把本轮全部**应用层**改动一次性打到设备，让设备达到 v1.3.0 完整状态，全程 **adb over root**，**不碰 rkipc / 固件 / cgi-bin**（部署前后各取一次 `/oem/usr/bin/rkipc` md5，收尾断言未变，变了 FATAL）。
+
+```bash
+cd release/deploy
+./deploy-app.sh                       # 默认 host 192.168.42.1
+./deploy-app.sh --host 192.168.10.x   # 指定设备 IP（IP 易变，先确认当前地址）
+./deploy-app.sh --skip-kit            # kit 已装，只更 appmgr/前端/apps
+./deploy-app.sh --no-activate         # 不启动 app、不碰摄像头
+```
+
+**5 步流程（每步幂等 + 时间戳备份到 `/userdata/_deploy/backups/` + dmesg 查 vpss）**：
+
+1. **kit + SDK + wheels** — push `recamera-ext-kit-v1.3.0.tar.gz`，跑其 `INSTALL.sh`：kit→`/userdata/local/kit`，SDK→`/userdata/sdk`，离线 wheels（rknnlite / jinja2 / markupsafe）→ venv `/userdata/rknnenv`。
+2. **appmgr** — 备份旧 `/userdata/local/appmgr`，merge-extract 新代码（覆盖 `.py` + `keys/`，保留运行态 `audit.log`/`mqtt.json`/锁）；**`setsid python3 -m appmgr serve`（cd 到 `/userdata/local`，无 env hack）**，验证 `127.0.0.1:8130` 存活。
+3. **前端** — 备份 `/oem/usr/www`；`static/` 整目录替换（清旧 hash bundle），顶层 html/json/png/svg 覆盖，目录 755 / 文件 644，**不碰 `cgi-bin` 与 `sdcard/usb0/userdata` 软链**。
+4. **apps** — 备份 `state.json`，merge-extract 9 个 app 的 `manifest.json`+`app.py`，**保留设备上已有的大模型文件**（模型走 catalog `putModel`，不在 apps 包内）。
+5. **激活 + 校验** — `POST /api/appMgr/switch` 激活一个 app（默认 `retail-vision`），`ws_probe.py` 确认 `:8124` 结果流出帧，dmesg 无 vpss。
+
+**CDN 下载**（前缀 `https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/release/v1.3.0/`）与 md5：
+
+| 包 | size (bytes) | md5 | CDN URL |
+|----|-------------:|-----|---------|
+| `recamera-ext-kit-v1.3.0.tar.gz` | 2089022 | `e7eafcc56024073eedd200b578e285ce` | `…/release/v1.3.0/recamera-ext-kit-v1.3.0.tar.gz` |
+| `recamera-ext-api-v1.3.0.tar` | 18698240 | `475112c11c87b694d012c14d0b9a51fa` | `…/release/v1.3.0/recamera-ext-api-v1.3.0.tar` |
+| `appmgr-v1.3.0.tar.gz` | 30551 | `3e1f4578e051d2a08cf13e5002e3eaba` | `…/release/v1.3.0/appmgr-v1.3.0.tar.gz` |
+| `frontend-v1.3.0.tar.gz` | 36751043 | `613aea306ec35a0a75ef0350e9ce4ed2` | `…/release/v1.3.0/frontend-v1.3.0.tar.gz` |
+| `apps-v1.3.0.tar.gz` | 984781 | `8a3059e10648bff5ef0df10ce09751af` | `…/release/v1.3.0/apps-v1.3.0.tar.gz` |
+
+`deploy-app.sh` / `deploy-firmware.sh` / `README.md` 三个脚本/文档同前缀下同名可取。
+
+### 2.4 遮罩固件冷启动（`deploy-firmware.sh`，高危，单独跑）
+
+> ⚠️ **换 rkipc 必须冷启动（整机 `reboot`）激活。热替换会触发 `cv181x_vpss` / CSIBDG FIFO 内核 oops，可能把设备搞挂。只在你能物理复位设备（在设备旁 / 有电源或 reset 通路）时才跑。**
+
+`deploy-app.sh` 不依赖遮罩固件也能把 apps/前端/appmgr 跑起来；仅当需要软件叠加 OSD / 结果注入等扩展 API 能力时才装固件。脚本会要求交互输入 `I-HAVE-PHYSICAL-ACCESS` 才继续，`install.sh` 一次性把原厂 `rkipc`/`entry.cgi` 备份到 `/userdata/*.factory.bak`。
+
+```bash
+./deploy-firmware.sh --host <ip>              # 安装：md5 校验→备份原厂→装入 /oem→停在 reboot 前
+./deploy-firmware.sh --host <ip> --reboot     # 装完立即重启激活
+./deploy-firmware.sh --host <ip> --rollback   # 回滚原厂 rkipc（/userdata/rkipc.factory.bak）
+```
+
+不传 `--reboot` 时脚本只 stage 改动并提示手动 `reboot`（推荐从设备控制台冷启动）。
+
 ---
 
 ## 3. 手动热替换流程（开发 / 单设备）
@@ -266,6 +312,7 @@ adb shell "sh /userdata/ext-pkg/rollback.sh --reboot"
 | **热替换后双实例抢相机 → VPSS 崩溃** | `killall rkipc` 精确匹配进程名，漏杀 `rkipc.m2` 这种带后缀的自编版。一律 `for p in $(pgrep -f rkipc); do kill $p; done`（`pgrep -f` 匹配完整命令行）。**kill 后 `sleep 3` 再起新实例**，等 VPSS/VI 资源释放。|
 | **dmesg 出现 `CSIBDG fifo overflow` / `vpss ... fifo overflow` / `Unable to handle kernel paging request` / `Oops`** | cv181x/rkvpss 内核驱动处理 FIFO 溢出时崩溃（驱动 bug，救不回）。一见立即 kill rkipc + `adb reboot` + 停手排查。**预防**：同一时刻只一个进程用相机、别碰 rkipc 正用的 chn、kill 干净再起。|
 | **后台起 rkipc / adb shell 一退就没了** | adbd 退出会 reap 它的子进程树，`setsid` / `start-stop-daemon -b` 挡不住。改用：脚本 push 后 `adb shell 'sh run.sh'`（脚本内 `exec rkipc`，reparent 到 init）、或验完 `adb reboot` 让 init 拉起、或起进程后别退 adb shell（前台盯）。|
+| **重启 appmgr 时 `pkill -f 'appmgr serve'` 把自己杀了**（重启脚本刚起就没、shell 被 SIGTERM）| `pkill -f` 按完整命令行匹配，会命中**正在执行重启的那条命令本身**（含 `appmgr serve` 子串）→ 自杀。停旧进程改为：扫 `/proc/<pid>/cmdline` 匹配 `-m appmgr serve` 且**排除当前 shell 的 `$$`**，再逐个 kill；起新进程用 `cd /userdata/local && setsid python3 -m appmgr serve </dev/null &>>log &`（reparent 到 init，无 env hack）。`deploy-app.sh` step 2 已内建这套。|
 | **画了检测框但 RTSP / 编码流里看不到**（datetime 却可见）| VENC 只合成部分 RGN layer：每通道最高层不被合成。INFER overlay 用被合成的低 layer（主 **1** 子 **5**，不是 3/7）。排查"画了不显示"先怀疑 layer 值，不是坐标/颜色/SetBitMap。附带：OSD 调色板注意 ARGB/BGRA 字节序（品红写反显示成青色）。|
 | **改过 osd 的自编 rkipc 起不来**（`osd_manager_init` 因 `rkipc.ini` 缺 `[osd] cfg=` 返 `-ENOENT`）| 已修：`osd_manager_load_cfg` 缺 cfg 降级为内置默认（inferenceOverlay 默认开）而非 init 失败。用含此修复的 rkipc（本 release 已含）。|
 | **扩展应用连麦克风 / 相机权限拒绝** | `/dev/snd` `/dev/video` `/dev/mpi` 全 root 属主，SSH 的 admin（uid 1000）不在 audio 组、开不了硬件。**扩展应用必须以 root 运行**（appmgr / 约定的 SysVinit 脚本以 root 启动）。调试用 adb（root）而非 ssh admin。|
