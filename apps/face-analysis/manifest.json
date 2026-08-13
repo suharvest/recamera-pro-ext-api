@@ -114,6 +114,7 @@
           {
             "key": "confidence",
             "type": "number",
+            "apply": "live",
             "title": "Face confidence",
             "title_zh": "人脸置信度",
             "min": 0.05,
@@ -124,6 +125,7 @@
           {
             "key": "iou",
             "type": "number",
+            "apply": "live",
             "title": "NMS IoU",
             "title_zh": "NMS IoU",
             "min": 0.1,
@@ -134,6 +136,7 @@
           {
             "key": "max_faces",
             "type": "number",
+            "apply": "live",
             "title": "Max faces / frame",
             "title_zh": "每帧最大人脸数",
             "min": 1,
@@ -144,6 +147,7 @@
           {
             "key": "crop_pad",
             "type": "number",
+            "apply": "live",
             "title": "Face ROI padding",
             "title_zh": "人脸 ROI 外扩",
             "min": 0.0,
@@ -161,6 +165,7 @@
           {
             "key": "emotion_interval",
             "type": "number",
+            "apply": "live",
             "title": "Emotion every N frames",
             "title_zh": "情绪每 N 帧",
             "min": 1,
@@ -171,6 +176,7 @@
           {
             "key": "aggregate_window_sec",
             "type": "number",
+            "apply": "restart",
             "title": "Aggregation window (s)",
             "title_zh": "聚合窗口（秒）",
             "min": 5.0,
@@ -188,6 +194,7 @@
           {
             "key": "privacy_blur",
             "type": "boolean",
+            "apply": "live",
             "title": "Blur faces in overlay",
             "title_zh": "叠加层模糊人脸",
             "default": true

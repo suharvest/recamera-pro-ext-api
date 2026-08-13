@@ -51,6 +51,7 @@
           {
             "key": "mode",
             "type": "enum",
+            "apply": "live",
             "title": "Exercise",
             "title_zh": "运动模式",
             "options": [
@@ -73,6 +74,7 @@
           {
             "key": "target_reps",
             "type": "number",
+            "apply": "live",
             "title": "Reps per set",
             "title_zh": "每组次数",
             "min": 1,
@@ -83,6 +85,7 @@
           {
             "key": "target_sets",
             "type": "number",
+            "apply": "live",
             "title": "Sets",
             "title_zh": "组数",
             "min": 1,
@@ -93,6 +96,7 @@
           {
             "key": "idle_reset_seconds",
             "type": "number",
+            "apply": "live",
             "title": "Reset after idle (seconds, 0 = never)",
             "title_zh": "无人后重置计数（秒，0 = 不重置）",
             "min": 0,
@@ -110,6 +114,7 @@
           {
             "key": "confidence",
             "type": "number",
+            "apply": "live",
             "title": "Person confidence threshold",
             "title_zh": "人体置信度阈值",
             "min": 0.05,
@@ -120,6 +125,7 @@
           {
             "key": "keypoint_confidence",
             "type": "number",
+            "apply": "live",
             "title": "Keypoint confidence threshold",
             "title_zh": "关键点置信度阈值",
             "min": 0.05,

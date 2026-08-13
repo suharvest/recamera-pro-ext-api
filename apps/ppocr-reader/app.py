@@ -110,6 +110,36 @@ class PpocrReaderApp(App):
               f"dict_classes={len(self.dictionary)} input_size={self.input_size}",
               flush=True)
 
+    def on_config_reload(self, config):
+        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+
+        ppocr-reader's live knobs are the DB detection thresholds and the min
+        recognition confidence -- all plain attributes read per-frame in
+        run_postproc / on_results. Reapply by VALUE-REPLACE only; the stage-2 rec
+        model and dictionary are never reloaded (not in config_schema).
+        """
+        params = {k: v for k, v in (config or {}).items() if v is not None}
+        self.config = config or {}
+
+        def _f(key, cur):
+            try:
+                return float(params.get(key, cur))
+            except (TypeError, ValueError):
+                return cur
+
+        self.det_thresh = _f("det_thresh", self.det_thresh)
+        self.box_thresh = _f("box_thresh", self.box_thresh)
+        self.unclip_ratio = _f("unclip_ratio", self.unclip_ratio)
+        try:
+            self.max_boxes = int(params.get("max_boxes", self.max_boxes))
+        except (TypeError, ValueError):
+            pass
+        self.min_rec_conf = _f("min_rec_conf", self.min_rec_conf)
+        print(f"[ppocr-reader] hot-reload det_thresh={self.det_thresh} "
+              f"box_thresh={self.box_thresh} unclip={self.unclip_ratio} "
+              f"max_boxes={self.max_boxes} min_rec_conf={self.min_rec_conf}",
+              flush=True)
+
     # -- stage 1 post-process: DB probability map -> text-box quads --------- #
     def run_postproc(self, outs, info):
         boxes = db_ocr.decode(outs, info,

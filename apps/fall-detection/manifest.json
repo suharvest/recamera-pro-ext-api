@@ -51,6 +51,7 @@
           {
             "key": "confidence",
             "type": "number",
+            "apply": "live",
             "title": "Person confidence",
             "title_zh": "人体置信度",
             "min": 0.05,
@@ -61,6 +62,7 @@
           {
             "key": "keypoint_confidence",
             "type": "number",
+            "apply": "live",
             "title": "Keypoint confidence",
             "title_zh": "关键点置信度",
             "min": 0.05,
@@ -71,6 +73,7 @@
           {
             "key": "hip_drop_speed_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Hip drop speed",
             "title_zh": "髋部下坠速度",
             "min": 0.0,
@@ -81,6 +84,7 @@
           {
             "key": "hip_drop_distance_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Minimum hip drop distance",
             "title_zh": "最小髋部下坠距离",
             "min": 0,
@@ -91,6 +95,7 @@
           {
             "key": "motion_window_sec",
             "type": "number",
+            "apply": "live",
             "title": "Drop-to-posture window (s)",
             "title_zh": "下坠到转横窗口（秒）",
             "min": 0,
@@ -101,6 +106,7 @@
           {
             "key": "torso_angle_threshold_deg",
             "type": "number",
+            "apply": "live",
             "title": "Lying torso angle (deg)",
             "title_zh": "躺卧躯干角度（度）",
             "min": 20,
@@ -111,6 +117,7 @@
           {
             "key": "bbox_aspect_ratio_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Lying box aspect ratio",
             "title_zh": "躺卧框宽高比",
             "min": 1.0,
@@ -121,6 +128,7 @@
           {
             "key": "min_suspected_features",
             "type": "number",
+            "apply": "live",
             "title": "Minimum evidence features",
             "title_zh": "最少证据特征数",
             "min": 1,
@@ -138,6 +146,7 @@
           {
             "key": "confirmation_sec",
             "type": "number",
+            "apply": "live",
             "title": "Confirmation window (s)",
             "title_zh": "确认窗口（秒）",
             "min": 0,
@@ -148,6 +157,7 @@
           {
             "key": "suspected_timeout_sec",
             "type": "number",
+            "apply": "live",
             "title": "Suspected timeout (s)",
             "title_zh": "疑似超时（秒）",
             "min": 0.1,
@@ -158,6 +168,7 @@
           {
             "key": "occlusion_grace_sec",
             "type": "number",
+            "apply": "live",
             "title": "Post-impact occlusion grace (s)",
             "title_zh": "落地后遮挡宽限（秒）",
             "min": 0,
@@ -168,6 +179,7 @@
           {
             "key": "recovery_torso_angle_deg",
             "type": "number",
+            "apply": "live",
             "title": "Upright torso angle (deg)",
             "title_zh": "站立躯干角度（度）",
             "min": 5,
@@ -178,6 +190,7 @@
           {
             "key": "recovery_aspect_ratio",
             "type": "number",
+            "apply": "live",
             "title": "Upright box aspect ratio",
             "title_zh": "站立框宽高比",
             "min": 1.0,
@@ -188,6 +201,7 @@
           {
             "key": "recovery_window_sec",
             "type": "number",
+            "apply": "live",
             "title": "Recovery window (s)",
             "title_zh": "恢复窗口（秒）",
             "min": 0,
@@ -198,6 +212,7 @@
           {
             "key": "cooldown_sec",
             "type": "number",
+            "apply": "live",
             "title": "Alarm cooldown (s)",
             "title_zh": "报警冷却（秒）",
             "min": 0,

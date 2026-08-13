@@ -199,6 +199,30 @@ def start(app_id: str) -> int:
     return proc.pid
 
 
+def reload(app_id: str) -> bool:
+    """Hot-reload a running app's config via SIGHUP (DESIGN §3.2/§4).
+
+    Sends SIGHUP to the app's MAIN pid ONLY -- never the process group -- so the
+    kit App base loop re-reads config.json in place. ffmpeg children must NOT
+    receive SIGHUP (default disposition would terminate them), which is exactly
+    why we target the single pid rather than killpg.
+
+    Returns True if the signal was delivered, False if the app is not running
+    (in which case the caller has already persisted config.json and there is
+    nothing to signal -- the new values apply on the next start).
+    """
+    if not paths.valid_app_id(app_id):
+        raise SupervisorError(f"invalid app id {app_id!r}")
+    pid = is_running(app_id)
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGHUP)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def _killpg(pid: int, sig: int) -> None:
     try:
         os.killpg(os.getpgid(pid), sig)

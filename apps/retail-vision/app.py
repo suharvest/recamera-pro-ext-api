@@ -111,6 +111,43 @@ class RetailVisionApp(App):
               f"speed={self.dwell.cfg.speed_threshold}px/s) "
               f"window={self.window.window_sec}s", flush=True)
 
+    def on_config_reload(self, config):
+        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+
+        retail-vision stores its live knobs under app-specific keys
+        (`confidence`, `iou`, `dwell_*`); the base App.on_config_reload only
+        knows `conf`/`iou`, so it would silently miss a `confidence` change.
+        Reapply the numeric live params here -- value-replacing only, NEVER
+        rebuilding the tracker / model / frame source (those are apply:"restart"
+        and never reach this hook). `window_duration` is apply:"restart" and is
+        intentionally NOT touched here.
+        """
+        params = {k: v for k, v in (config or {}).items() if v is not None}
+        self.config = config or {}
+        try:
+            self.conf = float(params.get("confidence", self.conf))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.iou = float(params.get("iou", self.iou))
+        except (TypeError, ValueError):
+            pass
+        # dwell thresholds are apply:"live"; mutate the existing DwellConfig in
+        # place so per-track dwell timers are preserved across the reload.
+        try:
+            self.dwell.cfg.speed_threshold = float(
+                params.get("dwell_speed", self.dwell.cfg.speed_threshold))
+            self.dwell.cfg.engaged_sec = float(
+                params.get("dwell_engaged", self.dwell.cfg.engaged_sec))
+            self.dwell.cfg.assistance_sec = float(
+                params.get("dwell_assist", self.dwell.cfg.assistance_sec))
+        except (TypeError, ValueError, AttributeError):
+            pass
+        print(f"[retail] hot-reload conf={self.conf} iou={self.iou} "
+              f"dwell(engaged={self.dwell.cfg.engaged_sec}s "
+              f"assist={self.dwell.cfg.assistance_sec}s "
+              f"speed={self.dwell.cfg.speed_threshold}px/s)", flush=True)
+
     def on_results(self, results, frame):
         # 1. Keep only person detections for tracking.
         persons = [d for d in results if d.get("cls") == PERSON_CLS]

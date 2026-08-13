@@ -48,6 +48,7 @@
           {
             "key": "wake_backend",
             "type": "enum",
+            "apply": "restart",
             "title": "Wake backend",
             "title_zh": "唤醒后端",
             "options": [
@@ -63,6 +64,7 @@
           {
             "key": "wakeword",
             "type": "string",
+            "apply": "live",
             "title": "Wake phrase (ASR backend)",
             "title_zh": "唤醒短语（ASR 后端）",
             "default": "hello camera"
@@ -70,6 +72,7 @@
           {
             "key": "kws_threshold",
             "type": "number",
+            "apply": "restart",
             "title": "KWS trigger threshold",
             "title_zh": "KWS 触发阈值",
             "min": 0.05,
@@ -80,6 +83,7 @@
           {
             "key": "kws_score",
             "type": "number",
+            "apply": "restart",
             "title": "KWS boost score",
             "title_zh": "KWS 加权分数",
             "min": 0.5,
@@ -97,6 +101,7 @@
           {
             "key": "asr_backend",
             "type": "enum",
+            "apply": "restart",
             "title": "ASR backend",
             "title_zh": "识别后端",
             "options": [
@@ -114,6 +119,7 @@
           {
             "key": "language",
             "type": "enum",
+            "apply": "restart",
             "title": "Language",
             "title_zh": "语言",
             "options": [
@@ -137,6 +143,7 @@
           {
             "key": "min_silence_sec",
             "type": "number",
+            "apply": "live",
             "title": "Silence to end utterance (s)",
             "title_zh": "断句静音时长（秒）",
             "min": 0.2,
@@ -147,6 +154,7 @@
           {
             "key": "max_utterance_sec",
             "type": "number",
+            "apply": "live",
             "title": "Max recording length (s)",
             "title_zh": "最长录音时长（秒）",
             "min": 2.0,
@@ -157,6 +165,7 @@
           {
             "key": "preroll_ms",
             "type": "number",
+            "apply": "live",
             "title": "Pre-roll look-back (ms)",
             "title_zh": "句头回看补偿（毫秒）",
             "min": 0.0,
@@ -167,6 +176,7 @@
           {
             "key": "listen_timeout_sec",
             "type": "number",
+            "apply": "live",
             "title": "Listen timeout after wake (s)",
             "title_zh": "唤醒后聆听超时（秒）",
             "min": 2.0,
@@ -177,6 +187,7 @@
           {
             "key": "model_dir",
             "type": "string",
+            "apply": "restart",
             "title": "Shared model dir",
             "title_zh": "共享模型目录",
             "default": "/userdata/local/models/asr"
@@ -184,6 +195,7 @@
           {
             "key": "audio_source",
             "type": "enum",
+            "apply": "restart",
             "title": "Audio source",
             "title_zh": "音频来源",
             "options": ["ai_asr", "rtsp"],
@@ -194,6 +206,7 @@
           {
             "key": "audio_filter",
             "type": "string",
+            "apply": "live",
             "title": "Mic gain filter (ffmpeg -af)",
             "title_zh": "麦克风增益滤镜（ffmpeg -af）",
             "default": "loudnorm=I=-16:TP=-1.5"

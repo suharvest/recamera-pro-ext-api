@@ -94,6 +94,43 @@ class VoiceTranscribeApp(App):
         self._last_text = ""
         self._sink = None
 
+    def on_config_reload(self, config):
+        """★S1 live hot-reload★ (config.json re-read).
+
+        voice-transcribe's apply:"live" knobs are wakeword / min_silence_sec /
+        max_utterance_sec / preroll_ms / listen_timeout_sec / audio_filter.
+        Reapply by VALUE-REPLACE onto the app attributes (and refresh self.config
+        so audio_filter / audio_source re-read from it). NEVER rebuild the audio
+        source / VAD / wake-word / state machine -- those apply:"restart" knobs
+        (wake_backend, asr_backend, language, kws_*, model_dir, audio_source) are
+        not touched here.
+
+        NOTE: this app runs its own blocking audio loop (run() overrides the base
+        frame loop), so the currently-running VAD/wake/SM captured these values at
+        construction; a value replaced here takes effect on the next start/
+        restart, not mid-utterance. See TODO in the port notes re: wiring a live
+        SIGHUP path into VoiceStateMachine.
+        """
+        params = {k: v for k, v in (config or {}).items() if v is not None}
+        self.config = config or {}
+        if "wakeword" in params:
+            self.wakeword = str(params["wakeword"])
+
+        def _f(key, cur):
+            try:
+                return float(params.get(key, cur))
+            except (TypeError, ValueError):
+                return cur
+
+        self.min_silence_sec = _f("min_silence_sec", self.min_silence_sec)
+        self.max_utterance_sec = _f("max_utterance_sec", self.max_utterance_sec)
+        self.preroll_ms = _f("preroll_ms", self.preroll_ms)
+        self.listen_timeout_sec = _f("listen_timeout_sec", self.listen_timeout_sec)
+        print(f"[voice-transcribe] hot-reload wakeword={self.wakeword!r} "
+              f"min_silence={self.min_silence_sec} max_utt={self.max_utterance_sec} "
+              f"preroll_ms={self.preroll_ms} listen_timeout={self.listen_timeout_sec} "
+              f"audio_filter={self.config.get('audio_filter')!r}", flush=True)
+
     def _resolve_model_dir(self, preferred):
         """First existing dir among (config, shared convention, staging)."""
         for d in (preferred, SHARED_MODEL_DIR, STAGING_MODEL_DIR):
@@ -113,6 +150,10 @@ class VoiceTranscribeApp(App):
         so the panel and Home Assistant always see the current state and the last
         transcript regardless of which event arrived.
         """
+        # Apply any pending SIGHUP config hot-reload at an event boundary. The
+        # base vision loop calls this once per frame; this app has no frame loop,
+        # so we poll it on every voice event instead (best-effort, never raises).
+        self._maybe_reload()
         kind = ev.get("type", "event")
         out = dict(ev)
         out["kind"] = kind
@@ -141,6 +182,11 @@ class VoiceTranscribeApp(App):
         from kit.logic.voice_sm import VoiceStateMachine
 
         self._sink = sink
+        # Enable SIGHUP config hot-reload for the lifetime of this loop (the base
+        # App.run() we override normally does this at kit/app.py:189-195), and
+        # locate the unified ConfigurableSink so on_config_reload can route
+        # filter/template changes through it (OUTPUT_SINK_SPEC §7).
+        self._install_reload_handler()
         md = self.model_dir
         asr_model = os.path.join(md, "model.int8.onnx")
         asr_tokens = os.path.join(md, "tokens.txt")

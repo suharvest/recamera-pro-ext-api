@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -59,6 +60,12 @@ class App:
         self.iou: float = 0.45
         self.class_names = COCO80
         self.config: Dict[str, Any] = {}
+        # Hot-reload (SIGHUP) flag. appmgr set_config sends SIGHUP after writing
+        # config.json when ALL changed items are apply:"live" (see DESIGN
+        # §3.2/§4). The signal handler only FLIPS this flag; the main loop does
+        # the real re-read on the next frame -- signal handlers must stay tiny
+        # and must not touch the model / pipeline.
+        self._reload_flag: bool = False
 
     # -- application hooks (override these) -------------------------------- #
     def setup(self, config: Dict[str, Any]) -> None:
@@ -66,6 +73,68 @@ class App:
         self.config = config or {}
         self.conf = float(self.config.get("conf", self.conf))
         self.iou = float(self.config.get("iou", self.iou))
+
+    def on_config_reload(self, config: Dict[str, Any]) -> None:
+        """★Live config hot-reload hook★ (SIGHUP -> re-read config.json).
+
+        Called from the main loop when appmgr signals a LIVE-only config change.
+        `config` is the freshly re-read effective config (manifest defaults
+        overlaid by the updated config.json).
+
+        Base default: reapply ONLY the base-managed live knobs (conf/iou) and
+        refresh self.config. This is deliberately safe -- it just replaces
+        values, and NEVER rebuilds the model, frame source, or any pipeline
+        state. Subclasses that snapshot extra params into their own attributes
+        (e.g. self.max_faces, thresholds, ROI geometry) override this to reapply
+        those the same value-replacing way. Anything structural (model swap,
+        input_size, backend, buffer resize) must NOT be hot-reloaded -- those
+        params are apply:"restart" in the manifest and never reach here.
+        """
+        self.config = config or {}
+        if "conf" in self.config:
+            try:
+                self.conf = float(self.config["conf"])
+            except (TypeError, ValueError):
+                pass
+        if "iou" in self.config:
+            try:
+                self.iou = float(self.config["iou"])
+            except (TypeError, ValueError):
+                pass
+
+    # -- hot-reload plumbing (base; apps do not touch) -------------------- #
+    def _install_reload_handler(self) -> None:
+        """Install the SIGHUP handler. Best-effort: signal.signal only works on
+        the main thread, so a non-main-thread run() silently skips hot-reload
+        (the app still works, config changes just need a restart)."""
+        try:
+            signal.signal(signal.SIGHUP, self._on_sighup)
+        except (ValueError, OSError):
+            pass
+
+    def _on_sighup(self, signum, frame) -> None:
+        # Tiny by design: only flip the flag; the loop does the work.
+        self._reload_flag = True
+
+    def _maybe_reload(self) -> None:
+        """If a SIGHUP arrived, re-read the effective config and hand it to
+        on_config_reload. Never raises into the loop."""
+        if not self._reload_flag:
+            return
+        self._reload_flag = False
+        from kit import config as _cfg
+        try:
+            cfg = _cfg.effective_config(_cfg.app_dir_of(self))
+        except Exception as e:                 # config unreadable -> keep running
+            print(f"[app:{self.id}] config reload skipped (read failed: {e})",
+                  flush=True)
+            return
+        try:
+            self.on_config_reload(cfg)
+            print(f"[app:{self.id}] config hot-reloaded ({len(cfg)} keys)",
+                  flush=True)
+        except Exception as e:                 # app hook bug must not kill loop
+            print(f"[app:{self.id}] config reload failed: {e}", flush=True)
 
     def run_postproc(self, outs, info) -> List[dict]:
         """Turn raw RKNN outputs into result dicts. Default = YOLO detect.
@@ -121,6 +190,9 @@ class App:
         if sink is None:
             sink = open_result_sink("stdout")
 
+        # Enable SIGHUP config hot-reload for the lifetime of this loop.
+        self._install_reload_handler()
+
         if self.needs_model:
             from kit.runtime.engine import RknnModel  # lazy: only vision apps need rknnlite
             model = RknnModel(model_path)
@@ -151,6 +223,8 @@ class App:
                   flush=True)
         try:
             for frame in src.frames():
+                # -- apply any pending live config hot-reload (SIGHUP) ------ #
+                self._maybe_reload()
                 # -- skip camera warm-up placeholder (grey) frames --------- #
                 if not got_real:
                     std = float(np.asarray(frame.data).std())

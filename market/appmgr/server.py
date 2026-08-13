@@ -44,8 +44,8 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from . import (config as appconfig, installer, modelstore, mqtt as mqttcfg,
-               paths, state, supervisor)
+from . import (builtin, config as appconfig, installer, modelstore,
+               mqtt as mqttcfg, paths, state, supervisor)
 
 
 # --------------------------------------------------------------------------- #
@@ -123,7 +123,38 @@ def do_list() -> dict:
                 "pid": supervisor.is_running(name),
                 "active": (name == active),
             })
+    apps.append(_builtin_entry(active))
     return {"active_app": active, "apps": apps}
+
+
+def _builtin_entry(active_self: str) -> dict:
+    """Synthesize the built-in inference list entry (DESIGN §3.1). running/active
+    derive from /model/inference's iEnable, NOT a run.pid; a best-effort read
+    (endpoint may be momentarily unreachable) degrades to running=False rather
+    than dropping the entry."""
+    man = builtin.manifest()
+    try:
+        running = builtin.is_running()
+    except Exception:
+        running = False
+    return {
+        "id": builtin.BUILTIN_ID,
+        "name": man.get("name"),
+        "name_zh": man.get("name_zh"),
+        "version": man.get("version"),
+        "type": "builtin",
+        "image": man.get("image"),
+        "description": man.get("description"),
+        "description_zh": man.get("description_zh"),
+        "scene": man.get("scene"),
+        "author": man.get("author"),
+        "installed": True,
+        "running": running,
+        "pid": None,
+        # active = iEnable AND no self-hosted app is active (mutual exclusion is
+        # maintained by do_activate; this AND is belt-and-braces for the UI).
+        "active": running and not active_self,
+    }
 
 
 # Upload filename whitelist: a bare basename, package suffix, no separators.
@@ -265,9 +296,72 @@ def do_switch(app_id: str) -> dict:
         return {"active_app": app_id, "pid": pid, "prev": prev}
 
 
+def _stop_active_self() -> str:
+    """Stop the current self-hosted active app (if any) and clear active state.
+    Returns the id that was stopped, or None. Caller must hold the busy-gate."""
+    prev = state.get_active()
+    if prev:
+        supervisor.stop(prev)
+        state.clear_active_if(prev)
+    return prev
+
+
+def do_activate(app_id: str) -> dict:
+    """Single-active semantics across self-hosted apps AND the built-in detector
+    (DESIGN §2). Exactly one inference app is active afterwards; the built-in and
+    self-hosted worlds are kept mutually exclusive here (state.json still stores
+    only the self-hosted active; the built-in's active = /model/inference iEnable).
+
+      id == "builtin" -> stop the active self-hosted app + enable built-in.
+      id == "none"    -> stop the active self-hosted app + disable built-in.
+      id == <app>     -> disable built-in + stop others + start <app>.
+
+    One busy-gate for the whole op (do_switch/do_stop are NOT reused -- the gate
+    is a non-reentrant flock, so nesting them would self-deadlock into BusyError)."""
+    with busy_gate():
+        if app_id in (None, "", "none"):
+            prev = _stop_active_self()
+            binf = builtin.stop()
+            _audit("activate", id="none", prev=prev)
+            return {"active": None, "prev_self": prev, "builtin": False,
+                    "inference": binf}
+
+        if app_id == builtin.BUILTIN_ID:
+            prev = _stop_active_self()
+            binf = builtin.start()          # iEnable=1, keeps persisted model/fps
+            _audit("activate", id="builtin", prev=prev)
+            return {"active": "builtin", "prev_self": prev, "builtin": True,
+                    "inference": binf}
+
+        # self-hosted target
+        if not paths.valid_app_id(app_id):
+            raise ValueError(f"invalid app id {app_id!r}")
+        if not os.path.isdir(paths.app_dir(app_id)):
+            raise ValueError(f"app not installed: {app_id}")
+        builtin.stop()                       # turn the built-in detector off first
+        prev = state.get_active()
+        if prev and prev != app_id:
+            supervisor.stop(prev)
+        supervisor.stop(app_id)              # clean (re)start
+        try:
+            pid = supervisor.start(app_id)
+        except Exception as e:
+            state.set_active(None, None)
+            _audit("activate_failed", id=app_id, error=str(e))
+            raise
+        man = _read_manifest(app_id) or {}
+        state.set_active(app_id, man.get("version"))
+        _audit("activate", id=app_id, pid=pid, prev=prev)
+        return {"active": app_id, "pid": pid, "prev_self": prev, "builtin": False}
+
+
 def do_stop(app_id: str = None) -> dict:
     with busy_gate():
         target = app_id or state.get_active()
+        if target == builtin.BUILTIN_ID:
+            res = builtin.stop()
+            _audit("stop", id="builtin", result=res)
+            return {"stopped": "builtin", "detail": res}
         if not target:
             return {"stopped": None, "note": "no active app"}
         res = supervisor.stop(target)
@@ -277,6 +371,8 @@ def do_stop(app_id: str = None) -> dict:
 
 
 def do_get_config(app_id: str) -> dict:
+    if app_id == builtin.BUILTIN_ID:
+        return builtin.get_config()          # driver-backed, app-isomorphic shape
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -285,7 +381,26 @@ def do_get_config(app_id: str) -> dict:
     return appconfig.get_config(man, app_id)
 
 
+def _apply_mode(manifest: dict, keys) -> str:
+    """Classify a config change as "live" or "restart" from the schema's per-item
+    `apply` field (DESIGN §1.1/§3.2). A change is "live" only if EVERY changed
+    key is apply:"live"; a single restart-class key (or one lacking the field --
+    default "restart", conservative) forces the whole change to "restart"."""
+    specs = appconfig.schema_specs(manifest)
+    for k in keys:
+        spec = specs.get(k) or {}
+        if str(spec.get("apply", "restart")).lower() != "live":
+            return "restart"
+    return "live"
+
+
 def do_set_config(app_id: str, incoming: dict) -> dict:
+    if app_id == builtin.BUILTIN_ID:
+        with busy_gate():
+            res = builtin.set_config(incoming)   # driver dispatches per-item bind
+        _audit("config", id="builtin", keys=sorted((res.get("config") or {}).keys()),
+               applied=res.get("applied"), restarted=res.get("restarted"))
+        return res
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -294,17 +409,31 @@ def do_set_config(app_id: str, incoming: dict) -> dict:
     clean, errors = appconfig.validate_config(man, incoming)
     if errors:
         raise ValueError("; ".join(errors))
+    mode = _apply_mode(man, clean.keys())
     with busy_gate():
         # Persist first (survives even if a restart hiccups), then apply.
         appconfig.write_user_config(app_id, clean)
         restarted = False
-        if state.get_active() == app_id and supervisor.is_running(app_id):
-            supervisor.stop(app_id)
-            supervisor.start(app_id)   # picks up config.json via kit.config
-            restarted = True
-        _audit("config", id=app_id, keys=sorted(clean.keys()), restarted=restarted)
-        return {"id": app_id, "saved": True, "restarted": restarted,
-                "config": clean}
+        reloaded = False
+        running = supervisor.is_running(app_id) is not None
+        if mode == "live":
+            # LIVE change: signal the running app to re-read config.json in
+            # place (SIGHUP). If it isn't running, config.json is already
+            # written and will be picked up on the next start -- nothing to do.
+            if running:
+                reloaded = supervisor.reload(app_id)
+        else:
+            # RESTART change: bounce the app so it reloads structural params
+            # (model / input_size / backend). Only the active, running app is
+            # bounced -- unchanged from prior behaviour.
+            if state.get_active() == app_id and running:
+                supervisor.stop(app_id)
+                supervisor.start(app_id)   # picks up config.json via kit.config
+                restarted = True
+        _audit("config", id=app_id, keys=sorted(clean.keys()),
+               applied=mode, restarted=restarted, reloaded=reloaded)
+        return {"id": app_id, "saved": True, "applied": mode,
+                "restarted": restarted, "reloaded": reloaded, "config": clean}
 
 
 def _read_first_line(path: str) -> str:
@@ -520,6 +649,12 @@ class _Handler(BaseHTTPRequestHandler):
                 if not i:
                     return self._send(400, {"error": "missing 'id'"})
                 return self._send(200, do_switch(i))
+            if path == "/api/appMgr/activate":
+                # {id} may be a self-hosted app id, "builtin", or "none".
+                i = body.get("id")
+                if not i:
+                    return self._send(400, {"error": "missing 'id'"})
+                return self._send(200, do_activate(i))
             if path == "/api/appMgr/stop":
                 return self._send(200, do_stop(body.get("id")))
             if path == "/api/appMgr/config":

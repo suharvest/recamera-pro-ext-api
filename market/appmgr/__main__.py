@@ -44,6 +44,10 @@ def main(argv=None) -> int:
             print(json.dumps(server.do_switch(rest[0]), indent=2))
         elif cmd == "stop":
             print(json.dumps(server.do_stop(rest[0] if rest else None), indent=2))
+        elif cmd == "activate":
+            if not rest:
+                print("usage: activate <id|builtin|none>", file=sys.stderr); return 2
+            print(json.dumps(server.do_activate(rest[0]), indent=2))
         elif cmd == "config":
             if not rest:
                 print("usage: config <id> [json]", file=sys.stderr); return 2

@@ -130,6 +130,46 @@ class FaceAnalysisApp(App):
               f"agg_window={self.agg_window}s privacy_blur={self.privacy_blur}",
               flush=True)
 
+    def on_config_reload(self, config):
+        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+
+        face-analysis keeps its live knobs under app-specific keys the base
+        App.on_config_reload does not know (`confidence` not `conf`, plus
+        max_faces / crop_pad / emotion_interval / privacy_blur). Reapply them
+        here by VALUE-REPLACE only -- never reloading the stage-1/2/3 models or
+        resetting the demographic aggregation window. `aggregate_window_sec` is
+        apply:"restart" and is intentionally NOT touched here.
+        """
+        params = {k: v for k, v in (config or {}).items() if v is not None}
+        self.config = config or {}
+        try:
+            self.conf = float(params.get("confidence", self.conf))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.iou = float(params.get("iou", self.iou))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.max_faces = int(params.get("max_faces", self.max_faces))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.crop_pad = float(params.get("crop_pad", self.crop_pad))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.emotion_interval = max(
+                1, int(params.get("emotion_interval", self.emotion_interval)))
+        except (TypeError, ValueError):
+            pass
+        if "privacy_blur" in params:
+            self.privacy_blur = bool(params["privacy_blur"])
+        print(f"[face-analysis] hot-reload conf={self.conf} iou={self.iou} "
+              f"max_faces={self.max_faces} crop_pad={self.crop_pad} "
+              f"emotion_interval={self.emotion_interval} "
+              f"privacy_blur={self.privacy_blur}", flush=True)
+
     def run_postproc(self, outs, info):
         return face_post.postprocess(outs, info, conf_thres=self.conf,
                                      iou_thres=self.iou)

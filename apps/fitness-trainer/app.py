@@ -85,6 +85,62 @@ class FitnessTrainerApp(App):
               f"{self.target_sets} conf={self.conf} kpt_thres={self.kpt_thres} "
               f"idle_reset={self.idle_reset_seconds}s", flush=True)
 
+    def on_config_reload(self, config):
+        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+
+        fitness-trainer live knobs: confidence / keypoint_confidence (thresholds)
+        and mode / target_reps / target_sets / idle_reset_seconds. Reapply by
+        VALUE-REPLACE, preserving the rep/set accumulator:
+          * target_reps/target_sets -> set_targets() (does NOT reset counts).
+          * keypoint_confidence     -> mutate self.exercise.kpt_thres in place.
+          * mode                    -> only build a NEW exercise when it actually
+            changes (a different exercise is a different state machine; reps for
+            squat do not carry to push-up). An unchanged mode keeps the running
+            accumulator untouched.
+        """
+        params = {k: v for k, v in (config or {}).items() if v is not None}
+        self.config = config or {}
+        try:
+            self.conf = float(params.get("confidence", self.conf))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.kpt_thres = float(params.get("keypoint_confidence", self.kpt_thres))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.target_reps = int(params.get("target_reps", self.target_reps))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.target_sets = int(params.get("target_sets", self.target_sets))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.idle_reset_seconds = float(
+                params.get("idle_reset_seconds", self.idle_reset_seconds))
+        except (TypeError, ValueError):
+            pass
+
+        new_mode = str(params.get("mode", self.mode))
+        if new_mode != self.mode:
+            ex = create_exercise(new_mode, self.kpt_thres)
+            if ex is None:
+                print(f"[fitness] hot-reload unknown mode {new_mode!r}, keeping "
+                      f"{self.mode!r}", file=sys.stderr, flush=True)
+            else:
+                self.exercise = ex
+                self.mode = new_mode
+        else:
+            # same exercise: apply the live keypoint threshold in place.
+            self.exercise.kpt_thres = self.kpt_thres
+        # targets are always safe to (re)apply -- set_targets keeps current reps.
+        self.exercise.set_targets(self.target_reps, self.target_sets)
+        print(f"[fitness] hot-reload mode={self.mode} "
+              f"target={self.target_reps}x{self.target_sets} conf={self.conf} "
+              f"kpt_thres={self.kpt_thres} idle_reset={self.idle_reset_seconds}s",
+              flush=True)
+
     def run_postproc(self, outs, info):
         return pose_post.postprocess(outs, info, conf_thres=self.conf,
                                      iou_thres=self.iou,

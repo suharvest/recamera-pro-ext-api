@@ -76,6 +76,7 @@
           {
             "key": "confidence",
             "type": "number",
+            "apply": "live",
             "title": "Face confidence",
             "title_zh": "人脸置信度",
             "min": 0.05,
@@ -86,6 +87,7 @@
           {
             "key": "iou",
             "type": "number",
+            "apply": "live",
             "title": "NMS IoU",
             "title_zh": "NMS IoU",
             "min": 0.1,
@@ -96,6 +98,7 @@
           {
             "key": "crop_pad",
             "type": "number",
+            "apply": "live",
             "title": "Face ROI padding",
             "title_zh": "人脸 ROI 外扩",
             "min": 0.0,
@@ -106,6 +109,7 @@
           {
             "key": "presence_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Landmark presence",
             "title_zh": "关键点存在阈值",
             "min": 0.0,
@@ -123,6 +127,7 @@
           {
             "key": "ear_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Eye-closed EAR",
             "title_zh": "闭眼 EAR 阈值",
             "min": 0.1,
@@ -133,6 +138,7 @@
           {
             "key": "mar_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Yawn MAR",
             "title_zh": "打哈欠 MAR 阈值",
             "min": 0.3,
@@ -143,6 +149,7 @@
           {
             "key": "yawn_consecutive_frames",
             "type": "number",
+            "apply": "live",
             "title": "Yawn hold frames",
             "title_zh": "打哈欠持续帧数",
             "min": 1,
@@ -160,6 +167,7 @@
           {
             "key": "ear_continuous_sec",
             "type": "number",
+            "apply": "live",
             "title": "Continuous-closure (s)",
             "title_zh": "连续闭眼（秒）",
             "min": 0.2,
@@ -170,6 +178,7 @@
           {
             "key": "perclos_window_sec",
             "type": "number",
+            "apply": "restart",
             "title": "PERCLOS window (s)",
             "title_zh": "PERCLOS 窗口（秒）",
             "min": 5.0,
@@ -180,6 +189,7 @@
           {
             "key": "perclos_critical_pct",
             "type": "number",
+            "apply": "live",
             "title": "PERCLOS critical %",
             "title_zh": "PERCLOS 临界百分比",
             "min": 5.0,
@@ -190,6 +200,7 @@
           {
             "key": "alert_cooldown_sec",
             "type": "number",
+            "apply": "live",
             "title": "Alert cooldown (s)",
             "title_zh": "报警冷却（秒）",
             "min": 0.0,
@@ -200,6 +211,7 @@
           {
             "key": "yawn_count_threshold",
             "type": "number",
+            "apply": "live",
             "title": "Yawns/5min for drowsy",
             "title_zh": "5 分钟打哈欠数阈值",
             "min": 1,

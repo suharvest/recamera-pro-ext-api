@@ -39,6 +39,7 @@
   "config_schema": {
     "conf": {
       "type": "number",
+      "apply": "live",
       "title": "Confidence threshold",
       "default": 0.35,
       "min": 0.05,
@@ -47,6 +48,7 @@
     },
     "iou": {
       "type": "number",
+      "apply": "live",
       "title": "NMS IoU threshold",
       "default": 0.45,
       "min": 0.1,

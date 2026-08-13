@@ -81,6 +81,7 @@
           {
             "key": "det_thresh",
             "type": "number",
+            "apply": "live",
             "title": "Prob-map threshold",
             "title_zh": "概率图阈值",
             "min": 0.1,
@@ -91,6 +92,7 @@
           {
             "key": "box_thresh",
             "type": "number",
+            "apply": "live",
             "title": "Box score threshold",
             "title_zh": "文本框阈值",
             "min": 0.1,
@@ -101,6 +103,7 @@
           {
             "key": "unclip_ratio",
             "type": "number",
+            "apply": "live",
             "title": "Unclip ratio",
             "title_zh": "外扩膨胀比",
             "min": 1.0,
@@ -111,6 +114,7 @@
           {
             "key": "max_boxes",
             "type": "number",
+            "apply": "live",
             "title": "Max text boxes / frame",
             "title_zh": "每帧最大文本框",
             "min": 1,
@@ -128,6 +132,7 @@
           {
             "key": "min_rec_conf",
             "type": "number",
+            "apply": "live",
             "title": "Min recognition confidence",
             "title_zh": "识别最低置信度",
             "min": 0.0,

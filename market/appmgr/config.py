@@ -70,13 +70,30 @@ def effective_values(manifest: dict, app_id: str) -> Dict[str, Any]:
 
 
 def write_user_config(app_id: str, config: Dict[str, Any]) -> None:
-    """Atomically write config.json (temp file + fsync + rename)."""
+    """MERGE `config` into the existing config.json and write it back atomically.
+
+    ★MERGE semantics (not replace)★: a config POST carries only the keys the user
+    changed. Replacing the whole file would reset every OTHER overlaid key back to
+    its manifest default. Instead we read the current config.json, overlay the
+    posted keys on top (posted values win), and persist the union. Overlaying one
+    parameter therefore never clobbers previously-saved overlays.
+
+    A posted key set to ``None`` is REMOVED from the overlay (reverts that single
+    key to its manifest default) -- e.g. clearing a `zone`. Write is atomic
+    (temp file + fsync + rename), as before.
+    """
+    merged = load_user_config(app_id)   # {} if missing/corrupt
+    for k, v in (config or {}).items():
+        if v is None:
+            merged.pop(k, None)
+        else:
+            merged[k] = v
     d = paths.app_dir(app_id)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".config.", dir=d)
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+            json.dump(merged, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, config_path(app_id))
