@@ -14,7 +14,8 @@
   "kit": ">=0.1.0",
   "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
-    "audio"
+    "audio",
+    "output"
   ],
   "needs_model": false,
   "models": [],
@@ -36,7 +37,35 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "events[]{kind=state|wake|transcript|listen_timeout, state, text, keyword, backend, audio_sec, rtf, language} + top-level {state, summary{state,text}}"
+    "schema": "events[]{kind=state|wake|transcript|listen_timeout, state, text, keyword, backend, audio_sec, rtf, language} + top-level {state, summary{state,text}}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "persistent_summary": true,
+    "fields": [
+      {"name": "state", "from": "state", "type": "string", "description": "Persistent top-level voice state (idle/listening/transcribing)"},
+      {"name": "summary_state", "from": "summary.state", "type": "string", "description": "Persistent summary state, mirrors top-level state"},
+      {"name": "summary_text", "from": "summary.text", "type": "string", "description": "Persistent last transcript text (survives non-transcript events)"},
+      {"name": "event_kind", "from": "events[].kind", "type": "string", "description": "Event kind (state/wake/transcript/listen_timeout)"},
+      {"name": "event_type", "from": "events[].type", "type": "string", "description": "Original state-machine event type (mirrored into kind)"},
+      {"name": "event_t", "from": "events[].t", "type": "float", "description": "Monotonic event timestamp"},
+      {"name": "event_state", "from": "events[].state", "type": "string", "optional": true, "description": "State for state events"},
+      {"name": "event_utterance_sec", "from": "events[].utterance_sec", "type": "float", "optional": true, "description": "Utterance duration"},
+      {"name": "event_keyword", "from": "events[].keyword", "type": "string", "optional": true, "description": "Wake keyword (wake events)"},
+      {"name": "event_backend", "from": "events[].backend", "type": "string", "optional": true, "description": "Wake backend (wake events)"},
+      {"name": "event_score", "from": "events[].score", "type": "float", "optional": true, "description": "Wake score (wake events)"},
+      {"name": "event_transcript", "from": "events[].transcript", "type": "string", "optional": true, "description": "Transcript text (transcript events)"},
+      {"name": "event_text", "from": "events[].text", "type": "string", "optional": true, "description": "Transcript text alias"},
+      {"name": "event_audio_sec", "from": "events[].audio_sec", "type": "float", "optional": true, "description": "Transcribed audio duration"},
+      {"name": "event_rtf", "from": "events[].rtf", "type": "float", "optional": true, "description": "Real-time factor of transcription"},
+      {"name": "event_language", "from": "events[].language", "type": "string", "optional": true, "description": "Detected/selected language"}
+    ],
+    "default_mapping": [
+      {"source": "(events.state | last).state", "target": "state", "topic": "recamera/{{ app }}/state", "task": "detection"},
+      {"source": "(events.transcript | last).text", "target": "transcript", "topic": "recamera/{{ app }}/transcript", "task": "detection"},
+      {"source": "(events.wake | last).keyword", "target": "wake", "topic": "recamera/{{ app }}/wake", "task": "detection"}
+    ]
   },
   "config_schema": {
     "groups": [
@@ -198,7 +227,10 @@
             "apply": "restart",
             "title": "Audio source",
             "title_zh": "音频来源",
-            "options": ["ai_asr", "rtsp"],
+            "options": [
+              "ai_asr",
+              "rtsp"
+            ],
             "default": "ai_asr",
             "help": "ai_asr = official ALSA shared-capture PCM (clean, no rkipc transcode; needs root/audio group). rtsp = demux rkipc RTSP audio track (fallback).",
             "help_zh": "ai_asr = 官方 ALSA 共享采集 PCM（干净、不经 rkipc 转码；需 root/audio 组）。rtsp = 解复用 rkipc RTSP 音频轨（备用）。"

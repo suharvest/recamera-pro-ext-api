@@ -60,6 +60,28 @@ SHARED_MODEL_DIR = "/userdata/local/models/asr"
 STAGING_MODEL_DIR = "/userdata/tmp/asr"
 
 
+def _find_configurable_sink(sink):
+    """Walk a (possibly nested MultiSink) sink tree and return the first
+    ConfigurableSink, or None. Lets the voice app route hot-reload of output
+    filters/templates through the unified sink even though it drives its own
+    audio loop instead of the base vision loop (OUTPUT_SINK_SPEC §7)."""
+    try:
+        from kit.adapters.output_sink import ConfigurableSink
+    except Exception:
+        return None
+    stack = [sink]
+    while stack:
+        s = stack.pop()
+        if s is None:
+            continue
+        if isinstance(s, ConfigurableSink):
+            return s
+        children = getattr(s, "sinks", None)
+        if isinstance(children, (list, tuple)):
+            stack.extend(children)
+    return None
+
+
 class VoiceTranscribeApp(App):
     id = "voice-transcribe"
     name = "Voice Transcribe"
@@ -93,6 +115,10 @@ class VoiceTranscribeApp(App):
         self._state = IDLE
         self._last_text = ""
         self._sink = None
+        # The unified ConfigurableSink (if the manifest opted into output +
+        # configured an external channel). Located from the sink tree in run();
+        # on_config_reload forwards live filter/template changes to it.
+        self._out_sink = None
 
     def on_config_reload(self, config):
         """★S1 live hot-reload★ (config.json re-read).
@@ -130,6 +156,15 @@ class VoiceTranscribeApp(App):
               f"min_silence={self.min_silence_sec} max_utt={self.max_utterance_sec} "
               f"preroll_ms={self.preroll_ms} listen_timeout={self.listen_timeout_sec} "
               f"audio_filter={self.config.get('audio_filter')!r}", flush=True)
+        # Route the live change through the unified output sink so its filter /
+        # template (apply:"live") knobs re-apply without a restart. The base
+        # vision loop does this implicitly; this override must do it explicitly.
+        out = getattr(self, "_out_sink", None)
+        if out is not None:
+            try:
+                out.on_config_reload(config or {})
+            except Exception:
+                pass
 
     def _resolve_model_dir(self, preferred):
         """First existing dir among (config, shared convention, staging)."""
@@ -187,6 +222,7 @@ class VoiceTranscribeApp(App):
         # locate the unified ConfigurableSink so on_config_reload can route
         # filter/template changes through it (OUTPUT_SINK_SPEC §7).
         self._install_reload_handler()
+        self._out_sink = _find_configurable_sink(sink)
         md = self.model_dir
         asr_model = os.path.join(md, "model.int8.onnx")
         asr_tokens = os.path.join(md, "tokens.txt")

@@ -22,10 +22,92 @@ from . import paths
 
 
 # --------------------------------------------------------------------------- #
+# unified output capability -- injected config_schema group (OUTPUT_SINK_SPEC §3)
+# --------------------------------------------------------------------------- #
+def _output_schema_items(manifest: dict) -> List[dict]:
+    """The 8 flat `output` config keys, defaulted from the manifest `output`
+    block. Opaque control types (`mqtt`/`http`/`uart`/`templates`/
+    `field_mapping`/`channel_multi_select`/`output_filters`) validate opaquely
+    (see `_validate_one`), so the frontend SchemaForm can render them without a
+    backend code change."""
+    mout = (manifest or {}).get("output") or {}
+    dc = mout.get("default_channel")
+    channels = [dc] if isinstance(dc, str) else (list(dc) if dc else ["ws"])
+    templates = mout.get("templates") or {}
+    return [
+        {"key": "output_channels", "type": "channel_multi_select",
+         "apply": "restart", "label": "Output channels", "default": channels},
+        {"key": "iMode", "type": "enum", "apply": "restart",
+         "label": "Output mode", "options": ["ha", "custom", "raw"],
+         "default": mout.get("default_mode", "raw")},
+        {"key": "dMqtt", "type": "mqtt", "apply": "restart", "label": "MQTT",
+         "default": {"iPort": 1883, "sClientId": "", "sUsername": "",
+                     "sPassword": "", "sTopic": "recamera", "sURL": ""}},
+        {"key": "dHttp", "type": "http", "apply": "restart", "label": "HTTP",
+         "default": {"sUrl": "", "sToken": ""}},
+        {"key": "dUart", "type": "uart", "apply": "restart", "label": "UART",
+         "default": {"sPort": "", "sPortDev": ""}},
+        {"key": "dTemplate", "type": "templates", "apply": "live",
+         "label": "Templates",
+         "default": {"sDetection": templates.get("detection", ""),
+                     "sClassification": templates.get("classification", ""),
+                     "sKeypoint": templates.get("keypoint", ""),
+                     "sSegmentation": templates.get("segmentation", ""),
+                     "sTracking": templates.get("tracking", "")}},
+        {"key": "output_mapping", "type": "field_mapping", "apply": "live",
+         "label": "Field mapping", "default": mout.get("default_mapping") or []},
+        {"key": "output_filters", "type": "output_filters", "apply": "live",
+         "label": "Filters",
+         "default": {"only_on_detection": False, "classes": [],
+                     "rate_limit_hz": 0, "preserve_edge_events": True}},
+    ]
+
+
+def _has_output_group(cs: dict) -> bool:
+    if "groups" in cs:
+        for g in cs.get("groups", []):
+            for it in g.get("items", []):
+                if it.get("key") == "output_channels":
+                    return True
+        return False
+    return "output_channels" in cs
+
+
+def effective_manifest(manifest: dict) -> dict:
+    """Return the manifest with the `output` config_schema group injected when
+    (and only when) the app declares `capabilities:["output"]`.
+
+    Pure + idempotent. This is the single source `schema_specs`, `get_config`,
+    and `do_set_config`/`validate_config` share so GET validation, POST
+    validation and apply-mode classification all agree on the output keys. Apps
+    without the capability are returned unchanged (legacy bypass)."""
+    caps = (manifest or {}).get("capabilities") or []
+    if "output" not in caps:
+        return manifest
+    cs = dict((manifest or {}).get("config_schema") or {})
+    if _has_output_group(cs):
+        return manifest
+    items = _output_schema_items(manifest)
+    if "groups" in cs:
+        cs["groups"] = list(cs.get("groups") or []) + [
+            {"title": "Output", "key": "output", "items": items}]
+    else:
+        for it in items:
+            cs[it["key"]] = {k: v for k, v in it.items() if k != "key"}
+    m = dict(manifest)
+    m["config_schema"] = cs
+    return m
+
+
+# --------------------------------------------------------------------------- #
 # schema flatten
 # --------------------------------------------------------------------------- #
 def schema_specs(manifest: dict) -> Dict[str, dict]:
-    """Return {key: item_spec} from a grouped OR flat config_schema."""
+    """Return {key: item_spec} from a grouped OR flat config_schema.
+
+    The `output` capability group (OUTPUT_SINK_SPEC §3) is injected here so every
+    consumer -- GET, POST validation, apply-mode -- sees the output keys."""
+    manifest = effective_manifest(manifest)
     cs = (manifest or {}).get("config_schema") or {}
     out: Dict[str, dict] = {}
     if "groups" in cs:
@@ -208,7 +290,7 @@ def get_config(manifest: dict, app_id: str) -> dict:
     """Response payload for GET /api/appMgr/config: schema + effective values."""
     return {
         "id": app_id,
-        "config_schema": (manifest or {}).get("config_schema") or {},
+        "config_schema": effective_manifest(manifest).get("config_schema") or {},
         "values": effective_values(manifest, app_id),
         "defaults": schema_defaults(manifest),
     }

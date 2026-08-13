@@ -400,15 +400,29 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
         primary = open_result_sink("ws", host=args.host, port=args.port,
                                    app_id=app.id)
 
-    # Optional MQTT / Home Assistant fan-out. Enabled when a broker host is
-    # supplied via appmgr's RECAMERA_MQTT_* env or the manual --mqtt-host flag.
-    # Fully best-effort: any failure here degrades to WS-only, never aborts.
-    mqtt = _maybe_open_mqtt_sink(app, app_dir, args, verbose=not args.quiet)
-    if mqtt is not None:
-        from kit.adapters.result_sink import MultiSink
-        sink: ResultSink = MultiSink([primary, mqtt])
+    # Unified configurable output (internal/OUTPUT_SINK_SPEC.md §3). Apps that
+    # declare `capabilities:["output"]` get channels/formatters/filters assembled
+    # from the manifest `output` block + persisted config; apps that do NOT opt
+    # in bypass this entirely and keep the legacy MQTT fan-out below unchanged.
+    from kit.adapters.result_sink import MultiSink
+    from kit.adapters.output_sink import assemble_output_sink
+    from kit import config as _cfg2
+    manifest = _cfg2.load_manifest(app_dir)
+    out_sink, opted_in = assemble_output_sink(
+        app, app_dir, manifest, eff, verbose=not args.quiet)
+
+    sinks: List[ResultSink] = [primary]
+    if opted_in:
+        if out_sink is not None:
+            sinks.append(out_sink)
     else:
-        sink = primary
+        # Legacy path: optional MQTT / Home Assistant fan-out, enabled when a
+        # broker host is supplied via appmgr's RECAMERA_MQTT_* env or --mqtt-host.
+        # Fully best-effort: any failure here degrades to WS-only, never aborts.
+        mqtt = _maybe_open_mqtt_sink(app, app_dir, args, verbose=not args.quiet)
+        if mqtt is not None:
+            sinks.append(mqtt)
+    sink: ResultSink = MultiSink(sinks) if len(sinks) > 1 else sinks[0]
     try:
         app.run(args.model, source=args.source, url=args.url, sink=sink,
                 n=args.n, every=args.every, verbose=not args.quiet)

@@ -42,6 +42,7 @@ import struct
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -130,10 +131,16 @@ class WsResultSink(ResultSink):
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8124,
-                 app_id: str = "app"):
+                 app_id: str = "app", preserve_envelope: bool = False):
         self.host = host
         self.port = port
         self.app_id = app_id
+        # When True, emit()/publish_envelope() broadcast the payload verbatim
+        # (no self-generated type/app/pts/seq/frame). ConfigurableSink's
+        # WsChannel sets this so the canonical envelope built ONCE upstream is
+        # not stamped a second time here. Default False keeps the standalone
+        # WsResultSink behaviour (legacy overlay path) byte-for-byte unchanged.
+        self.preserve_envelope = preserve_envelope
         self._clients: List[socket.socket] = []
         self._lock = threading.Lock()
         self._srv: Optional[socket.socket] = None
@@ -243,7 +250,19 @@ class WsResultSink(ResultSink):
                 except Exception:
                     pass
 
+    def publish_envelope(self, envelope: dict) -> None:
+        """Broadcast a pre-built canonical envelope verbatim (used by
+        ConfigurableSink's WsChannel). No second seq/timestamp/frame stamp."""
+        obj = dict(envelope)
+        obj.setdefault("type", "results")
+        self._broadcast(obj)
+
     def emit(self, payload: dict, pts: float) -> None:
+        if self.preserve_envelope:
+            # Upstream already built the canonical envelope (app/seq/timestamp/
+            # frame). Broadcast it as-is; do not add a second sequence.
+            self.publish_envelope(payload)
+            return
         self._seq += 1
         payload = dict(payload)
         payload.setdefault("type", "results")
@@ -339,6 +358,57 @@ class MultiSink(ResultSink):
                 s.close()
             except Exception:
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Configurable-output interfaces (docs internal/OUTPUT_SINK_SPEC.md §2)
+#
+# These are the ABCs for the unified `ConfigurableSink` output pipeline. The
+# concrete channels/formatters and ConfigurableSink itself live in
+# kit/adapters/output_sink.py to keep this module lean and avoid disturbing the
+# legacy sink path; they import these three names from here.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class OutputMessage:
+    """One formatted message ready for a channel to publish.
+
+    `topic` is None for channels that carry their own destination (WS, or an
+    MQTT channel falling back to its default state topic); formatters that
+    target specific MQTT topics (mapping rows, HA discovery) set it explicitly.
+    """
+    body: bytes
+    topic: Optional[str] = None
+    content_type: str = "application/json"
+    retain: bool = False
+    metadata: dict = field(default_factory=dict)
+
+
+class OutputChannel(ABC):
+    """A transport (ws/mqtt/http/uart). Best-effort; never raises into emit()."""
+    name: str = "channel"
+
+    @abstractmethod
+    def publish(self, message: "OutputMessage") -> None:
+        raise NotImplementedError
+
+    def client_count(self) -> int:
+        return 0
+
+    def close(self) -> None:
+        pass
+
+
+class OutputFormatter(ABC):
+    """Turns one canonical envelope into zero+ OutputMessages for a channel."""
+
+    @abstractmethod
+    def format(self, envelope: dict, *, channel: str) -> List["OutputMessage"]:
+        raise NotImplementedError
+
+    def on_channel_ready(self, channel: "OutputChannel") -> List["OutputMessage"]:
+        """Messages to publish when a channel (re)connects -- e.g. HA discovery
+        + retained `online`. Default: nothing."""
+        return []
 
 
 def open_result_sink(kind: str = "ws", **kw) -> ResultSink:

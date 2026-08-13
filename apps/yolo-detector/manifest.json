@@ -9,6 +9,9 @@
   "entry": "app.py",
   "kit": ">=0.1.0",
   "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
   "models": [
     {
       "id": "yolo8n_rawhead_int8",
@@ -34,7 +37,27 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "results[]{box,cls,cls_name,score} + events[]{kind,label,cls,score,box}"
+    "schema": "results[]{box,cls,cls_name,score} + events[]{kind,label,cls,score,box}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Detection box, original-frame xyxy pixels"},
+      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "COCO-80 class id"},
+      {"name": "cls_name", "from": "results[].cls_name", "type": "string", "description": "COCO-80 class label"},
+      {"name": "score", "from": "results[].score", "type": "float", "description": "Detection confidence"},
+      {"name": "detection_kind", "from": "events[kind=detection].kind", "type": "string", "event_kind": "detection", "description": "Event kind, always 'detection'"},
+      {"name": "detection_label", "from": "events[kind=detection].label", "type": "string", "event_kind": "detection", "description": "Class label of the detection event"},
+      {"name": "detection_cls", "from": "events[kind=detection].cls", "type": "integer", "event_kind": "detection", "description": "Class id of the detection event"},
+      {"name": "detection_score", "from": "events[kind=detection].score", "type": "float", "event_kind": "detection", "description": "Confidence of the detection event"},
+      {"name": "detection_box", "from": "events[kind=detection].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "detection", "description": "Box of the detection event"}
+    ],
+    "default_mapping": [
+      {"source": "detection.count", "target": "count", "topic": "recamera/{{ app }}/count", "task": "detection"},
+      {"source": "detection.entries | selectattr('label','equalto','person') | list | length", "target": "person_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
+      {"source": "detection.entries", "target": "detections", "topic": "recamera/{{ app }}/detections", "task": "detection"}
+    ]
   },
   "config_schema": {
     "conf": {

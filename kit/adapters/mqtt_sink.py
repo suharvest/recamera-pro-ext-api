@@ -189,6 +189,51 @@ def device_identifier() -> str:
 
 
 # --------------------------------------------------------------------------- #
+# reusable HA MQTT-discovery primitives (module-level so ConfigurableSink's
+# HaDiscoveryFormatter can WRAP -- not duplicate -- them; MqttSink's own methods
+# below delegate here, so its behaviour is byte-for-byte unchanged)
+# --------------------------------------------------------------------------- #
+def ha_discovery_topic(discovery_prefix: str, node: str, app_id: str,
+                       ent: dict) -> str:
+    """`<prefix>/<component>/recamera_<node>_<app>/<object_id>/config`."""
+    component = ent.get("component", "sensor")
+    object_id = ent["object_id"]
+    return (f"{discovery_prefix}/{component}/"
+            f"recamera_{node}_{app_id}/{object_id}/config")
+
+
+def ha_discovery_payload(node: str, app_id: str, state_topic: str,
+                         status_topic: str, device_name: str,
+                         ent: dict) -> dict:
+    """The retained HA MQTT-Discovery config document for one entity.
+
+    Availability (`availability_topic`/`payload_available`/`payload_not_available`)
+    and a stable `unique_id` are always emitted so HA marks the entity
+    online/offline off the LWT and never creates duplicates on reconnect."""
+    object_id = ent["object_id"]
+    cfg: Dict[str, Any] = {
+        "name": ent.get("name", object_id),
+        "unique_id": f"recamera_{node}_{app_id}_{object_id}",
+        "state_topic": state_topic,
+        "value_template": ent.get("value_template", ""),
+        "availability_topic": status_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "device": {
+            "identifiers": [f"recamera_{node}"],
+            "name": device_name,
+            "manufacturer": "Seeed Studio",
+            "model": "reCamera Pro",
+        },
+    }
+    for k in ("device_class", "unit_of_measurement", "state_class", "icon",
+              "entity_category"):
+        if ent.get(k):
+            cfg[k] = ent[k]
+    return cfg
+
+
+# --------------------------------------------------------------------------- #
 # MqttSink
 # --------------------------------------------------------------------------- #
 class MqttSink(ResultSink):
@@ -304,33 +349,12 @@ class MqttSink(ResultSink):
 
     # -- HA MQTT discovery ------------------------------------------------ #
     def _discovery_topic(self, ent: dict) -> str:
-        component = ent.get("component", "sensor")
-        object_id = ent["object_id"]
-        return (f"{self.discovery_prefix}/{component}/"
-                f"recamera_{self.node}_{self.app_id}/{object_id}/config")
+        return ha_discovery_topic(self.discovery_prefix, self.node,
+                                  self.app_id, ent)
 
     def _discovery_payload(self, ent: dict) -> dict:
-        object_id = ent["object_id"]
-        cfg: Dict[str, Any] = {
-            "name": ent.get("name", object_id),
-            "unique_id": f"recamera_{self.node}_{self.app_id}_{object_id}",
-            "state_topic": self.state_topic,
-            "value_template": ent.get("value_template", ""),
-            "availability_topic": self.status_topic,
-            "payload_available": "online",
-            "payload_not_available": "offline",
-            "device": {
-                "identifiers": [f"recamera_{self.node}"],
-                "name": self.device_name,
-                "manufacturer": "Seeed Studio",
-                "model": "reCamera Pro",
-            },
-        }
-        for k in ("device_class", "unit_of_measurement", "state_class", "icon",
-                  "entity_category"):
-            if ent.get(k):
-                cfg[k] = ent[k]
-        return cfg
+        return ha_discovery_payload(self.node, self.app_id, self.state_topic,
+                                    self.status_topic, self.device_name, ent)
 
     def _publish_discovery(self) -> None:
         for ent in self.entities:

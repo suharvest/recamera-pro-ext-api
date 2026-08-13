@@ -1,0 +1,19 @@
+[project]
+name = "recamera-pro-kit"
+version = "0.1.0"
+description = "reCamera Pro kit runtime dependencies (host-side / device wheel source)"
+requires-python = ">=3.9"
+# Runtime deps that must be present in the device venv (/userdata/rknnenv) AND
+# resolvable on a host for `python3 -m pytest`. Vision/NPU deps (numpy, rknnlite,
+# opencv, sherpa) are supplied by the firmware/device image and are intentionally
+# NOT pinned here. jinja2 backs the unified configurable-output templates
+# (internal/OUTPUT_SINK_SPEC.md §8); its MarkupSafe transitive dep ships in the
+# same offline wheel set.
+dependencies = [
+    "jinja2>=3.1,<4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7",
+]

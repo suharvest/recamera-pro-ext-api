@@ -13,6 +13,9 @@
   "entry": "app.py",
   "kit": ">=0.1.0",
   "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
   "models": [
     {
       "id": "yolo11n_pose_rawhead_int8",
@@ -39,7 +42,40 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind,track_id,state,fall_detected,event_id} + events[]{kind=pose_state|fall,track_id,state,fall_detected,event_id,...}"
+    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind,track_id,state,fall_detected,event_id} + events[]{kind=pose_state|fall,track_id,state,fall_detected,event_id,...}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Person box, original-frame xyxy pixels"},
+      {"name": "score", "from": "results[].score", "type": "float", "description": "Person detection confidence"},
+      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "description": "COCO-17 pose keypoints"},
+      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'person'"},
+      {"name": "track_id", "from": "results[].track_id", "type": "integer", "description": "Stable per-identity track id"},
+      {"name": "state", "from": "results[].state", "type": "string", "description": "Per-identity fall state"},
+      {"name": "fall_detected", "from": "results[].fall_detected", "type": "bool", "description": "Fall confirmed for this identity"},
+      {"name": "event_id", "from": "results[].event_id", "type": "integer", "description": "Fall event id for this identity"},
+      {"name": "person_detected", "from": "results[].person_detected", "type": "bool", "description": "Person present flag"},
+      {"name": "person_score", "from": "results[].person_score", "type": "float", "description": "Person score augmentation"},
+      {"name": "tracking", "from": "results[].tracking", "type": "object", "description": "Tracking diagnostics"},
+      {"name": "missed_frames", "from": "results[].missed_frames", "type": "integer", "description": "Consecutive missed frames for the track"},
+      {"name": "features", "from": "results[].features", "type": "object", "description": "Nested geometric fall features/diagnostics"},
+      {"name": "pose_state_kind", "from": "events[kind=pose_state].kind", "type": "string", "event_kind": "pose_state", "description": "Event kind, always 'pose_state'"},
+      {"name": "pose_state_track_id", "from": "events[kind=pose_state].track_id", "type": "integer", "event_kind": "pose_state", "description": "Track id of the pose_state event"},
+      {"name": "pose_state_state", "from": "events[kind=pose_state].state", "type": "string", "event_kind": "pose_state", "description": "State of the pose_state event"},
+      {"name": "pose_state_fall_detected", "from": "events[kind=pose_state].fall_detected", "type": "bool", "event_kind": "pose_state", "description": "Fall flag of the pose_state event"},
+      {"name": "pose_state_event_id", "from": "events[kind=pose_state].event_id", "type": "integer", "event_kind": "pose_state", "description": "Fall event id of the pose_state event"},
+      {"name": "fall_kind", "from": "events[kind=fall].kind", "type": "string", "event_kind": "fall", "description": "Confirmed fall edge event"},
+      {"name": "fall_track_id", "from": "events[kind=fall].track_id", "type": "integer", "event_kind": "fall", "description": "Track id of the fall edge"},
+      {"name": "fall_event_id", "from": "events[kind=fall].event_id", "type": "integer", "event_kind": "fall", "description": "Fall event id of the fall edge"},
+      {"name": "fall_state", "from": "events[kind=fall].state", "type": "string", "event_kind": "fall", "description": "State at the fall edge"}
+    ],
+    "default_mapping": [
+      {"source": "results | length", "target": "person_count", "topic": "recamera/{{ app }}/summary", "task": "keypoint"},
+      {"source": "results | selectattr('fall_detected') | list | length", "target": "fallen_count", "topic": "recamera/{{ app }}/summary", "task": "keypoint"},
+      {"source": "events.fall | last", "target": "fall_event", "topic": "recamera/{{ app }}/fall", "task": "keypoint"}
+    ]
   },
   "config_schema": {
     "groups": [

@@ -13,6 +13,9 @@
   "entry": "app.py",
   "kit": ">=0.1.0",
   "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
   "models": [
     {
       "id": "yolov8n_face_rawhead_fp16",
@@ -64,7 +67,48 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "results[]{box,score,presence,landmark_count,ear,mar} + events[]{kind=metrics|blink|yawn|drowsiness,avg_ear,mar,state,drowsiness_level,perclos_pct,...}"
+    "schema": "results[]{box,score,presence,landmark_count,ear,mar} + events[]{kind=metrics|blink|yawn|drowsiness,avg_ear,mar,state,drowsiness_level,perclos_pct,...}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Face box, original-frame xyxy pixels"},
+      {"name": "score", "from": "results[].score", "type": "float", "description": "Face detection confidence"},
+      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'face'"},
+      {"name": "presence", "from": "results[].presence", "type": "float", "description": "Landmark presence score"},
+      {"name": "landmark_count", "from": "results[].landmark_count", "type": "integer", "description": "Number of FaceMesh landmarks (468 when present)"},
+      {"name": "ear", "from": "results[].ear", "type": "float", "optional": true, "description": "Eye aspect ratio (primary face)"},
+      {"name": "mar", "from": "results[].mar", "type": "float", "optional": true, "description": "Mouth aspect ratio (primary face)"},
+      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[]", "optional": true, "description": "468 FaceMesh pixel keypoints"},
+      {"name": "metrics_face_valid", "from": "events[kind=metrics].face_valid", "type": "bool", "event_kind": "metrics", "description": "Whether a valid face drives the metrics"},
+      {"name": "metrics_avg_ear", "from": "events[kind=metrics].avg_ear", "type": "float", "event_kind": "metrics", "description": "Average EAR"},
+      {"name": "metrics_left_ear", "from": "events[kind=metrics].left_ear", "type": "float", "event_kind": "metrics", "description": "Left-eye EAR"},
+      {"name": "metrics_right_ear", "from": "events[kind=metrics].right_ear", "type": "float", "event_kind": "metrics", "description": "Right-eye EAR"},
+      {"name": "metrics_mar", "from": "events[kind=metrics].mar", "type": "float", "event_kind": "metrics", "description": "Mouth aspect ratio"},
+      {"name": "metrics_eyes_closed", "from": "events[kind=metrics].eyes_closed", "type": "bool", "event_kind": "metrics", "description": "Eyes-closed flag"},
+      {"name": "metrics_mouth_open", "from": "events[kind=metrics].mouth_open", "type": "bool", "event_kind": "metrics", "description": "Mouth-open flag"},
+      {"name": "metrics_state", "from": "events[kind=metrics].state", "type": "string", "event_kind": "metrics", "description": "Composite drowsiness state"},
+      {"name": "metrics_drowsiness_level", "from": "events[kind=metrics].drowsiness_level", "type": "string", "event_kind": "metrics", "description": "Drowsiness level"},
+      {"name": "metrics_perclos_pct", "from": "events[kind=metrics].perclos_pct", "type": "float", "event_kind": "metrics", "description": "PERCLOS percentage"},
+      {"name": "metrics_continuous_closure_sec", "from": "events[kind=metrics].continuous_closure_sec", "type": "float", "event_kind": "metrics", "description": "Continuous eye-closure seconds"},
+      {"name": "metrics_is_yawning", "from": "events[kind=metrics].is_yawning", "type": "bool", "event_kind": "metrics", "description": "Currently yawning"},
+      {"name": "metrics_yawn_count_5min", "from": "events[kind=metrics].yawn_count_5min", "type": "integer", "event_kind": "metrics", "description": "Yawns in the last 5 minutes"},
+      {"name": "metrics_alert_active", "from": "events[kind=metrics].alert_active", "type": "bool", "event_kind": "metrics", "description": "Drowsiness alert active"},
+      {"name": "blink_kind", "from": "events[kind=blink].kind", "type": "string", "event_kind": "blink", "description": "Blink edge event"},
+      {"name": "yawn_kind", "from": "events[kind=yawn].kind", "type": "string", "event_kind": "yawn", "description": "Yawn edge event"},
+      {"name": "drowsiness_kind", "from": "events[kind=drowsiness].kind", "type": "string", "event_kind": "drowsiness", "description": "Drowsiness edge event"}
+    ],
+    "default_mapping": [
+      {"source": "(events.metrics | last).state", "target": "state", "topic": "recamera/{{ app }}/metrics", "task": "keypoint"},
+      {"source": "(events.metrics | last).alert_active", "target": "alert_active", "topic": "recamera/{{ app }}/metrics", "task": "keypoint"},
+      {"source": "(events.metrics | last).avg_ear", "target": "avg_ear", "topic": "recamera/{{ app }}/metrics", "task": "keypoint"},
+      {"source": "(events.metrics | last).perclos_pct", "target": "perclos_pct", "topic": "recamera/{{ app }}/metrics", "task": "keypoint"},
+      {"source": "(events.metrics | last).is_yawning", "target": "is_yawning", "topic": "recamera/{{ app }}/metrics", "task": "keypoint"},
+      {"source": "detection.count", "target": "face_count", "topic": "recamera/{{ app }}/count", "task": "keypoint"},
+      {"source": "events.blink | length", "target": "blink_count", "topic": "recamera/{{ app }}/edges", "task": "keypoint"},
+      {"source": "events.yawn | length", "target": "yawn_count", "topic": "recamera/{{ app }}/edges", "task": "keypoint"}
+    ]
   },
   "config_schema": {
     "groups": [

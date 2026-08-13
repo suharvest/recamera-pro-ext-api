@@ -9,6 +9,9 @@
   "entry": "app.py",
   "kit": ">=0.1.0",
   "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
   "models": [],
   "postproc": "qrcode",
   "pipeline": [
@@ -26,7 +29,24 @@
   "output": {
     "sink": "ws",
     "port": 8124,
-    "schema": "results[]{text,quad} + events[]{kind,text,quad}"
+    "schema": "results[]{text,quad} + events[]{kind,text,quad}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "text", "from": "results[].text", "type": "string", "optional": true, "description": "Decoded QR text (may be empty)"},
+      {"name": "quad", "from": "results[].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "description": "QR corner points, original-frame pixels"},
+      {"name": "qrcode_kind", "from": "events[kind=qrcode].kind", "type": "string", "event_kind": "qrcode", "description": "Event kind, always 'qrcode'"},
+      {"name": "qrcode_text", "from": "events[kind=qrcode].text", "type": "string", "event_kind": "qrcode", "optional": true, "description": "Decoded QR text of the event"},
+      {"name": "qrcode_quad", "from": "events[kind=qrcode].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "event_kind": "qrcode", "description": "QR corner points of the event"},
+      {"name": "box", "from": "derived:bbox(quad)", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "derived": true, "description": "Axis-aligned box derived from quad by the formatter; not emitted by the app"}
+    ],
+    "default_mapping": [
+      {"source": "events.qrcode | length", "target": "count", "topic": "recamera/{{ app }}/count"},
+      {"source": "events.qrcode | map(attribute='text') | reject('equalto','') | list | last", "target": "last_text", "topic": "recamera/{{ app }}/text"},
+      {"source": "events.qrcode | map(attribute='text') | reject('equalto','') | list", "target": "texts", "topic": "recamera/{{ app }}/text"}
+    ]
   },
   "config_schema": {},
   "ha_entities": [
