@@ -2,15 +2,28 @@
 # recamera-ext-api rollback.sh  -- restore factory rkipc (and entry.cgi) into /oem, then reboot.
 # Run ON THE DEVICE as root.
 set -e
-FACTORY_RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
+# A rollback target MUST be a genuine clean factory rkipc (see install.sh for the rationale).
+VERIFIED_FACTORY_MD5S="d5e7ca9365dae553e8c7e4c0a0f436ec"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
+KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550"  # ext builds -- NOT rollback targets
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
+in_list() { _v=$1; shift; for _m in $*; do [ "$_v" = "$_m" ] && return 0; done; return 1; }
+is_factory()   { in_list "$1" $VERIFIED_FACTORY_MD5S; }
+is_ext_build() { in_list "$1" $KNOWN_EXT_BUILD_MD5S; }
 
 if [ ! -f /userdata/rkipc.factory.bak ]; then
   echo "FATAL: /userdata/rkipc.factory.bak missing -- cannot roll back"; exit 1
 fi
 BAK=$(md5of /userdata/rkipc.factory.bak)
-echo "restoring rkipc from backup ($BAK)"
-[ "$BAK" = "$FACTORY_RKIPC_MD5" ] || echo "WARN: backup md5 not the known factory value, restoring anyway"
+if ! is_factory "$BAK"; then
+  if is_ext_build "$BAK"; then
+    echo "FATAL: backup ($BAK) is a known EXTENSION build, not factory -- refusing to restore."
+  else
+    echo "FATAL: backup ($BAK) is not a VERIFIED factory rkipc -- refusing to restore."
+  fi
+  echo "       A rollback target must be clean factory (md5 one of: $VERIFIED_FACTORY_MD5S)."
+  echo "       Nothing changed. Obtain the true factory rkipc before rolling back."; exit 1
+fi
+echo "restoring factory rkipc from backup ($BAK)"
 cp /userdata/rkipc.factory.bak /oem/usr/bin/rkipc && chmod 755 /oem/usr/bin/rkipc
 
 if [ -f /userdata/entry.cgi.factory.bak ]; then

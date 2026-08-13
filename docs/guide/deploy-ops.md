@@ -58,7 +58,7 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 2baebbb55155efb0def2c
 
 `install.sh` 是**幂等 + md5 校验**的（见 `release/pkg/install.sh`）：
 1. `[1/6]` 校验包内三件产物 md5，不符立即 `exit 1`；
-2. `[2/6]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`（原厂 md5 `d5e7ca9365dae553e8c7e4c0a0f436ec`）；**若备份既不是已知原厂值也不是本包 rkipc、且 `/oem` 当前 rkipc 也不是本包的**，则拒绝继续（保证永远有一个可回滚目标）；
+2. `[2/6]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`——但**只接受经校验的干净原厂**（`VERIFIED_FACTORY_MD5S`，当前 `d5e7ca9365dae553e8c7e4c0a0f436ec`，1.9MB、0 个扩展 socket 字符串）作为回滚目标。若 `/oem` 当前 rkipc 是**已知扩展构建**（`KNOWN_EXT_BUILD_MD5S`，含本包自己的 rkipc）或未知构建，则**拒绝把它当原厂备份**并 `exit 1`（否则日后回滚会变成空操作、扩展固件留在 `/oem`）。新固件版本要先确认 `strings rkipc | grep /run/recamera` 为空、再把其 md5 追加进 `VERIFIED_FACTORY_MD5S`；`rollback.sh` 同理，备份非已验证原厂时**拒绝恢复**；
 3. `[3/6]` 首次备份原厂 `entry.cgi` 到 `/userdata/entry.cgi.factory.bak`；
 4. `[4/6]` `touch /oem/.wtest` 验证 `/oem` 可写；
 5. `[5/6]` `cp` 三件产物进 `/oem` 并**逐个 `chmod 755`**，建立 `.so.1` / `.so` 软链，SDK python + 头拷进 `/userdata/sdk/`，`sync`；

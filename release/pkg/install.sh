@@ -8,10 +8,21 @@ PKG=$(cd "$(dirname "$0")" && pwd)
 RKIPC_MD5=f93ac217c9920bc962771aeed1ac0550
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
 SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
-FACTORY_RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f   # V1.0.x factory rkipc (verified on ref device)
+# Rollback safety -- a valid rollback target MUST be a genuine, unmodified factory rkipc.
+#   VERIFIED_FACTORY_MD5S : clean factory rkipc md5s (0 extension sockets). The ONLY md5s
+#     accepted as a rollback target. To add a device's factory: confirm
+#     `strings rkipc | grep /run/recamera` prints nothing, then append its md5 here.
+#   KNOWN_EXT_BUILD_MD5S  : rkipc builds that CARRY the extension endpoints. Listed so we
+#     NEVER mistake one for factory -- an ext build (incl. our own shipped rkipc) must not be
+#     captured as, or restored as, "factory", or the rollback becomes a silent no-op.
+VERIFIED_FACTORY_MD5S="d5e7ca9365dae553e8c7e4c0a0f436ec"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
+KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550"  # ext builds -- NOT rollback targets
 
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 need() { [ "$(md5of "$1")" = "$2" ] || { echo "FATAL md5 mismatch: $1 (got $(md5of "$1") want $2)"; exit 1; }; }
+in_list() { _v=$1; shift; for _m in $*; do [ "$_v" = "$_m" ] && return 0; done; return 1; }
+is_factory()   { in_list "$1" $VERIFIED_FACTORY_MD5S; }
+is_ext_build() { in_list "$1" $KNOWN_EXT_BUILD_MD5S; }
 
 echo "=== [1/7] verify package artifacts ==="
 need "$PKG/rkipc" "$RKIPC_MD5"
@@ -19,20 +30,32 @@ need "$PKG/entry.cgi" "$ENTRY_MD5"
 need "$PKG/sdk/lib/librecamera_ext.so.1.0.0" "$SO_MD5"
 echo "package OK"
 
-echo "=== [2/7] backup factory rkipc (once) ==="
-if [ ! -f /userdata/rkipc.factory.bak ]; then
-  cp /oem/usr/bin/rkipc /userdata/rkipc.factory.bak
-  echo "saved /userdata/rkipc.factory.bak"
-else
-  echo "backup exists: $(md5of /userdata/rkipc.factory.bak)"
-fi
-# Safety: refuse to proceed unless a valid rollback target exists.
-BAK=$(md5of /userdata/rkipc.factory.bak)
+echo "=== [2/7] backup factory rkipc (once, verified-factory only) ==="
 CUR=$(md5of /oem/usr/bin/rkipc)
-if [ "$BAK" != "$FACTORY_RKIPC_MD5" ] && [ "$BAK" != "$RKIPC_MD5" ]; then
-  echo "WARN: backup md5 ($BAK) is neither known-factory nor our rkipc."
-  if [ "$CUR" != "$RKIPC_MD5" ]; then
-    echo "FATAL: no valid rollback target and /oem rkipc not yet ours -- ABORT"; exit 1
+if [ -f /userdata/rkipc.factory.bak ]; then
+  BAK=$(md5of /userdata/rkipc.factory.bak)
+  if is_factory "$BAK"; then
+    echo "backup exists, verified factory: $BAK"
+  else
+    echo "FATAL: existing /userdata/rkipc.factory.bak ($BAK) is NOT a verified factory rkipc."
+    echo "       Restoring it would leave a non-factory (likely extension) build on /oem."
+    echo "       Replace the backup with a true factory rkipc, then re-run."; exit 1
+  fi
+else
+  # First install: only capture a backup if /oem currently holds a clean factory rkipc.
+  # (Capturing an already-installed ext build as "factory" is exactly what breaks rollback.)
+  if is_factory "$CUR"; then
+    cp /oem/usr/bin/rkipc /userdata/rkipc.factory.bak
+    echo "saved /userdata/rkipc.factory.bak (verified factory $CUR)"
+  elif is_ext_build "$CUR"; then
+    echo "FATAL: /oem rkipc ($CUR) is a known EXTENSION build, not clean factory, and no"
+    echo "       factory backup exists -- refusing to capture an ext build as 'factory'."
+    echo "       Restore the true factory rkipc first (md5 one of: $VERIFIED_FACTORY_MD5S)."; exit 1
+  else
+    echo "FATAL: /oem rkipc ($CUR) is neither a verified factory nor a known build."
+    echo "       Refusing to guess a rollback target. Verify this device's factory rkipc"
+    echo "       (strings rkipc | grep /run/recamera  must be empty), append its md5 to"
+    echo "       VERIFIED_FACTORY_MD5S, then re-run."; exit 1
   fi
 fi
 

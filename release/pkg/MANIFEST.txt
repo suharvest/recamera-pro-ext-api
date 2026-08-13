@@ -18,7 +18,7 @@ PYTHON INFERENCE RUNTIME (rknnlite 2.3.2)  -- provisioned by install.sh into /us
   vision apps run via: PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib /userdata/rknnenv/bin/python3 <app>.py
 
 FACTORY / ROLLBACK
-  factory rkipc md5                 9826e9ecf8ed543a6dc78e3731102e0f    (saved to /userdata/rkipc.factory.bak by install.sh)
+  factory rkipc md5                 d5e7ca9365dae553e8c7e4c0a0f436ec    (clean factory, 0 ext sockets; the only valid rollback target)
   factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak
 
 CONTENTS OF THIS rkipc
