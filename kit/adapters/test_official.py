@@ -153,7 +153,9 @@ def test_direct_model_preprocess_geometry_and_fallback_contract():
     src.prefer_rga = True
     src.direct_preprocess = True
     frame = _FakeExtFrame(seq=0, pts_us=123, w=1280, h=720)
-    padded, info = src._convert(frame)
+    data, padded, info = src._convert(frame)
+    # direct mode: the letterbox IS the frame data (no full-res convert at all).
+    assert data is padded
     assert padded.shape == (640, 640, 3)
     assert info.orig_w == 1280 and info.orig_h == 720
     assert info.scale == 0.5 and info.pad_w == 0 and info.pad_h == 140
@@ -171,10 +173,48 @@ def test_direct_model_preprocess_geometry_and_fallback_contract():
 
     src._rga = _BrokenRga()
     src.direct_preprocess = True
-    rgb, no_info = src._convert(frame)
-    assert rgb.shape == (720, 1280, 3) and no_info is None
+    rgb, no_model, no_info = src._convert(frame)
+    assert rgb.shape == (720, 1280, 3) and no_info is None and no_model is None
     assert src.direct_preprocess is False
     print("PASS test_direct_model_preprocess_geometry_and_fallback_contract")
+
+
+def test_hw_letterbox_keeps_original_pixels_alongside_model_image():
+    """"hw" mode: RGA letterbox in model_data, ORIGINAL pixels still in data.
+
+    This is what lets ROI/perspective-cropping apps (face/facemesh/ppocr) skip
+    the Python letterbox without losing source-resolution pixels.
+    """
+    _install_fake_ext()
+    from kit.adapters.official import OfficialFrameSource
+
+    class _FakeRga:
+        def resize_nv12_to_rgb(self, **kwargs):
+            return np.full((kwargs["dst_height"], kwargs["dst_width"], 3),
+                           7, dtype=np.uint8)
+
+        def convert(self, **kwargs):
+            return np.full((kwargs["height"], kwargs["width"], 3), 9, dtype=np.uint8)
+
+    src = OfficialFrameSource(url=None, input_size=640, hw_letterbox=True,
+                              prefer_rga=False, verbose=False)
+    assert src.hw_letterbox is True and src.direct_preprocess is False
+    src._rga = _FakeRga()
+    src._rga_decided = True
+    frame = _FakeExtFrame(seq=0, pts_us=123, w=1280, h=720)
+    data, model_data, info = src._convert(frame)
+    # Full-resolution originals survive for cropping ...
+    assert data.shape == (720, 1280, 3) and np.all(data == 9)
+    # ... and the model input is the hardware letterbox with matching geometry.
+    assert model_data.shape == (640, 640, 3)
+    assert info.scale == 0.5 and info.pad_w == 0 and info.pad_h == 140
+    assert np.all(model_data[:140] == 114) and np.all(model_data[140:500] == 7)
+
+    # direct_preprocess wins if both are somehow requested.
+    both = OfficialFrameSource(url=None, input_size=640, direct_preprocess=True,
+                               hw_letterbox=True, prefer_rga=False, verbose=False)
+    assert both.direct_preprocess is True and both.hw_letterbox is False
+    print("PASS test_hw_letterbox_keeps_original_pixels_alongside_model_image")
 
 
 # Test frame geometry: width != height so we prove x/width vs y/height, chosen

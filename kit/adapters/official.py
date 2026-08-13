@@ -124,6 +124,7 @@ class OfficialFrameSource(FrameSource):
                  sock: str = OFFICIAL_FRAME_SOCK,
                  width: int = 0, height: int = 0, fps_divisor: int = 0,
                  input_size: int = 0, direct_preprocess: bool = False,
+                 hw_letterbox: bool = False,
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
@@ -134,6 +135,11 @@ class OfficialFrameSource(FrameSource):
         self.fps_divisor = int(fps_divisor)
         self.input_size = int(input_size)
         self.direct_preprocess = bool(direct_preprocess and self.input_size > 0)
+        # Aux mode: letterbox on RGA into a SEPARATE model image while `data`
+        # keeps original-resolution pixels.  `direct_preprocess` (which reuses
+        # the letterbox AS `data`) wins when both are requested.
+        self.hw_letterbox = bool(hw_letterbox and self.input_size > 0
+                                 and not self.direct_preprocess)
         self.timeout_ms = int(timeout_ms)
         self.prefer_rga = bool(prefer_rga)
         self.lib_path = lib_path
@@ -182,8 +188,34 @@ class OfficialFrameSource(FrameSource):
                              orig_w=int(width), orig_h=int(height))
         return small_w, small_h, left, top, info, net_w, net_h
 
+    def _rga_letterbox(self, frame):
+        """RGA NV12 -> model-sized letterboxed RGB. Returns ``(padded, info)``.
+
+        Shared by both hardware modes; raises on any geometry/ABI problem so the
+        caller can latch the optimization off and continue on the safe path.
+        """
+        sw, sh, left, top, info, net_w, net_h = self._letterbox_geometry(
+            int(frame.width), int(frame.height))
+        off0, stride0, vstride0 = frame.planes[0]
+        if off0 != 0:
+            raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
+        small = self._rga.resize_nv12_to_rgb(
+            fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
+            y_stride=int(stride0), y_vstride=int(vstride0),
+            dst_width=sw, dst_height=sh)
+        padded = np.full((net_h, net_w, 3), 114, dtype=np.uint8)
+        padded[top:top + sh, left:left + sw] = small
+        return np.ascontiguousarray(padded), info
+
     def _convert(self, frame):
-        """Return ``(rgb, model_info)`` as fresh contiguous arrays.
+        """Return ``(rgb, model_data, model_info)`` as fresh contiguous arrays.
+
+        Three shapes, by mode:
+          * direct  -> ``(letterbox, letterbox, info)``  -- no full-res convert
+            at all (cheapest; caller loses original-resolution pixels).
+          * hw      -> ``(full_rgb, letterbox, info)``   -- keeps source pixels
+            AND skips the Python letterbox (for apps that crop ROIs).
+          * neither -> ``(full_rgb, None, None)``        -- legacy path.
 
         Tries the latched RGA path; on ANY RGA error it permanently falls back
         to OpenCV for the rest of the run (a mis-versioned librga must never take
@@ -192,30 +224,29 @@ class OfficialFrameSource(FrameSource):
         if not self._rga_decided:
             self._decide_backend(frame)
 
-        if self._rga is not None and self.direct_preprocess:
+        model_data = model_info = None
+        if self._rga is not None and (self.direct_preprocess or self.hw_letterbox):
+            direct = self.direct_preprocess
             try:
-                sw, sh, left, top, info, net_w, net_h = self._letterbox_geometry(
-                    int(frame.width), int(frame.height))
-                off0, stride0, vstride0 = frame.planes[0]
-                if off0 != 0:
-                    raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
-                small = self._rga.resize_nv12_to_rgb(
-                    fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
-                    y_stride=int(stride0), y_vstride=int(vstride0),
-                    dst_width=sw, dst_height=sh)
-                padded = np.full((net_h, net_w, 3), 114, dtype=np.uint8)
-                padded[top:top + sh, left:left + sw] = small
+                model_data, model_info = self._rga_letterbox(frame)
                 if not self._direct_logged:
                     self._direct_logged = True
-                    self._log("preprocess path: RGA direct NV12 resize %dx%d -> RGB %dx%d + gray pad"
-                              % (int(frame.width), int(frame.height), net_w, net_h))
-                return np.ascontiguousarray(padded), info
+                    self._log("preprocess path: RGA %s NV12 resize %dx%d -> RGB %dx%d + gray pad"
+                              % ("direct" if direct else "aux",
+                                 int(frame.width), int(frame.height),
+                                 model_data.shape[1], model_data.shape[0]))
+                if direct:
+                    # The letterbox IS the frame: skip the full-res conversion.
+                    return model_data, model_data, model_info
             except Exception as e:
                 # A resize ABI/driver mismatch must not take the app down.
                 # Disable only the optimization and continue through the
                 # known-good full-resolution RGA/OpenCV path below.
                 self.direct_preprocess = False
-                self._log("RGA direct preprocess failed (%s); latching to full RGB" % e)
+                self.hw_letterbox = False
+                model_data = model_info = None
+                self._log("RGA %s preprocess failed (%s); latching to full RGB"
+                          % ("direct" if direct else "aux", e))
 
         if self._rga is not None:
             try:
@@ -226,7 +257,7 @@ class OfficialFrameSource(FrameSource):
                 return self._rga.convert(
                     fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
                     y_stride=int(stride0), y_vstride=int(vstride0),
-                ), None
+                ), model_data, model_info
             except Exception as e:
                 self._rga = None  # latch OFF -- never retry RGA this run
                 self._log("RGA convert failed (%s); latching to OpenCV" % e)
@@ -234,7 +265,7 @@ class OfficialFrameSource(FrameSource):
         # OpenCV fallback: SDK cv2 NV12->BGR (a copy), then BGR->RGB via numpy
         # (no cv2 import needed in this module -- keeps the adapter cv2-free).
         bgr = frame.to_bgr()
-        return np.ascontiguousarray(bgr[:, :, ::-1]), None
+        return np.ascontiguousarray(bgr[:, :, ::-1]), model_data, model_info
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -259,7 +290,7 @@ class OfficialFrameSource(FrameSource):
                      self._src.pool_depth, self._src.max_outstanding))
         try:
             for ext_frame in self._src:
-                rgb, model_info = self._convert(ext_frame)  # standalone copy
+                rgb, model_data, model_info = self._convert(ext_frame)  # standalone copies
                 yield Frame(
                     data=rgb,
                     w=int(ext_frame.width),
@@ -267,6 +298,7 @@ class OfficialFrameSource(FrameSource):
                     fmt="RGB",
                     pts=ext_frame.pts_us / 1e6,    # us -> s; round-trips in the sink
                     model_info=model_info,
+                    model_data=model_data,
                 )
                 # The SDK releases `ext_frame`'s dma-buf when the loop advances;
                 # `rgb` is a copy, so nothing here holds the borrowed buffer.

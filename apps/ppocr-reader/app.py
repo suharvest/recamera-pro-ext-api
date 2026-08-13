@@ -66,6 +66,10 @@ class PpocrReaderApp(App):
     name = "PP-OCR Reader"
     postproc = "db_ocr"
     input_size = 480                       # DB detector input side (not 640)
+    # "hw" (not "hw-direct"): recognition perspective-crops source-resolution
+    # quads out of frame.data, so originals must survive; only the 480x480
+    # letterbox moves to RGA (see App.model_frame).
+    model_frame = "hw"
 
     def setup(self, config):
         super().setup(config)

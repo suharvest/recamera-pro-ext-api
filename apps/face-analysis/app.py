@@ -64,6 +64,10 @@ class FaceAnalysisApp(App):
     id = "face-analysis"
     name = "Face Analysis"
     postproc = "face_detect"
+    # "hw" (not "hw-direct"): on_results crops source-resolution ROIs out of
+    # frame.data for the embedding stage, so the original pixels must survive;
+    # only the letterbox moves to RGA (see App.model_frame).
+    model_frame = "hw"
 
     def setup(self, config):
         super().setup(config)

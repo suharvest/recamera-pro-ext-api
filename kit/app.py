@@ -54,24 +54,30 @@ class App:
                                       # False: the loop skips RknnModel + letterbox +
                                       # infer and calls process_frame(frame) instead.
 
-    # Opt in to hardware (RGA) letterboxing in the frame source: the official
-    # broker hands back a model-sized RGB letterbox plus the matching
-    # ``frame.model_info`` transform, skipping a full-resolution NV12->RGB
-    # conversion and the Python resize (measured ~40 ms/frame, +49% e2e on
-    # 1280x720 -> 640x640).  Set it on your App subclass:
+    # Where the model-input letterbox is produced.  The Python resize costs
+    # ~40 ms/frame at 1280x720 -> 640x640; moving it onto RGA measured +49% e2e
+    # throughput.  Set it on your App subclass:
     #
     #     class MyApp(App):
-    #         direct_model_frame = True
+    #         model_frame = "hw"        # or "hw-direct"
     #
-    # ONLY set it when the app consumes detections/keypoints and NEVER reads
-    # pixels from ``frame.data`` -- with it on, ``frame.data`` IS the letterboxed
-    # model input, not source-resolution pixels (``frame.w``/``frame.h`` and the
-    # post-processed coordinates stay in original geometry either way).  Apps
-    # that crop original pixels (OCR/face/facemesh) must leave this False.
-    # Ignored when ``needs_model`` is False, when the backend exposes no dma-buf
-    # fd (RTSP/snapshot), or when the RGA path is unavailable -- every case
-    # falls back to the CPU letterbox with identical geometry, never an error.
-    direct_model_frame: bool = False
+    #   "cpu"       (default) letterbox in this loop.  Always correct.
+    #   "hw"        the source letterboxes on RGA into ``frame.model_data`` and
+    #               keeps ORIGINAL-resolution pixels in ``frame.data``.  Safe for
+    #               any model-backed app, including ones that crop source pixels
+    #               (ROI / perspective) after inference.
+    #   "hw-direct" the RGA letterbox IS ``frame.data`` -- also skips the
+    #               full-resolution NV12->RGB conversion (the cheapest path), so
+    #               NO original-resolution pixels are available.  Only for apps
+    #               that consume detections/keypoints and never read
+    #               ``frame.data``.
+    #
+    # ``frame.w``/``frame.h`` and post-processed coordinates stay in original
+    # camera geometry in every mode.  Ignored when ``needs_model`` is False, when
+    # the backend exposes no dma-buf fd (RTSP/snapshot), or when RGA/librga is
+    # unavailable -- each case falls back to the CPU letterbox with identical
+    # geometry, never an error.
+    model_frame: str = "cpu"
 
     def __init__(self) -> None:
         # config_schema-backed knobs (defaults; overridden in setup())
@@ -234,12 +240,17 @@ class App:
             model = RknnModel(model_path)
         else:
             model = None
-        direct_model_frame = bool(self.needs_model and self.direct_model_frame)
+        mode = self.model_frame if self.needs_model else "cpu"
+        if mode not in ("cpu", "hw", "hw-direct"):
+            raise ValueError(
+                "%s: model_frame must be 'cpu', 'hw' or 'hw-direct' (got %r)"
+                % (self.id, self.model_frame))
         src = open_frame_source(
             url=url,
             prefer=source,
-            input_size=self.input_size if direct_model_frame else 0,
-            direct_preprocess=direct_model_frame,
+            input_size=self.input_size if mode != "cpu" else 0,
+            direct_preprocess=(mode == "hw-direct"),
+            hw_letterbox=(mode == "hw"),
         )
 
         t_pre = t_inf = t_post = 0.0
@@ -290,11 +301,15 @@ class App:
                     #/``h`` and supplies a LetterboxInfo-compatible object;
                     # post-processing therefore still maps detections back to
                     # camera pixels while Python skips the second resize.
+                    # "hw" delivers the letterbox alongside the original pixels
+                    # (model_data); "hw-direct" letterboxes into data itself.
                     info = getattr(frame, "model_info", None)
-                    if info is not None:
-                        padded = frame.data
-                    else:
-                        padded, info = letterbox(frame.data, self.input_size)
+                    padded = getattr(frame, "model_data", None)
+                    if padded is None:
+                        if info is not None:
+                            padded = frame.data
+                        else:
+                            padded, info = letterbox(frame.data, self.input_size)
                     t1 = time.monotonic()
                     outs = model.infer(padded)
                     t2 = time.monotonic()

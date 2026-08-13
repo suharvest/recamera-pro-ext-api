@@ -370,8 +370,8 @@ class FallDetectionApp(App):
     name = "Fall Detection"
     postproc = "pose"
     # Only skeleton coordinates are consumed -- never frame.data pixels -- so the
-    # frame source can letterbox on RGA (see App.direct_model_frame).
-    direct_model_frame = True
+    # frame source can letterbox on RGA into data itself (see App.model_frame).
+    model_frame = "hw-direct"
 
     def setup(self, config):
         super().setup(config)

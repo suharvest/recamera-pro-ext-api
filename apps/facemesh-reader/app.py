@@ -56,6 +56,10 @@ class FacemeshReaderApp(App):
     id = "facemesh-reader"
     name = "Facemesh Reader"
     postproc = "face_detect"
+    # "hw" (not "hw-direct"): the stage-2 mesh pipeline reads source-resolution
+    # pixels from frame.data, so originals must survive; only the letterbox
+    # moves to RGA (see App.model_frame).
+    model_frame = "hw"
 
     def setup(self, config):
         super().setup(config)

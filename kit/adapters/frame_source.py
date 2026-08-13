@@ -77,6 +77,14 @@ class Frame:
     # this low-level adapter module (and to remain backwards compatible with
     # callers constructing Frame positionally).
     model_info: object = None
+    # Optional model-sized, already-letterboxed RGB produced by the source
+    # (hardware path) while ``data`` keeps ORIGINAL-resolution pixels.  This is
+    # what lets an app crop source pixels (ROI/perspective) and still skip the
+    # Python letterbox.  When the source instead letterboxes *into* ``data``
+    # (no original pixels retained) this stays None and only ``model_info`` is
+    # set.  Consumers should prefer ``model_data`` when present, else fall back
+    # to ``data`` + ``model_info``, else letterbox themselves.
+    model_data: object = None
 
 
 class FrameSource(ABC):
