@@ -51,6 +51,8 @@ __all__ = [
     "FrameConfig",
     "ProbeSource",
     "ProbeSample",
+    "MaskControl",
+    "MaskRect",
 ]
 
 # ProbeSubscribeAck.subscribed_mask bits (mirror of RC_EXT_PROBE_MASK_*).
@@ -175,6 +177,30 @@ class KeypointInstance(Structure):
     ]
 
 
+class _MaskRect(Structure):
+    """Mirror of rc_ext_mask_rect_t (normalized [0,1] hardware-cover rect)."""
+
+    _fields_ = [
+        ("id", c_int),
+        ("x", c_float),
+        ("y", c_float),
+        ("w", c_float),
+        ("h", c_float),
+    ]
+
+
+class MaskRect:
+    """A normalized hardware privacy-mask rectangle. id selects the slot
+    ([0,6)); x/y/w/h are [0,1] fractions of frame width/height."""
+
+    def __init__(self, id, x, y, w, h):
+        self.id = id
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+
 class _Plane(Structure):
     _fields_ = [("offset", c_uint32), ("stride", c_uint32), ("vstride", c_uint32)]
 
@@ -287,6 +313,20 @@ def _bind(lib):
         lib.rc_ext_probe_release.argtypes = [c_void_p, POINTER(_ProbeSample)]
         lib.rc_ext_probe_close.restype = None
         lib.rc_ext_probe_close.argtypes = [c_void_p]
+    # Hardware privacy-mask control (optional -- older libs may lack these).
+    if hasattr(lib, "rc_ext_mask_open"):
+        lib.rc_ext_mask_open.restype = c_void_p
+        lib.rc_ext_mask_open.argtypes = [POINTER(c_int)]
+        lib.rc_ext_mask_set.restype = c_int
+        lib.rc_ext_mask_set.argtypes = [c_void_p, POINTER(_MaskRect), c_size_t, POINTER(c_int)]
+        lib.rc_ext_mask_update.restype = c_int
+        lib.rc_ext_mask_update.argtypes = [c_void_p, POINTER(_MaskRect)]
+        lib.rc_ext_mask_clear.restype = c_int
+        lib.rc_ext_mask_clear.argtypes = [c_void_p]
+        lib.rc_ext_mask_query.restype = c_int
+        lib.rc_ext_mask_query.argtypes = [c_void_p, POINTER(_MaskRect), c_size_t]
+        lib.rc_ext_mask_close.restype = None
+        lib.rc_ext_mask_close.argtypes = [c_void_p]
     return lib
 
 
@@ -759,3 +799,72 @@ class ProbeSource(_BorrowIterator):
 
     def _wrap(self, csample):
         return ProbeSample(self, csample)
+
+
+class MaskControl(_Handle):
+    """Hardware privacy-mask control -- a thin wrapper over rc_ext_mask_* (no
+    logic of its own). Talks to rkipc's /var/tmp/rkipc control socket.
+
+        from recamera_ext import MaskControl, MaskRect
+        with MaskControl() as mc:
+            mc.set([MaskRect(0, 0.1, 0.1, 0.3, 0.2)])   # create one block
+            for x in drift():                            # incremental move, no flicker
+                mc.update(MaskRect(0, x, 0.1, 0.3, 0.2))
+    """
+
+    _close_cfn = "rc_ext_mask_close"
+
+    def __init__(self, lib_path=None):
+        self._lib = _load(lib_path)
+        if not hasattr(self._lib, "rc_ext_mask_open"):
+            raise RuntimeError("librecamera_ext lacks mask support (rebuild the SDK)")
+        err = c_int(0)
+        self._h = self._lib.rc_ext_mask_open(byref(err))
+        if not self._h:
+            raise RuntimeError("rc_ext_mask_open failed: err=%d" % err.value)
+
+    @staticmethod
+    def _to_c(rect):
+        return _MaskRect(int(rect.id), float(rect.x), float(rect.y),
+                         float(rect.w), float(rect.h))
+
+    def set(self, rects):
+        """Full set of active blocks (list[MaskRect], <=6). Persisted. Returns
+        the number of blocks actually applied."""
+        rects = list(rects)
+        n = len(rects)
+        arr = (_MaskRect * n)() if n else None
+        for i, r in enumerate(rects):
+            arr[i] = self._to_c(r)
+        applied = c_int(0)
+        rc = self._lib.rc_ext_mask_set(self._h, arr, c_size_t(n), byref(applied))
+        if rc < 0:
+            raise RuntimeError("rc_ext_mask_set failed: rc=%d" % rc)
+        return applied.value
+
+    def update(self, rect):
+        """Incrementally move a single block (no flicker, not persisted). The
+        block must already exist. Returns 0; raises on error (caller may fall
+        back to set())."""
+        c = self._to_c(rect)
+        rc = self._lib.rc_ext_mask_update(self._h, byref(c))
+        if rc < 0:
+            raise RuntimeError("rc_ext_mask_update failed: rc=%d" % rc)
+        return rc
+
+    def clear(self):
+        """Clear all masks (persisted)."""
+        rc = self._lib.rc_ext_mask_clear(self._h)
+        if rc < 0:
+            raise RuntimeError("rc_ext_mask_clear failed: rc=%d" % rc)
+        return rc
+
+    def query(self):
+        """Return the current active masks as list[MaskRect]."""
+        out = (_MaskRect * 6)()
+        rc = self._lib.rc_ext_mask_query(self._h, out, c_size_t(6))
+        if rc < 0:
+            raise RuntimeError("rc_ext_mask_query failed: rc=%d" % rc)
+        n = min(rc, 6)
+        return [MaskRect(out[i].id, out[i].x, out[i].y, out[i].w, out[i].h)
+                for i in range(n)]

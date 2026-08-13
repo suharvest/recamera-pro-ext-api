@@ -5,10 +5,10 @@
 set -e
 
 PKG=$(cd "$(dirname "$0")" && pwd)
-RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
+RKIPC_MD5=f93ac217c9920bc962771aeed1ac0550
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
-SO_MD5=eca29ac95c2f249545e72c91f1b67b70
-FACTORY_RKIPC_MD5=d5e7ca9365dae553e8c7e4c0a0f436ec   # V1.0.x factory rkipc (verified on ref device)
+SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
+FACTORY_RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f   # V1.0.x factory rkipc (verified on ref device)
 
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 need() { [ "$(md5of "$1")" = "$2" ] || { echo "FATAL md5 mismatch: $1 (got $(md5of "$1") want $2)"; exit 1; }; }
@@ -83,9 +83,9 @@ provision_rknnlite() {
   else
     echo "  venv $RKNNENV already exists"
   fi
-  # 3) offline install of the 4 aarch64/cp311 wheels (device has no network).
+  # 3) offline install of the aarch64/cp311 wheels (device has no network).
   "$RKNNENV/bin/pip" install --no-index --find-links "$WHEELS" \
-      rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib \
+      rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib jinja2 markupsafe \
     && echo "  wheels installed offline from $WHEELS" || { echo "  WARN: offline pip install failed"; return 1; }
   # 4) self-check: import RKNNLite with the OEM runtime on LD path.
   if LD_LIBRARY_PATH=/oem/usr/lib "$RKNNENV/bin/python3" \

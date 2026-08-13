@@ -324,6 +324,61 @@ void rc_ext_probe_release(rc_ext_probe_t *h, rc_ext_probe_sample_t *s);
 // Closes the connection and frees the handle. NULL-safe.
 void rc_ext_probe_close(rc_ext_probe_t *h);
 
+// ===========================================================================
+// M4 privacy-mask control (hardware COVER incremental control)
+// ===========================================================================
+//
+// Controls the VI-layer hardware COVER blocks (solid rectangles applied before
+// the NPU/encoder). Talks to rkipc's RPC socket /var/tmp/rkipc. Up to 6 blocks;
+// id selects the slot ([0,6), maps to hardware COVER handle 8+id).
+//
+//   rc_ext_mask_t *mc = rc_ext_mask_open(&err);
+//   rc_ext_mask_rect_t r = {0, 0.1f, 0.1f, 0.3f, 0.2f};
+//   rc_ext_mask_set(mc, &r, 1, NULL);          // create one block (persisted)
+//   for (...) { r.x = drift(); rc_ext_mask_update(mc, &r); }  // move, no flicker
+//   rc_ext_mask_close(mc);
+
+// Opaque hardware-mask control handle.
+typedef struct rc_ext_mask rc_ext_mask_t;
+
+// One normalized mask rectangle. x/y/w/h are [0,1] fractions of frame
+// width/height; the library clamps to [0,1] before sending.
+typedef struct {
+	int   id;   // slot id, [0,6); maps to hardware COVER handle 8+id
+	float x;    // top-left x, [0,1]
+	float y;    // top-left y, [0,1]
+	float w;    // width,  (0,1]
+	float h;    // height, (0,1]
+} rc_ext_mask_rect_t;
+
+// Connects to /var/tmp/rkipc and completes the handshake. On failure returns
+// NULL and, if err != NULL, sets *err to an rc_ext_err_t; on success sets
+// *err to 0.
+rc_ext_mask_t *rc_ext_mask_open(int *err);
+
+// Full set of the currently-active mask blocks (n <= 6, excess truncated).
+// Goes through the full rkipc set path (persisted to flash). Returns the number
+// of blocks actually applied (>=0) or a negative rc_ext_err_t. applied may be
+// NULL.
+int rc_ext_mask_set(rc_ext_mask_t *h, const rc_ext_mask_rect_t *rects, size_t n, int *applied);
+
+// Incrementally move a single block (position/size only, no flicker, not
+// persisted). id must already exist. Returns 0 or a negative rc_ext_err_t
+// (block not created / out of range -> caller should fall back to
+// rc_ext_mask_set).
+int rc_ext_mask_update(rc_ext_mask_t *h, const rc_ext_mask_rect_t *rect);
+
+// Clears all masks (equivalent to set n=0 / disable; persisted).
+int rc_ext_mask_clear(rc_ext_mask_t *h);
+
+// Queries the current active masks: fills out[0..min(n,actual)); returns the
+// actual block count (may exceed n, meaning truncation). out may be NULL with
+// n=0 to fetch only the count. Returns a negative rc_ext_err_t on error.
+int rc_ext_mask_query(rc_ext_mask_t *h, rc_ext_mask_rect_t *out, size_t n);
+
+// Closes the connection and frees the handle. NULL-safe.
+void rc_ext_mask_close(rc_ext_mask_t *h);
+
 #ifdef __cplusplus
 }
 #endif

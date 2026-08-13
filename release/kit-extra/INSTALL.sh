@@ -58,9 +58,9 @@ provision_rknnlite() {
   else
     echo "  venv $RKNNENV 已存在"
   fi
-  # 3) 离线装 4 个 wheel (设备无网)
+  # 3) 离线装 wheel (设备无网)
   "$RKNNENV/bin/pip" install --no-index --find-links "$WHEELS" \
-      rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib \
+      rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib jinja2 markupsafe \
     && echo "  wheels 离线安装完成 ($WHEELS)" || { echo "  WARN: 离线 pip install 失败"; return 1; }
   # 4) 自检
   if LD_LIBRARY_PATH=/oem/usr/lib "$RKNNENV/bin/python3" \

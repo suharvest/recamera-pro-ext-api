@@ -2,7 +2,7 @@
 # recamera-ext-api rollback.sh  -- restore factory rkipc (and entry.cgi) into /oem, then reboot.
 # Run ON THE DEVICE as root.
 set -e
-FACTORY_RKIPC_MD5=d5e7ca9365dae553e8c7e4c0a0f436ec
+FACTORY_RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 
 if [ ! -f /userdata/rkipc.factory.bak ]; then

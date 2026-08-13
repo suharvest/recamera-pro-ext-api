@@ -1,4 +1,4 @@
-# reCamera Pro Extension API — v1.2.0 (sideload package)
+# reCamera Pro Extension API — v1.3.0 (sideload package)
 
 Persistent sideload that adds the extension API (frame proxy / result injection / probe) to a
 reCamera Pro (RV1126B). It overwrites `/oem/usr/bin/rkipc` (ext4, read-write) so it **survives reboot**.
@@ -40,7 +40,7 @@ adb shell "sh /userdata/ext-pkg/install.sh"   # backs up factory, md5-verifies, 
 adb reboot                                    # or: install.sh --reboot
 # wait ~1-2 min, then self-check:
 adb shell "ls -l /run/recamera/"          # expect frame.sock result-in.sock probe.sock apps.d/
-adb shell "md5sum /oem/usr/bin/rkipc"     # expect 9826e9ecf8ed543a6dc78e3731102e0f
+adb shell "md5sum /oem/usr/bin/rkipc"     # expect f93ac217c9920bc962771aeed1ac0550
 ```
 
 `install.sh` is idempotent and md5-checked: it refuses to run with a mismatched artifact, backs up the
