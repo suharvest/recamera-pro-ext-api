@@ -1,0 +1,58 @@
+{
+  "date": "2026-08-13",
+  "device": "recamera-pro-test",
+  "soc": "RV1126B",
+  "firmware": "V1.0.4",
+  "kernel": "6.1.157",
+  "resolution": [1280, 720],
+  "librga_sha256": "2fc6f8bb5c31f12f35fc0c85e365860c33bc6772a3bfa492a54f89b7226fa09c",
+  "code_sha256": {
+    "kit/adapters/frame_source.py": "1b1dde5844c325192e3186f8b03ff64866b41e15ddcba78b8055faaf32ab50f7",
+    "kit/adapters/_rga.py": "9b1000d599efc8302b28bb605800c8a1f0b35353385452a1ccf344b27fc63d2e",
+    "kit/adapters/official.py": "34231ba125f4532d4ce2a75a3be966c4b1c7bdb4d6bdde828ad2a212965696f9",
+    "kit/app.py": "76a88456552cf8132155fd0483d4115f176a3d8efdd4d6e46352a25b2e2e809e"
+  },
+  "method": {
+    "control": "official appMgr activate/stop; one active app at a time",
+    "transport": "official frame.sock NV12 dma-buf",
+    "direct": "RGA imresize_t NV12->NV12, imcvtcolor_t small NV12->RGB, NumPy gray pad",
+    "fallback": "RGA full-resolution NV12->RGB, Python letterbox",
+    "window_s": 12
+  },
+  "runs": {
+    "rga_direct": {
+      "duration_s": 12.021822292008437,
+      "e2e_ws_fps": 18.133690109935873,
+      "metrics_fps_range": [17.5, 18.9],
+      "preprocess_ms_range": [0.0, 0.0],
+      "infer_ms_range": [42.0, 45.3],
+      "postprocess_ms_range": [1.9, 2.4],
+      "model_geometry": [640, 640],
+      "rga_resize_geometry": [640, 360],
+      "letterbox": {"scale": 0.5, "pad_w": 0, "pad_h": 140, "color": 114}
+    },
+    "full_rgb_fallback": {
+      "duration_s": 12.022073959000409,
+      "e2e_ws_fps": 12.144327218241417,
+      "metrics_fps_range": [11.4, 12.4],
+      "preprocess_ms_range": [38.2, 43.1],
+      "infer_ms_range": [35.3, 37.9],
+      "postprocess_ms_range": [1.3, 1.6]
+    }
+  },
+  "e2e_fps_gain_percent": 49.334,
+  "final_active_app": "retail-vision",
+  "final_pid": 1631,
+  "final_rkipc_pid": 961,
+  "final_npu_percent": 1.0,
+  "final_memory_used_mb": 735.9,
+  "final_memory_total_mb": 1986.0,
+  "final_temperature_c": 51.4,
+  "caveats": [
+    "Synthetic/ambient live scene had no fall detections; this is a throughput/latency A/B, not accuracy evidence.",
+    "RGA direct path is enabled only for fall-detection in this first release.",
+    "Any missing symbol, odd NV12 geometry, nonzero plane offset, or non-success RGA status latches back to full RGB fallback."
+  ],
+  "tests": "71 passed",
+  "raw_evidence": "/tmp/edgefallkit-pro-ab/"
+}

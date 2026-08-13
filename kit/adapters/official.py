@@ -81,22 +81,20 @@ class OfficialFrameSource(FrameSource):
     """Zero-copy frame source over the M2 frame proxy (`/run/recamera/frame.sock`).
 
     Wraps the SDK's `recamera_ext.FrameSource`, which hands back borrowed NV12
-    dma-buf frames. For each frame we produce a standalone, full-resolution
-    `Frame(data=<uint8 RGB HWC>, fmt="RGB", pts=<seconds>)` -- byte-for-byte the
-    same contract `FfmpegRtspSource` yields, so the base loop's
-    `letterbox(frame.data, input_size)` -> RKNN -> postprocess path and every
-    app's `on_results(results, frame)` are untouched.
+    dma-buf frames. For each frame we produce a standalone RGB ``Frame``.  The
+    default is full-resolution (the historical contract); an explicit
+    ``direct_preprocess`` opt-in instead performs model-aspect NV12 resize and
+    RGB conversion in RGA, then fills only the small square border in Python.
+    In that mode ``Frame.w``/``h`` remain the original camera geometry and
+    ``Frame.model_info`` carries the LetterboxInfo-compatible mapping.
 
     Design decisions a vendor copying this MUST understand
     ------------------------------------------------------
-    1. FULL-RESOLUTION, NOT PRE-LETTERBOXED.
-       We deliberately do NOT resize/letterbox to the model input size here.
-       The base loop letterboxes and maps detections back to ORIGINAL frame
-       pixels; the cascade pipeline crops ROIs from the original frame; and the
-       OSD burns boxes in the camera frame's native geometry. Handing back a
-       pre-letterboxed frame would break all three (wrong coordinates, lost
-       resolution). The source's only job is decode/color-convert -- exactly
-       like the RTSP workaround.
+    1. FULL-RESOLUTION BY DEFAULT; MODEL-SIZED ON EXPLICIT OPT-IN.
+       Existing apps and callers continue to receive a full-resolution RGB
+       frame.  The direct path is selected only for apps that never inspect
+       source pixels.  Original dimensions are retained for result routing and
+       post-processing receives the exact letterbox transform.
 
     2. PREPROCESS PATH: RGA (fast) with an OpenCV FALLBACK -- ONE switch point.
        NV12->RGB is the per-frame hot spot. On the RV1126B the RGA 2D engine
@@ -118,13 +116,14 @@ class OfficialFrameSource(FrameSource):
 
     Signature mirrors `FfmpegRtspSource.__init__` (accepts `url` + misc kw and
     ignores them) so the registry constructs it identically. Extra optional
-    knobs (`width`/`height`/`fps_divisor`/`prefer_rga`/`lib_path`) are honoured
-    when supplied but never required.
+    knobs (`width`/`height`/`fps_divisor`/`input_size`/`direct_preprocess`/
+    `prefer_rga`/`lib_path`) are honoured when supplied but never required.
     """
 
     def __init__(self, url: Optional[str] = None,
                  sock: str = OFFICIAL_FRAME_SOCK,
                  width: int = 0, height: int = 0, fps_divisor: int = 0,
+                 input_size: int = 0, direct_preprocess: bool = False,
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
@@ -133,6 +132,8 @@ class OfficialFrameSource(FrameSource):
         self.width = int(width)
         self.height = int(height)
         self.fps_divisor = int(fps_divisor)
+        self.input_size = int(input_size)
+        self.direct_preprocess = bool(direct_preprocess and self.input_size > 0)
         self.timeout_ms = int(timeout_ms)
         self.prefer_rga = bool(prefer_rga)
         self.lib_path = lib_path
@@ -140,6 +141,7 @@ class OfficialFrameSource(FrameSource):
         self._src = None            # recamera_ext.FrameSource (opened in frames())
         self._rga = None            # RgaNV12ToRGB instance, or None once latched off
         self._rga_decided = False   # first-frame latch flag
+        self._direct_logged = False  # one diagnostic line per source lifetime
         # NOTE: no connection at construction -- the registry only builds this
         # once frame.sock is probed present; the real open() happens in frames().
 
@@ -158,8 +160,30 @@ class OfficialFrameSource(FrameSource):
         self._log("preprocess backend: %s"
                   % ("RGA (hardware)" if self._rga else "OpenCV (librga unavailable)"))
 
-    def _convert(self, frame) -> np.ndarray:
-        """Return a fresh contiguous [H, W, 3] uint8 RGB copy of `frame`.
+    def _letterbox_geometry(self, width: int, height: int):
+        """Return RGA resize geometry and a LetterboxInfo-compatible object."""
+        from kit.runtime.preprocess import LetterboxInfo
+
+        target = int(self.input_size)
+        net_w = net_h = target
+        if min(width, height, net_w, net_h) <= 0:
+            raise ValueError("invalid direct-preprocess geometry")
+        scale = min(net_w / float(width), net_h / float(height))
+        small_w = int(round(width * scale))
+        small_h = int(round(height * scale))
+        # NV12 resize requires even source and destination dimensions.  Camera
+        # and model sizes are normally even; fail closed for odd geometry so a
+        # caller gets the established full-resolution fallback.
+        if (small_w | small_h | net_w | net_h) & 1:
+            raise ValueError("direct-preprocess requires even NV12 geometry")
+        left = int(round((net_w - small_w) / 2.0 - 0.1))
+        top = int(round((net_h - small_h) / 2.0 - 0.1))
+        info = LetterboxInfo(scale=scale, pad_w=left, pad_h=top,
+                             orig_w=int(width), orig_h=int(height))
+        return small_w, small_h, left, top, info, net_w, net_h
+
+    def _convert(self, frame):
+        """Return ``(rgb, model_info)`` as fresh contiguous arrays.
 
         Tries the latched RGA path; on ANY RGA error it permanently falls back
         to OpenCV for the rest of the run (a mis-versioned librga must never take
@@ -167,6 +191,31 @@ class OfficialFrameSource(FrameSource):
         """
         if not self._rga_decided:
             self._decide_backend(frame)
+
+        if self._rga is not None and self.direct_preprocess:
+            try:
+                sw, sh, left, top, info, net_w, net_h = self._letterbox_geometry(
+                    int(frame.width), int(frame.height))
+                off0, stride0, vstride0 = frame.planes[0]
+                if off0 != 0:
+                    raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
+                small = self._rga.resize_nv12_to_rgb(
+                    fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
+                    y_stride=int(stride0), y_vstride=int(vstride0),
+                    dst_width=sw, dst_height=sh)
+                padded = np.full((net_h, net_w, 3), 114, dtype=np.uint8)
+                padded[top:top + sh, left:left + sw] = small
+                if not self._direct_logged:
+                    self._direct_logged = True
+                    self._log("preprocess path: RGA direct NV12 resize %dx%d -> RGB %dx%d + gray pad"
+                              % (int(frame.width), int(frame.height), net_w, net_h))
+                return np.ascontiguousarray(padded), info
+            except Exception as e:
+                # A resize ABI/driver mismatch must not take the app down.
+                # Disable only the optimization and continue through the
+                # known-good full-resolution RGA/OpenCV path below.
+                self.direct_preprocess = False
+                self._log("RGA direct preprocess failed (%s); latching to full RGB" % e)
 
         if self._rga is not None:
             try:
@@ -177,7 +226,7 @@ class OfficialFrameSource(FrameSource):
                 return self._rga.convert(
                     fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
                     y_stride=int(stride0), y_vstride=int(vstride0),
-                )
+                ), None
             except Exception as e:
                 self._rga = None  # latch OFF -- never retry RGA this run
                 self._log("RGA convert failed (%s); latching to OpenCV" % e)
@@ -185,7 +234,7 @@ class OfficialFrameSource(FrameSource):
         # OpenCV fallback: SDK cv2 NV12->BGR (a copy), then BGR->RGB via numpy
         # (no cv2 import needed in this module -- keeps the adapter cv2-free).
         bgr = frame.to_bgr()
-        return np.ascontiguousarray(bgr[:, :, ::-1])
+        return np.ascontiguousarray(bgr[:, :, ::-1]), None
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -210,13 +259,14 @@ class OfficialFrameSource(FrameSource):
                      self._src.pool_depth, self._src.max_outstanding))
         try:
             for ext_frame in self._src:
-                rgb = self._convert(ext_frame)     # standalone copy (see class doc)
+                rgb, model_info = self._convert(ext_frame)  # standalone copy
                 yield Frame(
                     data=rgb,
                     w=int(ext_frame.width),
                     h=int(ext_frame.height),
                     fmt="RGB",
                     pts=ext_frame.pts_us / 1e6,    # us -> s; round-trips in the sink
+                    model_info=model_info,
                 )
                 # The SDK releases `ext_frame`'s dma-buf when the loop advances;
                 # `rgb` is a copy, so nothing here holds the borrowed buffer.

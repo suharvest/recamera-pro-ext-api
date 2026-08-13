@@ -54,6 +54,15 @@ class App:
                                       # False: the loop skips RknnModel + letterbox +
                                       # infer and calls process_frame(frame) instead.
 
+    # Applications in this allow-list only consume detections/keypoints and
+    # never crop pixels from ``frame.data``.  The official frame broker can
+    # therefore hand them a model-sized RGB letterbox produced by RGA, avoiding
+    # a full-resolution NV12->RGB conversion plus a Python resize.  Apps that
+    # need original pixels (OCR/face/cascade/QR) deliberately stay on the
+    # legacy full-frame path.  Keep this explicit rather than making a future
+    # app accidentally lose source-resolution pixels.
+    _DIRECT_MODEL_FRAME_APPS = frozenset({"fall-detection"})
+
     def __init__(self) -> None:
         # config_schema-backed knobs (defaults; overridden in setup())
         self.conf: float = 0.25
@@ -215,7 +224,14 @@ class App:
             model = RknnModel(model_path)
         else:
             model = None
-        src = open_frame_source(url=url, prefer=source)
+        direct_model_frame = bool(
+            self.needs_model and self.id in self._DIRECT_MODEL_FRAME_APPS)
+        src = open_frame_source(
+            url=url,
+            prefer=source,
+            input_size=self.input_size if direct_model_frame else 0,
+            direct_preprocess=direct_model_frame,
+        )
 
         t_pre = t_inf = t_post = 0.0
         processed = 0
@@ -260,7 +276,16 @@ class App:
 
                 t0 = time.monotonic()
                 if self.needs_model:
-                    padded, info = letterbox(frame.data, self.input_size)
+                    # OfficialFrameSource may have performed the aspect-ratio
+                    # resize on RGA already.  It preserves original ``Frame.w``
+                    #/``h`` and supplies a LetterboxInfo-compatible object;
+                    # post-processing therefore still maps detections back to
+                    # camera pixels while Python skips the second resize.
+                    info = getattr(frame, "model_info", None)
+                    if info is not None:
+                        padded = frame.data
+                    else:
+                        padded, info = letterbox(frame.data, self.input_size)
                     t1 = time.monotonic()
                     outs = model.infer(padded)
                     t2 = time.monotonic()

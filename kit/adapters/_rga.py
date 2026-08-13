@@ -62,6 +62,7 @@ import os
 from ctypes import (
     Structure,
     c_char,
+    c_double,
     c_int,
     c_void_p,
 )
@@ -148,6 +149,19 @@ class RgaNV12ToRGB:
         lib.imcvtcolor_t.argtypes = [
             _rga_buffer_t, _rga_buffer_t, c_int, c_int, c_int, c_int,
         ]
+        # imresize_t keeps the source and destination pixel format unchanged.
+        # We use it for NV12->NV12 downscale, then imcvtcolor_t for the small
+        # NV12->RGB conversion.  Keeping the formats equal here is important:
+        # librga's resize helper is not a general cross-format blit on all
+        # firmware builds.  Older librga releases may not export this helper;
+        # ``resize_nv12_to_rgb`` then raises and the caller falls back to the
+        # known-good full-resolution conversion path.
+        self._resize = getattr(lib, "imresize_t", None)
+        if self._resize is not None:
+            self._resize.restype = c_int
+            self._resize.argtypes = [
+                _rga_buffer_t, _rga_buffer_t, c_double, c_double, c_int, c_int,
+            ]
         self._lib = lib
 
     def convert(self, fd: int, width: int, height: int,
@@ -182,6 +196,58 @@ class RgaNV12ToRGB:
         )
         if rc != IM_STATUS_SUCCESS:
             raise RuntimeError("RGA imcvtcolor_t failed: IM_STATUS=%d" % rc)
+        return out
+
+    def resize_nv12_to_rgb(self, fd: int, width: int, height: int,
+                           y_stride: int, y_vstride: int,
+                           dst_width: int, dst_height: int) -> np.ndarray:
+        """Downscale NV12 in RGA, then convert the small image to RGB.
+
+        The intermediate NV12 buffer is model-sized, so Python never receives
+        a full-resolution RGB image.  ``imresize_t`` is deliberately used only
+        for NV12->NV12 (same format on both sides); this is the portable subset
+        supported by the RV1126B librga builds.  The returned RGB array is
+        contiguous and owns its memory.
+        """
+        if self._resize is None:
+            raise RuntimeError("librga imresize_t symbol unavailable")
+        width, height = int(width), int(height)
+        dst_width, dst_height = int(dst_width), int(dst_height)
+        if min(width, height, dst_width, dst_height) <= 0:
+            raise ValueError("invalid RGA resize geometry")
+        # NV12 requires even dimensions.  Refuse rather than silently changing
+        # the aspect ratio; the caller can use the conservative fallback.
+        if (width | height | dst_width | dst_height) & 1:
+            raise ValueError("NV12 resize geometry must be even")
+
+        # Tight model-sized NV12 scratch (Y rows + interleaved UV rows).
+        nv12 = np.empty((dst_height * 3 // 2, dst_width), dtype=np.uint8)
+        src = self._lib.wrapbuffer_fd_t(
+            int(fd), width, height, int(y_stride), int(y_vstride),
+            RK_FORMAT_YCbCr_420_SP,
+        )
+        small = self._lib.wrapbuffer_virtualaddr_t(
+            nv12.ctypes.data_as(c_void_p), dst_width, dst_height,
+            dst_width, dst_height, RK_FORMAT_YCbCr_420_SP,
+        )
+        # Destination geometry is authoritative; librga computes the scale
+        # when fx/fy are zero.  This avoids relying on interpolation enum values
+        # that changed between im2d header revisions.  Mode 0 is the documented
+        # default interpolation on the shipping RV1126B build.
+        rc = self._resize(src, small, 0.0, 0.0, 0, 1)
+        if rc != IM_STATUS_SUCCESS:
+            raise RuntimeError("RGA imresize_t failed: IM_STATUS=%d" % rc)
+
+        out = np.empty((dst_height, dst_width, 3), dtype=np.uint8)
+        dst = self._lib.wrapbuffer_virtualaddr_t(
+            out.ctypes.data_as(c_void_p), dst_width, dst_height,
+            dst_width, dst_height, RK_FORMAT_RGB_888,
+        )
+        rc = self._lib.imcvtcolor_t(
+            small, dst, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_RGB_888, 0, 1,
+        )
+        if rc != IM_STATUS_SUCCESS:
+            raise RuntimeError("RGA small imcvtcolor_t failed: IM_STATUS=%d" % rc)
         return out
 
 

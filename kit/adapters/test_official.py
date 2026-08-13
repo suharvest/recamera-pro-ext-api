@@ -130,6 +130,53 @@ def test_frame_source_yields_rgb():
     print("PASS test_frame_source_yields_rgb (RGB HWC, pts round-trip, letterbox-ready)")
 
 
+def test_direct_model_preprocess_geometry_and_fallback_contract():
+    """The RGA fast path returns model pixels but preserves camera geometry."""
+    _install_fake_ext()
+    from kit.adapters.official import OfficialFrameSource
+
+    class _FakeRga:
+        def __init__(self):
+            self.calls = []
+
+        def resize_nv12_to_rgb(self, **kwargs):
+            self.calls.append(kwargs)
+            return np.full((kwargs["dst_height"], kwargs["dst_width"], 3),
+                           7, dtype=np.uint8)
+
+    src = OfficialFrameSource(url=None, input_size=640,
+                              direct_preprocess=True, prefer_rga=False,
+                              verbose=False)
+    # Simulate the successful ABI probe without loading a host librga.
+    src._rga = _FakeRga()
+    src._rga_decided = True
+    src.prefer_rga = True
+    src.direct_preprocess = True
+    frame = _FakeExtFrame(seq=0, pts_us=123, w=1280, h=720)
+    padded, info = src._convert(frame)
+    assert padded.shape == (640, 640, 3)
+    assert info.orig_w == 1280 and info.orig_h == 720
+    assert info.scale == 0.5 and info.pad_w == 0 and info.pad_h == 140
+    assert np.all(padded[:140] == 114) and np.all(padded[140:500] == 7)
+    assert np.all(padded[500:] == 114)
+    call = src._rga.calls[0]
+    assert (call["dst_width"], call["dst_height"]) == (640, 360)
+    # A direct-path failure must latch to the established full-RGB fallback.
+    class _BrokenRga(_FakeRga):
+        def resize_nv12_to_rgb(self, **kwargs):
+            raise RuntimeError("ABI mismatch")
+
+        def convert(self, **kwargs):
+            return np.zeros((kwargs["height"], kwargs["width"], 3), dtype=np.uint8)
+
+    src._rga = _BrokenRga()
+    src.direct_preprocess = True
+    rgb, no_info = src._convert(frame)
+    assert rgb.shape == (720, 1280, 3) and no_info is None
+    assert src.direct_preprocess is False
+    print("PASS test_direct_model_preprocess_geometry_and_fallback_contract")
+
+
 # Test frame geometry: width != height so we prove x/width vs y/height, chosen
 # so the sample pixel coords normalize to round [0,1] values.
 _FW, _FH = 200, 400
@@ -342,6 +389,7 @@ def test_registry_selects_official():
 
 if __name__ == "__main__":
     test_frame_source_yields_rgb()
+    test_direct_model_preprocess_geometry_and_fallback_contract()
     test_result_sink_maps_detections()
     test_result_sink_normalizes_and_clamps()
     test_result_sink_maps_keypoints()

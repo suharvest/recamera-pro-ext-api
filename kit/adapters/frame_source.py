@@ -58,15 +58,25 @@ class Frame:
     """One decoded frame.
 
     `data` is a contiguous HWC numpy array. For `fmt="RGB"` it is uint8
-    [H, W, 3] ready to hand straight to preprocess.letterbox(). `fmt` may later
-    be "NV12" when a zero-copy backend yields planar YUV; downstream code should
-    branch on `fmt`.
+    [H, W, 3] ready to hand straight to preprocess.letterbox().  An official
+    broker may set ``model_info`` and put a model-sized, already-letterboxed
+    RGB image in ``data``; in that case ``w``/``h`` remain the *original camera
+    geometry* and the transform is used by post-processing to map detections
+    back to that geometry.  Keeping the original dimensions here is important
+    for the result sink's normalized-coordinate contract.  ``fmt`` may later
+    be "NV12" when a zero-copy backend yields planar YUV; downstream code
+    should branch on ``fmt``.
     """
     data: np.ndarray
     w: int
     h: int
     fmt: str            # "RGB" | "NV12"
     pts: float          # capture timestamp, seconds (monotonic clock)
+    # Optional model-space image/letterbox metadata supplied by an optimized
+    # source.  Kept as ``object`` to avoid importing runtime.preprocess from
+    # this low-level adapter module (and to remain backwards compatible with
+    # callers constructing Frame positionally).
+    model_info: object = None
 
 
 class FrameSource(ABC):
