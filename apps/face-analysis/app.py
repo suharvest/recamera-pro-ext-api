@@ -64,10 +64,10 @@ class FaceAnalysisApp(App):
     id = "face-analysis"
     name = "Face Analysis"
     postproc = "face_detect"
-    # "hw" (not "hw-direct"): on_results crops source-resolution ROIs out of
-    # frame.data for the embedding stage, so the original pixels must survive;
-    # only the letterbox moves to RGA (see App.model_frame).
-    model_frame = "hw"
+    # Stays on "cpu": these crop source-resolution pixels, so "hw-direct" is
+    # unsafe, and a 2026-08-14 device A/B measured "hw" at +0.8% (noise) --
+    # it still pays the full-res convert plus an extra RGA resize.
+    # See docs/guide/hw-preprocess.md before switching.
 
     def setup(self, config):
         super().setup(config)

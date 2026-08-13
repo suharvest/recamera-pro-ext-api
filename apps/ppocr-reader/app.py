@@ -66,10 +66,10 @@ class PpocrReaderApp(App):
     name = "PP-OCR Reader"
     postproc = "db_ocr"
     input_size = 480                       # DB detector input side (not 640)
-    # "hw" (not "hw-direct"): recognition perspective-crops source-resolution
-    # quads out of frame.data, so originals must survive; only the 480x480
-    # letterbox moves to RGA (see App.model_frame).
-    model_frame = "hw"
+    # Stays on "cpu": these crop source-resolution pixels, so "hw-direct" is
+    # unsafe, and a 2026-08-14 device A/B measured "hw" at +0.8% (noise) --
+    # it still pays the full-res convert plus an extra RGA resize.
+    # See docs/guide/hw-preprocess.md before switching.
 
     def setup(self, config):
         super().setup(config)

@@ -56,10 +56,10 @@ class FacemeshReaderApp(App):
     id = "facemesh-reader"
     name = "Facemesh Reader"
     postproc = "face_detect"
-    # "hw" (not "hw-direct"): the stage-2 mesh pipeline reads source-resolution
-    # pixels from frame.data, so originals must survive; only the letterbox
-    # moves to RGA (see App.model_frame).
-    model_frame = "hw"
+    # Stays on "cpu": these crop source-resolution pixels, so "hw-direct" is
+    # unsafe, and a 2026-08-14 device A/B measured "hw" at +0.8% (noise) --
+    # it still pays the full-res convert plus an extra RGA resize.
+    # See docs/guide/hw-preprocess.md before switching.
 
     def setup(self, config):
         super().setup(config)

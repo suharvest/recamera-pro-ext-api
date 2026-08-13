@@ -7,11 +7,16 @@
 
 ## 0. 定位
 
-模型推理前要把相机帧变成模型输入：**等比缩放 + 灰边填充（letterbox）**。默认这步在 Python 里做，1280×720 → 640×640 实测 **38–43 ms/帧**，是整条流水线里仅次于 NPU 推理的开销。
+模型推理前要把相机帧变成模型输入：**等比缩放 + 灰边填充（letterbox）**。默认这步在 Python 里做，1280×720 → 640×640 实测 **38–43 ms/帧**。
 
-RV1126B 的 **RGA**（2D 图形加速器）能直接对帧代理给出的 dma-buf 做 NV12 缩放 + 色彩转换。把 letterbox 挪到 RGA 上，这 38–43 ms 变成 **0 ms**（Python 侧只剩一次灰边填充的 memcpy）。
+RV1126B 的 **RGA**（2D 图形加速器）能直接对帧代理给出的 dma-buf 做 NV12 缩放 + 色彩转换。app 侧开启方式是**一行类属性**，不改 manifest、不改帧源、不写任何 RGA 代码。
 
-app 侧的开启方式是**一行类属性**，不改 manifest、不改帧源、不写任何 RGA 代码。
+**但收益只在一种模式下成立**（2026-08-14 真机 A/B，详见 §4）：
+
+- **`hw-direct`：端到端 +55%**。真正的赢点不是"省掉 Python letterbox"，而是**连全分辨率 NV12→RGB 转换都跳过了** —— 模型只需要 640×640，就不必先转出一张 1280×720 的 RGB。
+- **`hw`：+0.8%，即噪声**。它保留原图，所以**仍要付全分辨率转换**，只是把 letterbox 挪给 RGA 并额外多做一次 RGA resize。分段计时里 `pre` 从 40 ms 变成 0 是**仪表假象**（这步移到了计时点之前），吞吐并没有变。
+
+> 结论：**只有能放弃原始分辨率像素的 app 才拿得到加速。** 需要原图的 app 目前留在 `"cpu"`。
 
 ## 1. 如何调用
 
@@ -30,17 +35,16 @@ class MyApp(App):
 
 | 取值 | 行为 | `frame.data` 是什么 | 适用 |
 |---|---|---|---|
-| `"cpu"`（默认） | 主循环里 Python letterbox | 全分辨率原图 | 兜底，永远正确 |
-| `"hw"` | RGA 产出 letterbox 放进 `frame.model_data`，**同时**保留原图 | **全分辨率原图** | **任何视觉 app**，包括推理后要裁原图像素的 |
-| `"hw-direct"` | RGA 产出的 letterbox **就是** `frame.data`，连全分辨率 NV12→RGB 转换也省掉 | **模型尺寸的 letterbox 图** | 只消费检测框 / 关键点坐标、**从不读 `frame.data`** 的 app |
+| `"cpu"`（默认） | 主循环里 Python letterbox | 全分辨率原图 | 需要原图像素的 app（当前推荐） |
+| `"hw"` | RGA 产出 letterbox 放进 `frame.model_data`，**同时**保留原图 | **全分辨率原图** | 机制可用，但**实测无吞吐收益**，默认不开 |
+| `"hw-direct"` | RGA 产出的 letterbox **就是** `frame.data`，连全分辨率 NV12→RGB 转换也省掉 | **模型尺寸的 letterbox 图** | **只消费框 / 关键点坐标、从不读 `frame.data`** 的 app（+55%） |
 
 ### 怎么选
 
 **判据只有一条：推理之后，你的 app 还需要读原始分辨率的像素吗？**
 
-- **不需要**（只用框 / 关键点坐标）→ `"hw-direct"`，省得最多。
-- **需要**（裁 ROI 做二级识别、透视裁剪、人脸对齐等）→ `"hw"`。原图仍在 `frame.data` 里，同时也省掉了 Python letterbox。
-- 拿不准 → `"hw"`。它对所有视觉 app 都安全；最坏情况只是没拿到 `hw-direct` 那部分额外收益。
+- **不需要**（只用框 / 关键点坐标）→ **`"hw-direct"`**，实测 +55%。
+- **需要**（裁 ROI 做二级识别、透视裁剪、人脸对齐等）→ **留在 `"cpu"`**。`"hw"` 在这类 app 上实测没有吞吐收益（§4），还会让结果与 CPU 路径不再逐像素一致；除非你在自己的场景里实测出收益，否则不必开。
 
 > ⚠️ `"hw-direct"` 下 `frame.data` **不再是原始像素**，而是 letterbox 后的模型图。如果 app 还去裁它，裁到的是缩放+带灰边的图 —— 这是唯一会出错的用法，所以判据要照上面走。
 
@@ -49,7 +53,7 @@ class MyApp(App):
 | 模式 | app |
 |---|---|
 | `hw-direct` | `fall-detection`、`retail-vision`、`yolo-detector`、`fitness-trainer` |
-| `hw` | `face-analysis`、`facemesh-reader`、`ppocr-reader`（480 输入） |
+| `cpu`（需要原图像素） | `face-analysis`、`facemesh-reader`、`ppocr-reader` |
 | 不适用 | `qrcode-reader`、`voice-transcribe`（`needs_model = False`，无模型推理） |
 
 ## 2. 坐标契约（三种模式完全一致）
@@ -114,9 +118,38 @@ if padded is None:
 
 坐标契约实测：`Frame.w/h` 保持 `1280x720`，仅 `Frame.data` 为 640×640；`model_info` 为 `scale=0.5, pad_w=0, pad_h=140, orig_w=1280, orig_h=720`；灰边严格 `(114,114,114)`。
 
-### `hw`
+### `hw` vs `hw-direct`（真机 A/B，2026-08-14）
 
-`hw` 模式省掉的是 Python letterbox（全分辨率 NV12→RGB 转换本来就已经走 RGA），因此**增益小于 `hw-direct`**。真机 A/B 与结果一致性验证进行中，数据回填本节。
+同设备，每组稳态 60 s，经 appMgr 单活 API 切换：
+
+| app | 模式 | fps | pre ms | infer ms | post ms |
+|---|---|---:|---:|---:|---:|
+| ppocr-reader（480） | `hw` | 8.05 | 0.00 | 79.65 | 8.87 |
+| ppocr-reader（480） | `cpu` | 7.99 | 40.53 | 72.30 | 4.47 |
+| retail-vision（640） | **`hw-direct`** | **19.10** | 0.00 | 36.27 | 6.36 |
+| retail-vision（640） | `cpu` | 12.31 | 39.29 | 31.69 | 5.02 |
+
+- **`hw-direct`：+55.2%**，与 8-13 那轮 +49.3% 相互印证。
+- **`hw`：+0.8%，噪声级，没有实际收益。** `pre` 从 40.5 ms 变 0 是**仪表假象**：`hw` 的 RGA letterbox 在 `src.frames()` 里完成，发生在分段计时起点之前，活儿移出了统计桶而不是消失。`hw` 仍然要付全分辨率 NV12→RGB，并且**多做一次 RGA resize**。
+- 两种硬件模式下 `infer_ms` 都上升（ppocr +10%、retail +14%），**原因未确认**，怀疑 RGA 与 NPU 的内存带宽争用；待查。
+
+### 像素一致性（20 帧，1280×720 → 640）
+
+几何契约 **20/20 全对**：`frame.data` 保持 `(720,1280,3)`、`model_data` 为 `(640,640,3)`、`model_info` 与 CPU `letterbox()` **逐字段相同**、灰边严格 `114`；日志确认走的是 RGA aux 路径，无回退。
+
+但**像素并不与 CPU 逐点相同**：`max_abs_diff` 131–137，`mean_abs_diff` 2.075，46.5% 的像素有差异、5.79% 差值 > 8。原因是重采样实现不同——`kit/runtime/preprocess.letterbox` 用 PIL BILINEAR（下采样时**带抗锯齿**），RGA 用普通 2-tap 双线性（2× 缩小时**会混叠**）。两条路径共用同一套 RGA NV12→RGB 转换，**不是色彩空间问题**。
+
+实际影响（ppocr，12 帧同帧双路径对照）：**0/12 帧结果完全一致**。框坐标差 3.4–14.3 px；11/12 帧框数相同，1 帧 HW 检出而 CPU 漏检；文本 10/12 一致，2 帧读成 `店` / `古` 之差。HW 侧分数普遍更高（检测 0.93–0.96 vs 0.87–0.90，识别 0.64–0.67 vs 0.47–0.56）——**不是质量下降，但结果在两种模式间不可复现**。切换模式会改变输出，不要假设逐位一致。
+
+### ROI 契约（`hw` 模式）
+
+对 `crop_square_roi` / `perspective_crop` 注入合成检测强制走一遍：两者拿到的都是 `(720,1280,3)` —— **确认是原始分辨率，不是模型图**。`hw` 模式的语义正确。
+
+### 未验证 / 存疑
+
+- **face-analysis 的 A/B 无效**：现场是空办公室，零检出，12/12"一致"属于空对空，需要有人脸的场景重测。
+- ppocr 的 OCR 样本只有画面边缘弧面包装上的一个小字，**对识别质量的证据强度弱**。
+- `infer_ms` 上升的原因未定位。
 
 ## 5. 自己直接调用 RGA？
 
@@ -126,4 +159,4 @@ if padded is None:
 
 ## 6. 一句话
 
-视觉 app 加一行 `model_frame = "hw"`（不读原图像素的用 `"hw-direct"`）即可把每帧 38–43 ms 的 Python letterbox 挪到 RGA 上，`hw-direct` 实测端到端 **+49%**；坐标契约、灰边值、后处理代码在三种模式下完全一致，任何前提不满足都自动回退 CPU，不会出错。
+**不读原图像素的视觉 app 加一行 `model_frame = "hw-direct"`，实测端到端 +55%**（赢在跳过全分辨率 NV12→RGB，不只是省 Python letterbox）；需要原图像素的 app 留在 `"cpu"` —— `"hw"` 机制可用但实测无吞吐收益。几何契约、灰边值、后处理代码在三种模式下一致，任何前提不满足都自动回退 CPU，不会出错；但 RGA 与 PIL 的重采样不同，**换模式会让输出不再逐像素一致**。
