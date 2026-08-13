@@ -54,3 +54,41 @@ def test_build_state_keeps_legacy_person_fallbacks():
     state = MqttSink._build_state("legacy", 1, 0.0, results, [])
     assert state["person_count"] == 2
     assert state["fallen_count"] == 1
+
+
+def test_fall_contract_matches_cross_platform_shape():
+    sink = object.__new__(MqttSink)
+    sink._seq = 9
+    sink._fall_global_event_id = 2
+    sink.app_id = "fall-detection"
+    sink._frame_w = 1280
+    sink._frame_h = 720
+    payload = {
+        "stream_id": "camera-0",
+        "inference_time_ms": 12.5,
+        "pipeline_ms": 18.0,
+        "results": [{
+            "kind": "person", "track_id": 3, "box": [128, 72, 640, 648],
+            "score": 0.9, "keypoints": [[320, 180, 0.8]] * 17,
+            "features": {"valid": True, "hip_drop_speed": 0.1,
+                         "hip_drop_distance": 0.0, "torso_angle_deg": 10.0,
+                         "bbox_aspect_ratio": 0.9},
+        }],
+        "events": [
+            {"kind": "pose_state", "track_id": 3, "visible": True,
+             "state": "fallen", "fall_detected": True, "event_id": 1,
+             "missed_frames": 0},
+            {"kind": "fall", "track_id": 3, "event_id": 1},
+        ],
+    }
+    state = sink._fall_contract(payload, 1.0)
+    required = {"timestamp", "frame_id", "inference_time_ms", "stream_id",
+                "fall_detected", "fall_event", "event_id", "global_event_id",
+                "event_id_scope", "state", "person_detected", "person_count",
+                "fallen_count", "tracking", "features", "keypoints", "pose17",
+                "persons"}
+    assert required <= state.keys()
+    assert state["event_id"] == state["global_event_id"] == 3
+    assert state["event_id_scope"] == "stream_global_event_id"
+    assert state["person_count"] == state["fallen_count"] == 1
+    assert len(state["persons"][0]["pose17"]) == 17

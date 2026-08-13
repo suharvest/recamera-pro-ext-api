@@ -272,6 +272,9 @@ class MqttSink(ResultSink):
         self.status_topic = f"{self.base_topic}/{self.app_id}/status"
 
         self._seq = 0
+        self._fall_global_event_id = 0
+        self._frame_w = 1
+        self._frame_h = 1
         self._conn: Optional[_MqttConnection] = None
         self._lock = threading.Lock()
         self._connected = threading.Event()
@@ -429,7 +432,7 @@ class MqttSink(ResultSink):
             # A later normal person's pose_state must not erase the edge event
             # id emitted for another person in this same frame.
             summary["event_id"] = max(fall_event_ids)
-        return {
+        contract = {
             "app": app_id,
             "pts": pts,
             "seq": seq,
@@ -441,9 +444,99 @@ class MqttSink(ResultSink):
             "summary": summary,
             "events": events,
         }
+        return contract
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        self._frame_w = max(1, int(w))
+        self._frame_h = max(1, int(h))
+
+    def _fall_contract(self, payload: dict, pts: float) -> dict:
+        results = [r for r in (payload.get("results") or [])
+                   if self._is_person_result(r)]
+        states = {int(e["track_id"]): e for e in (payload.get("events") or [])
+                  if isinstance(e, dict) and e.get("kind") == "pose_state"
+                  and isinstance(e.get("track_id"), (int, float))}
+        fall_edges = {int(e["track_id"]) for e in (payload.get("events") or [])
+                      if isinstance(e, dict) and e.get("kind") == "fall"
+                      and isinstance(e.get("track_id"), (int, float))}
+        self._fall_global_event_id += len(fall_edges)
+        visible = {int(r["track_id"]): r for r in results
+                   if isinstance(r.get("track_id"), (int, float))}
+        people = []
+        for tid in sorted(set(states) | set(visible)):
+            r = visible.get(tid, {})
+            s = states.get(tid, {})
+            box = r.get("box") or s.get("box") or [0, 0, 0, 0]
+            if len(box) >= 4:
+                x1, y1, x2, y2 = (float(x) for x in box[:4])
+                bbox = [round((x1 + x2) / (2 * self._frame_w), 5),
+                        round((y1 + y2) / (2 * self._frame_h), 5),
+                        round((x2 - x1) / self._frame_w, 5),
+                        round((y2 - y1) / self._frame_h, 5)]
+            else:
+                bbox = [0.0, 0.0, 0.0, 0.0]
+            raw_pose = r.get("keypoints") or []
+            pose17 = [[round(float(p[0]) / self._frame_w, 5),
+                       round(float(p[1]) / self._frame_h, 5), float(p[2])]
+                      for p in raw_pose[:17] if isinstance(p, (list, tuple)) and len(p) >= 3]
+            is_visible = tid in visible
+            features = r.get("features") or s.get("features") or {
+                "valid": False, "hip_drop_speed": 0.0, "hip_drop_distance": 0.0,
+                "torso_angle_deg": 0.0, "bbox_aspect_ratio": 0.0,
+            }
+            people.append({
+                "track_id": tid, "state": s.get("state", r.get("state", "normal")),
+                "fall_detected": bool(s.get("fall_detected", r.get("fall_detected", False))),
+                "fall_event": tid in fall_edges,
+                "event_id": int(s.get("event_id", r.get("event_id", 0)) or 0),
+                "person_detected": is_visible,
+                "person_score": float(r.get("person_score", r.get("score", s.get("person_score", 0.0))) or 0.0),
+                "tracking": is_visible, "missed_frames": int(s.get("missed_frames", 0) or 0),
+                "bbox": bbox, "features": features, "keypoints": [],
+                "pose17": pose17 if is_visible else [],
+            })
+        severity = {"normal": 0, "suspected": 1, "recovering": 2, "fallen": 3}
+        primary = max(people, key=lambda p: (p["person_detected"], p["person_score"]), default=None)
+        fallen = [p for p in people if p["state"] in ("fallen", "recovering")]
+        state = max((p["state"] for p in people), key=lambda x: severity.get(x, 0), default="normal")
+        contract = {
+            "timestamp": int(time.time() * 1000), "frame_id": self._seq,
+            "inference_time_ms": float(payload.get("inference_time_ms", 0.0) or 0.0),
+            "pipeline_ms": float(payload.get("pipeline_ms", 0.0) or 0.0),
+            "stream_id": str(payload.get("stream_id") or "camera-0"),
+            "fall_detected": bool(fallen), "fall_event": bool(fall_edges),
+            "event_id": self._fall_global_event_id,
+            "global_event_id": self._fall_global_event_id,
+            "event_id_scope": "stream_global_event_id", "state": state,
+            "person_detected": bool(visible), "person_count": len(visible),
+            "fallen_count": len(fallen), "tracking": bool(people),
+            "features": primary["features"] if primary else {
+                "valid": False, "hip_drop_speed": 0.0, "hip_drop_distance": 0.0,
+                "torso_angle_deg": 0.0, "bbox_aspect_ratio": 0.0,
+            },
+            "keypoints": [], "pose17": primary["pose17"] if primary and primary["person_detected"] else [],
+            "persons": people,
+        }
+        # Preserve the Pro/HA compatibility envelope as additive fields while
+        # the required top-level shape follows the cross-platform contract.
+        contract["app"] = self.app_id
+        contract["pts"] = pts
+        contract["seq"] = self._seq
+        contract["results_count"] = len(payload.get("results") or [])
+        contract["summary"] = {
+            "state": state, "event_id": self._fall_global_event_id,
+            "fall_detected": bool(fallen), "person_count": len(visible),
+            "fallen_count": len(fallen),
+        }
+        return contract
 
     def emit(self, payload: dict, pts: float) -> None:
         self._seq += 1
+        if self.app_id == "fall-detection":
+            state = self._fall_contract(payload, pts)
+            body = json.dumps(state, separators=(",", ":")).encode("utf-8")
+            self._safe_publish(self.state_topic, body, retain=False)
+            return
         state = self._build_state(
             self.app_id, self._seq, pts,
             payload.get("results") or [], payload.get("events") or [],

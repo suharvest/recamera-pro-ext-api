@@ -90,6 +90,7 @@ def test_fall_app_runs_one_detector_per_track_and_feeds_invalid_on_loss():
     events = app.on_results(results, frame)
     assert {r["track_id"] for r in results} == {1, 2}
     assert len(app.detectors) == 2
+    assert len(app.temporal_classifiers) == 2
     assert all(r["state"] == "normal" for r in results)
     assert {e["track_id"] for e in events if e["kind"] == "pose_state"} == {1, 2}
 
@@ -113,3 +114,61 @@ def test_fall_app_runs_one_detector_per_track_and_feeds_invalid_on_loss():
     frame.pts = 1.0
     app.on_results([], frame)
     assert app.detectors == {}
+    assert app.temporal_classifiers == {}
+
+
+def test_temporal_profile_and_strict_confirmation_policy():
+    mod = _load_app_module()
+    from kit.logic.geometry import Observation
+    from kit.logic.temporal import FallConfig, FallDetector
+
+    profile = mod._TemporalProfile(os.path.join(
+        _HERE, "models", "temporal_yolo11s_pose_v1.json.gz"))
+    assert profile.window == 48
+    assert profile.w1.shape == (504, 32)
+    assert profile.threshold == 0.8
+    classifier = mod._TemporalClassifier(profile)
+    evaluated, positive, probability = classifier.update(
+        mod.np.zeros(56, dtype=mod.np.float32), 0.0)
+    assert evaluated and not positive and 0.0 <= probability <= 1.0
+
+    def observation(ts, hip, torso, aspect, valid=True):
+        obs = Observation(ts)
+        obs.valid = valid
+        obs.hip_y = hip
+        obs.torso_angle_deg = torso
+        obs.bbox_aspect_ratio = aspect
+        obs.person_score = 0.9
+        return obs
+
+    cfg = FallConfig(confirmation_sec=0.2, suspected_timeout_sec=2.0,
+                     temporal_confirmation_required=True)
+    detector = FallDetector(cfg)
+    # Even a temporal-positive first lying frame cannot originate an event.
+    first = detector.update(observation(0.0, 0.7, 75.0, 1.6),
+                            temporal_available=True, temporal_positive=True,
+                            temporal_probability=0.99)
+    assert first.state == "normal" and not first.fall_event
+
+    detector = FallDetector(cfg)
+    detector.update(observation(0.0, 0.4, 10.0, 0.7))
+    armed = detector.update(observation(0.2, 0.65, 70.0, 1.5))
+    assert armed.state == "suspected"
+    geometry_only = detector.update(observation(0.7, 0.68, 75.0, 1.6))
+    assert geometry_only.state == "suspected" and not geometry_only.fall_event
+    invalid = detector.update(observation(0.8, 0.0, 0.0, 0.0, False),
+                              temporal_available=True, temporal_positive=True,
+                              temporal_probability=0.99)
+    assert invalid.state == "suspected" and not invalid.fall_event
+    confirmed = detector.update(observation(0.9, 0.68, 75.0, 1.6),
+                                temporal_available=True, temporal_positive=True,
+                                temporal_probability=0.99)
+    assert confirmed.state == "fallen" and confirmed.fall_event
+
+    legacy = FallDetector(FallConfig(
+        confirmation_sec=0.2, suspected_timeout_sec=2.0,
+        temporal_confirmation_required=False))
+    legacy.update(observation(0.0, 0.4, 10.0, 0.7))
+    legacy.update(observation(0.2, 0.65, 70.0, 1.5))
+    legacy_out = legacy.update(observation(0.7, 0.68, 75.0, 1.6))
+    assert legacy_out.state == "fallen" and legacy_out.fall_event

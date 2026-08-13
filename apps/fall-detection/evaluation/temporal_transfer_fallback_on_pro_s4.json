@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "phase": "read_only_comparator_on_frozen_pro_subject4_traces",
+  "profile_id": "jetson-yolo11s-pose-optimized-v1",
+  "profile_sha256": "36545c5b5de501a07d3d46e626c8827d6f23e155c2420d5e4206bac7e555d74d",
+  "pose_frontend": "yolo11n_pose_rawhead_int8.rknn",
+  "pose_model_sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add",
+  "subject4_clean_test": {
+    "n": 27,
+    "tp": 11,
+    "fn": 1,
+    "tn": 11,
+    "fp": 4,
+    "accuracy": 0.8148148148148148,
+    "recall": 0.9166666666666666,
+    "specificity": 0.7333333333333333,
+    "precision": 0.7333333333333333,
+    "f1": 0.8148148148148148,
+    "early_fall_alerts": 1,
+    "mean_detection_latency_sec": 1.2181818181818185,
+    "median_detection_latency_sec": 1.0000000000000002,
+    "misclassified": [
+      "subject-4/ADL/06.jsonl",
+      "subject-4/ADL/07.jsonl",
+      "subject-4/ADL/08.jsonl",
+      "subject-4/ADL/16.jsonl",
+      "subject-4/Fall/02.jsonl"
+    ]
+  },
+  "decision": "retain_transfer_fallback_as_production_default",
+  "decision_reason": "The Pro-native candidate overfit Subject 3 and scored 70.37% accuracy / 69.23% F1 on the same frozen clean Subject 4 traces."
+}

@@ -2,13 +2,10 @@
 Temporal fall state machine, ported from the first-gen C++
 (solutions/fall-detection/main/fall_detector.cpp).
 
-Design faithful to the original with ONE deliberate simplification: the original
-had an optional learned 3.2-second pose classifier (`temporal_available/
-temporal_positive`). That path is dropped here -- we keep the fully explainable
-GEOMETRIC + MOTION path (rapid hip drop + horizontal-posture cue, confirmed over
-time), which the C++ used whenever the classifier was unavailable
-(`!o.temporal_available`). Every geometric threshold and timer is preserved and
-config-driven, so behaviour matches the classifier-off C++ exactly.
+Design faithful to the production first-gen/Jetson detector. Geometry and
+motion arm ``suspected``; by default only a learned temporal-positive result on
+a valid current pose can confirm ``fallen``.  ``temporal_confirmation_required``
+may be set false explicitly for legacy geometry-only bring-up.
 
 State: Normal -> Suspected -> Fallen -> Recovering -> Normal.
 No fall is declared from a single feature or a single frame: evidence is scored
@@ -29,6 +26,7 @@ RECOVERING = "recovering"
 
 @dataclass
 class FallConfig:
+    temporal_confirmation_required: bool = True
     hip_drop_speed_threshold: float = 0.25      # normalised y units / second
     hip_drop_distance_threshold: float = 0.02   # from last non-horizontal pose
     motion_window_sec: float = 0.75             # drop may precede horizontal pose
@@ -135,7 +133,9 @@ class FallDetector:
         out.diagnostics = dict(self._diag)
         return out
 
-    def update(self, o: Observation) -> FallOutput:
+    def update(self, o: Observation, *, temporal_available: bool = False,
+               temporal_positive: bool = False,
+               temporal_probability: float = 0.0) -> FallOutput:
         c = self.config
         self._fall_event = False
 
@@ -158,13 +158,16 @@ class FallDetector:
                 "evidence_score": 0.0,
                 "lying_posture": False,
                 "upright_posture": False,
+                "temporal_positive": bool(temporal_positive),
+                "temporal_probability": float(temporal_probability),
             }
             if self._state == SUSPECTED and self._suspected_since >= 0.0:
                 suspected_for = o.timestamp_sec - self._suspected_since
                 recent_strong = (self._last_strong_evidence >= 0.0 and
                                  o.timestamp_sec - self._last_strong_evidence
                                  <= c.occlusion_grace_sec)
-                if (self._motion_triggered and recent_strong and
+                if (not c.temporal_confirmation_required and
+                        self._motion_triggered and recent_strong and
                         self._max_drop >= c.hip_drop_distance_threshold and
                         suspected_for >= c.confirmation_sec):
                     self._to_fallen(o)
@@ -174,6 +177,8 @@ class FallDetector:
 
         # ---- valid observation ----
         self._update_diag(o, hip_speed)
+        self._diag["temporal_positive"] = bool(temporal_positive)
+        self._diag["temporal_probability"] = float(temporal_probability)
         horizontal_cue = (o.torso_angle_deg >= c.torso_angle_threshold_deg or
                           o.bbox_aspect_ratio >= c.bbox_aspect_ratio_threshold)
         if self._state == NORMAL and not horizontal_cue:
@@ -186,8 +191,8 @@ class FallDetector:
 
         if not self._initialized:
             self._initialized = True
-            if self._is_lying(o):
-                self._state = FALLEN
+            # Starting while somebody is already lying is not evidence of a
+            # fall. A fresh detector always needs motion/history first.
         else:
             evidence = int(self._diag["evidence_features"])
             lying = bool(self._diag["lying_posture"])
@@ -195,7 +200,9 @@ class FallDetector:
             cooldown = o.timestamp_sec < self._cooldown_until
 
             if self._state == NORMAL:
-                if (not cooldown and self._last_fast_drop >= 0.0 and
+                if (not cooldown and temporal_available and temporal_positive):
+                    self._to_fallen(o)
+                elif (not cooldown and self._last_fast_drop >= 0.0 and
                         o.timestamp_sec - self._last_fast_drop <= c.motion_window_sec and
                         horizontal_cue):
                     self._state = SUSPECTED
@@ -205,15 +212,19 @@ class FallDetector:
                     self._max_drop = (max(0.0, o.hip_y - self._baseline_hip_y)
                                       if self._have_baseline else 0.0)
             elif self._state == SUSPECTED:
-                if lying and enough:
-                    self._last_strong_evidence = o.timestamp_sec
-                if (self._motion_triggered and lying and enough and
-                        self._max_drop >= c.hip_drop_distance_threshold and
-                        o.timestamp_sec - self._suspected_since >= c.confirmation_sec):
+                if (not cooldown and temporal_available and temporal_positive):
                     self._to_fallen(o)
-                elif (self._diag["upright_posture"] or
-                        o.timestamp_sec - self._suspected_since > c.suspected_timeout_sec):
-                    self._to_normal()
+                else:
+                    if lying and enough:
+                        self._last_strong_evidence = o.timestamp_sec
+                    if (not c.temporal_confirmation_required and
+                            self._motion_triggered and lying and enough and
+                            self._max_drop >= c.hip_drop_distance_threshold and
+                            o.timestamp_sec - self._suspected_since >= c.confirmation_sec):
+                        self._to_fallen(o)
+                    elif (self._diag["upright_posture"] or
+                            o.timestamp_sec - self._suspected_since > c.suspected_timeout_sec):
+                        self._to_normal()
             elif self._state == FALLEN:
                 if self._diag["upright_posture"]:
                     if c.recovery_window_sec <= 0.0:

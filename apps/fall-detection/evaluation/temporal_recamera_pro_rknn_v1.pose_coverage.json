@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "pose_frontend": "yolo11n_pose_rawhead_int8.rknn",
+  "subjects": {
+    "1": {
+      "clips": 32,
+      "frames": 3025,
+      "tracking_frames": 2831,
+      "coverage": 0.9358677685950413,
+      "by_kind": {
+        "ADL": {
+          "clips": 16,
+          "frames": 1688,
+          "tracking_frames": 1658,
+          "coverage": 0.9822274881516587
+        },
+        "Fall": {
+          "clips": 16,
+          "frames": 1337,
+          "tracking_frames": 1173,
+          "coverage": 0.8773373223635004
+        }
+      }
+    },
+    "2": {
+      "clips": 48,
+      "frames": 6805,
+      "tracking_frames": 5966,
+      "coverage": 0.8767083027185892,
+      "by_kind": {
+        "ADL": {
+          "clips": 23,
+          "frames": 3645,
+          "tracking_frames": 3474,
+          "coverage": 0.9530864197530864
+        },
+        "Fall": {
+          "clips": 25,
+          "frames": 3160,
+          "tracking_frames": 2492,
+          "coverage": 0.7886075949367088
+        }
+      }
+    },
+    "3": {
+      "clips": 43,
+      "frames": 5151,
+      "tracking_frames": 4350,
+      "coverage": 0.844496214327315,
+      "by_kind": {
+        "ADL": {
+          "clips": 22,
+          "frames": 2963,
+          "tracking_frames": 2937,
+          "coverage": 0.9912251096861289
+        },
+        "Fall": {
+          "clips": 21,
+          "frames": 2188,
+          "tracking_frames": 1413,
+          "coverage": 0.6457952468007313
+        }
+      }
+    },
+    "4": {
+      "clips": 37,
+      "frames": 4337,
+      "tracking_frames": 3711,
+      "coverage": 0.8556605948812543,
+      "by_kind": {
+        "ADL": {
+          "clips": 20,
+          "frames": 2916,
+          "tracking_frames": 2676,
+          "coverage": 0.9176954732510288
+        },
+        "Fall": {
+          "clips": 17,
+          "frames": 1421,
+          "tracking_frames": 1035,
+          "coverage": 0.7283603096410978
+        }
+      }
+    }
+  },
+  "total": {
+    "clips": 160,
+    "frames": 19318,
+    "tracking_frames": 16858,
+    "coverage": 0.8726576250129413
+  }
+}

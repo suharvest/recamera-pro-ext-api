@@ -296,7 +296,13 @@ class App:
                 # full-res frame size our result coords are mapped to. No-op on
                 # the WS/stdout/MQTT workaround sinks (they keep pixel coords).
                 sink.set_frame_size(frame.w, frame.h)
-                sink.emit({"results": results, "events": events}, frame.pts)
+                sink.emit({
+                    "results": results,
+                    "events": events,
+                    "inference_time_ms": round((t2 - t1) * 1000.0, 3),
+                    "pipeline_ms": round((time.monotonic() - t0) * 1000.0, 3),
+                    "stream_id": "camera-0",
+                }, frame.pts)
 
                 t_pre += t1 - t0
                 t_inf += t2 - t1

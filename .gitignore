@@ -12,6 +12,13 @@ __pycache__/
 *.onnx
 models/
 apps/*/models/
+# The compact learned fall gate is source-controlled so an app package can be
+# reproduced without running the training/export tool. Large RKNN files remain
+# ignored by the extensions above.
+!apps/fall-detection/models/
+apps/fall-detection/models/*
+!apps/fall-detection/models/temporal_yolo11s_pose_v1.json.gz
+!apps/fall-detection/models/temporal_recamera_pro_rknn_v1.json.gz
 
 # 应用中心后端(market/)：追踪源码，忽略构建产物/大文件/临时
 # (dist/、models/、__pycache__/、*.pyc、_local_backups/、.DS_Store 由上方全局规则覆盖)

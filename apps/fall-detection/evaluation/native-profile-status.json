@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "updated": "2026-08-13",
+  "platform": "reCamera Pro RV1126B",
+  "status": "native_profile_frozen_and_s4_tested_fallback_retained",
+  "pose_frontend": {
+    "file": "models/yolo11n_pose_rawhead_int8.rknn",
+    "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add",
+    "target": "RV1126B",
+    "runtime": "RKNNLite"
+  },
+  "current_deployment_profile": {
+    "file": "models/temporal_yolo11s_pose_v1.json.gz",
+    "sha256": "36545c5b5de501a07d3d46e626c8827d6f23e155c2420d5e4206bac7e555d74d",
+    "status": "jetson_yolo11s_transfer_fallback_not_pro_native"
+  },
+  "verified_fallback_package": {
+    "file": "fall-detection-0.2.0-arm64.tar.gz",
+    "size_bytes": 2968980,
+    "sha256": "af300349b7d01e2004302b9ae386499f82caa0aecbe1c7e6797f3f2ed90bef89",
+    "signature_sha256": "b79c39ed935b4629bc9216399845da56b622cc3bdb65c75ebaa6964db4e35a75",
+    "appmgr_signature_verified": true,
+    "members": [
+      "app.py",
+      "manifest.json",
+      "models/temporal_yolo11s_pose_v1.json.gz",
+      "models/yolo11n_pose_rawhead_int8.rknn"
+    ]
+  },
+  "native_profile": {
+    "intended_file": "models/temporal_recamera_pro_rknn_v1.json.gz",
+    "checkpoint_manifest": "evaluation/temporal_recamera_pro_rknn_v1.checkpoint.json",
+    "frozen_test_report": "evaluation/temporal_recamera_pro_rknn_v1.s4.json",
+    "exists": true,
+    "profile_sha256": "4473e2af0fe5e47b03306bf9a866103a21dbdfceb794933034173bed53de6826",
+    "checkpoint_sha256": "e2320abaa0ffbca1bb71c03e48cef1bc262c547d6cbb8e2c4c41318c2917d147",
+    "s4_report_sha256": "79046f3938213f797cd3f340914e94d17e55454a45bc083c4dc01bc177f4572c"
+  },
+  "fleet_audit": {
+    "recamera_pro_present": true,
+    "target": "recamera-pro-test",
+    "firmware": "V1.0.4",
+    "live_validation_report": "EdgeFallKit evaluation/reports/recamera-pro-live-v0.2.0-20260813.json",
+    "incompatible_rk_targets": [
+      "cat-remote: RK3576",
+      "radxa: RK3588"
+    ],
+    "reason": "The RV1126B target is verified. RK3576/RK3588 remain incompatible substitutes; native trace extraction must run on the Pro."
+  },
+  "required_to_unblock": [],
+  "accuracy": {
+    "dataset": "GMDCSA clean Subject 4",
+    "tp": 9,
+    "fn": 3,
+    "tn": 10,
+    "fp": 5,
+    "accuracy": 0.7037037037037037,
+    "recall": 0.75,
+    "specificity": 0.6666666666666666,
+    "precision": 0.6428571428571429,
+    "f1": 0.6923076923076924,
+    "early_fall_alerts": 3,
+    "mean_detection_latency_sec": 1.4666666666666666
+  },
+  "production_decision": {
+    "default_profile": "models/temporal_yolo11s_pose_v1.json.gz",
+    "reason": "The transfer fallback scored 81.48% accuracy / 81.48% F1 / 91.67% recall on the same frozen Pro S4 traces; the native candidate overfit Subject 3 and is retained only as an experiment artifact."
+  },
+  "accuracy_note": "The native result is reported, but it does not replace the better-performing production fallback."
+}
