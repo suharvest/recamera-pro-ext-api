@@ -58,6 +58,9 @@ class RetailVisionApp(App):
     id = "retail-vision"
     name = "Retail People Counting"
     postproc = "detect"
+    # Only boxes/tracks are consumed -- never frame.data pixels -- so the frame
+    # source can letterbox on RGA (see App.direct_model_frame).
+    direct_model_frame = True
 
     def setup(self, config):
         super().setup(config)

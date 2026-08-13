@@ -54,14 +54,24 @@ class App:
                                       # False: the loop skips RknnModel + letterbox +
                                       # infer and calls process_frame(frame) instead.
 
-    # Applications in this allow-list only consume detections/keypoints and
-    # never crop pixels from ``frame.data``.  The official frame broker can
-    # therefore hand them a model-sized RGB letterbox produced by RGA, avoiding
-    # a full-resolution NV12->RGB conversion plus a Python resize.  Apps that
-    # need original pixels (OCR/face/cascade/QR) deliberately stay on the
-    # legacy full-frame path.  Keep this explicit rather than making a future
-    # app accidentally lose source-resolution pixels.
-    _DIRECT_MODEL_FRAME_APPS = frozenset({"fall-detection"})
+    # Opt in to hardware (RGA) letterboxing in the frame source: the official
+    # broker hands back a model-sized RGB letterbox plus the matching
+    # ``frame.model_info`` transform, skipping a full-resolution NV12->RGB
+    # conversion and the Python resize (measured ~40 ms/frame, +49% e2e on
+    # 1280x720 -> 640x640).  Set it on your App subclass:
+    #
+    #     class MyApp(App):
+    #         direct_model_frame = True
+    #
+    # ONLY set it when the app consumes detections/keypoints and NEVER reads
+    # pixels from ``frame.data`` -- with it on, ``frame.data`` IS the letterboxed
+    # model input, not source-resolution pixels (``frame.w``/``frame.h`` and the
+    # post-processed coordinates stay in original geometry either way).  Apps
+    # that crop original pixels (OCR/face/facemesh) must leave this False.
+    # Ignored when ``needs_model`` is False, when the backend exposes no dma-buf
+    # fd (RTSP/snapshot), or when the RGA path is unavailable -- every case
+    # falls back to the CPU letterbox with identical geometry, never an error.
+    direct_model_frame: bool = False
 
     def __init__(self) -> None:
         # config_schema-backed knobs (defaults; overridden in setup())
@@ -224,8 +234,7 @@ class App:
             model = RknnModel(model_path)
         else:
             model = None
-        direct_model_frame = bool(
-            self.needs_model and self.id in self._DIRECT_MODEL_FRAME_APPS)
+        direct_model_frame = bool(self.needs_model and self.direct_model_frame)
         src = open_frame_source(
             url=url,
             prefer=source,

@@ -53,6 +53,9 @@ class FitnessTrainerApp(App):
     id = "fitness-trainer"
     name = "Fitness Trainer"
     postproc = "pose"
+    # Only skeleton coordinates are consumed -- never frame.data pixels -- so the
+    # frame source can letterbox on RGA (see App.direct_model_frame).
+    direct_model_frame = True
 
     def setup(self, config):
         super().setup(config)

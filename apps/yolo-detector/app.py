@@ -47,6 +47,9 @@ class YoloDetectorApp(App):
     id = "yolo-detector"
     name = "YOLO Detector"
     postproc = "detect"
+    # Only boxes are consumed -- never frame.data pixels -- so the frame source
+    # can letterbox on RGA (see App.direct_model_frame).
+    direct_model_frame = True
 
     # on_config_reload is intentionally NOT overridden: yolo-detector's only
     # apply:"live" knobs are `conf`/`iou`, which the base App.on_config_reload
