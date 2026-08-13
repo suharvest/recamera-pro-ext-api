@@ -179,6 +179,36 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 > **卸载**：`POST /api/appMgr/uninstall {id}`（CLI `python3 -m appmgr uninstall <id>`）停→清 active→删 `/userdata/local/apps/<id>/` + per-app venv `/userdata/local/venvs/<id>`（若有），**共享模型 `/userdata/local/models` 不动**（跨 app 资产）。详见 publishing §6/§7。
 
+### 4.5 内建开关 + activate/config API + 前端部署（本轮三线补充）
+
+> 本轮把内建推理收敛成一等 app + 配置热更 + 结果软件叠加落地。API 语义见 [inference-as-app.md](./inference-as-app.md) 与 [ai-result-overlay.md](./ai-result-overlay.md)，此处只记部署/运维要点。
+
+**内建检测开关（entry.cgi）**：`POST https://127.0.0.1/cgi-bin/entry.cgi/model/inference {"iEnable":0|1}`——localhost 免 JWT，**走 443 不走 80**（80→307 丢 body）。appmgr 的 `builtin.py` driver 内部就是调它 + `/model/info`（换模型时要与一次 `/model/inference` POST 配对才触发重载，`builtin.py:22-25`）。关内建后 RTSP 码流无框（软件叠加不进码流）。
+
+**appmgr activate / config API**（loopback `127.0.0.1:8130`，nginx `/api/appMgr/` JWT 门）：
+
+| 方法 | 路径 | body | 语义 | 源 |
+|---|---|---|---|---|
+| POST | `/api/appMgr/activate` | `{id}` | 单活互斥切换；`id="builtin"` 开内建关自建、自建 id 关内建起该 app、`"none"`/空 停当前自建 | `server.py:652` / `do_activate:309` |
+| GET | `/api/appMgr/config` | `?id=`（含 `?id=builtin`） | 读 `{config_schema, values, defaults}`；builtin 走 driver 反组装成同构视图 | `server.py:575` / `builtin.get_config` |
+| POST | `/api/appMgr/config` | `{id, config:{...}}` | merge 写 `config.json` + 按 `apply` 分流：全 `live`→`kill -HUP`，任一 `restart`→stop+start | `do_set_config:288` |
+
+- `activate` 是把 builtin 纳入后的统一单活入口（旧 `switch` 是自建-only）。完整端点表见 [app-center-publishing.md](./app-center-publishing.md) §7。
+- 配置热更纪律：`live` 项经 SIGHUP 热重读（`kit/app.py` `on_config_reload`，不重启不抢相机），`restart` 项才重启进程。`asr_backend` 这类内部键不在 `config_schema`，UI 改配置会丢它，须直接落 `config.json`（见 §4.4 provision-voice）。
+
+**结果软件叠加落位**：自建 app 结果广播到本机 WS `:8124`（`WsResultSink` 默认），nginx `/appcenter/ws/results` 反代（JWT 门），官方 React `/preview` 页的 `AiResultOverlay` 订阅并 canvas 画框。烧进码流（OSD）是 opt-in（`RECAMERA_RESULT_OSD=1`/`kind=osd`/`PREFER=official`），默认不启用。
+
+**前端部署到 `/oem/usr/www`（官方 web-native 整合后）**：App Center 现为官方 React 页（`/app-center` 路由），前端静态产物落 **`/oem/usr/www`**——
+
+- `/oem` 是 **ext4 可写**分区，可直接铺前端产物（不必走 `/userdata` 旁挂；旧 `/appcenter` vanilla SPA 已 LEGACY）。
+- **OTA 会洗 `/oem`**：A/B 刷 rootfs 后前端产物被还原成原厂，**需重新铺一遍**（与 rkipc/entry.cgi 热替换同一类 OTA-非存活问题，见 §4.2 / 第 2.1 节）。铺前先备份原厂 `www`（`www-official-backup`，§6 二级回滚已列）。
+- **文件 mode 必须 644**：铺进 `/oem/usr/www` 的静态文件权限位要给读（`chmod 644`，目录 755）。**权限不对 nginx 返 500**（读不到文件），不是 404——排查"页面 500"先查 www 下文件 mode，busybox `cp` 不保留位、`scp`/解包后按 umask 可能落成非 644。
+
+**S94appmgr 启动隐患（TODO）**：
+
+- **boot 不自动拉起 active app**：`S94appmgr start` 只 `python3 -m appmgr serve`，不 `start <active>`。已加 `_boot_restore()`（serve HTTP 起后读 active 非空且未跑则 `supervisor.start`，幂等）缓解——确认重启后 active app 自动恢复。
+- **setsid 分层**：app 子进程由 supervisor 以 `start_new_session=True`（setsid，各自 session/进程组 leader，`supervisor.py:194`）拉起；而 **`appmgr serve` 自身**从 S94 只用普通后台 `&`（`S94appmgr:81-84`，因 busybox `start-stop-daemon -b` mishandle 需 cd 的 wrapper），未单独 setsid 脱离会话。当前靠 pidfile + appmgr flock 单实例兜。**TODO / 需核实**：serve 未 setsid 化在非 init 启动路径（adb shell 手动 `start` 后退出 shell）下是否被 reap——init 路径下 reparent 到 init 无碍，手动调试路径参照 §7"adb shell 一退就没了"行处理（写脚本 `exec` 或验完 reboot）。
+
 ---
 
 ## 5. 验证清单

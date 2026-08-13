@@ -22,12 +22,15 @@
 | [`06-probe/`](./06-probe/) | Python | `ProbeSource` | 观测内建推理流水线各级张量/指标（只读） |
 | [`07-shared-model/`](./07-shared-model/) | JSON/发布流 | catalog `models[]` + `/putModel` | **可用/已实现**：共享大模型不打进包，走 `models[]`+`target_path` 由浏览器代取下发（活样本 voice-transcribe） |
 | [`08-app-with-deps/`](./08-app-with-deps/) | JSON/skeleton | manifest `deps` + per-app venv | **skeleton/未实现**：app 独有 Python 依赖（如 PyAV）随包分发、装进 per-app venv 的设计示范（见设计文档） |
+| [`09-declarative-output/`](./09-declarative-output/) | JSON/manifest | manifest `capabilities:["output"]` + `output` 块 | **可用/已实现**：声明式把结果发到 MQTT/HTTP/UART/WS + HA Discovery，app.py 零输出代码（`ConfigurableSink`，活样本 yolo-detector） |
 
 建议阅读顺序：01 → 02 → 03（03 是"方案商自带流水线"的核心示例），04/05/06 按需。
 
-> **07/08 与 01–06 不同层次**：01–06 是「设备上跑自己的进程对接扩展 SDK」的运行时示例；
-> 07/08 是「**应用中心发布 / 上架**」角度——app 包怎么声明并分发**共享模型**（07，已实现）
-> 和 **per-app 依赖**（08，设计中未实现）。不涉及扩展 SDK 调用，事实来源是
+> **07/08/09 与 01–06 不同层次**：01–06 是「设备上跑自己的进程对接扩展 SDK」的运行时示例；
+> 07/08/09 是「**应用中心声明 / 上架**」角度——app 包怎么声明并分发**共享模型**（07，已实现）、
+> **per-app 依赖**（08，设计中未实现）、**声明式结果输出**（09，已实现，改 manifest 不写代码）。
+> 09 的事实来源是 `kit/adapters/output_sink.py` + `internal/OUTPUT_SINK_SPEC.md` +
+> `docs/guide/output-sink.md`；07/08 不涉及扩展 SDK 调用，事实来源是
 > `market/{catalog/gen_catalog.py,catalog/models.json,appmgr/server.py,appmgr/modelstore.py}`
 > 与 `docs/guide/per-app-dependencies.md`。
 

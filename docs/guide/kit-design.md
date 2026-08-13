@@ -167,7 +167,7 @@ class App(ABC):
 | weather-classifier | mobilenetv3 | classify | top-1 → 发布, 近乎空 | — |
 | qrcode-reader | 无(quirc) | (QrDecoder 工具, 归通用) | 结果格式 → 极薄 | — |
 | retail-vision | yolo11n(person) | detect | Tracker+ZoneCounter+LineCounter+Dwell **多为通用库**, app 只配置+串 | 区域/进出线/驻留/窗口 |
-| fall-detection | yolo11n-pose | pose | **FallStateMachine**(髋降速+躯干角时序) 继承 TemporalSM | 12 参数 |
+| fall-detection | yolo11n-pose | pose | 每轨 48 帧冻结学习型 gate + 几何候选/恢复状态机；默认严格确认 | 13 参数 |
 | fitness-trainer | yolo11n-pose | pose | **RepCounter**(关节角状态机) | mode/target/conf |
 | facemesh-reader | 人脸检测+landmark468 | detect+landmark(级联) | **DrowsinessMetrics**(EAR/MAR/眨眼/哈欠时序) | — |
 | face-analysis | 人脸检测+fairface+情绪 | detect+classify×2(级联+ROI裁剪对齐) | **DemographicAggregator**(分时段聚合) | — |
