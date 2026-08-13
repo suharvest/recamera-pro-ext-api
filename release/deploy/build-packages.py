@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 build-packages.py -- pack the three application-layer bundles for a reCamera Pro
-v1.3.0 one-shot deploy. Fully deterministic (same inputs -> same bytes -> same
+one-shot deploy. Fully deterministic (same inputs -> same bytes -> same
 md5), modelled on market/packaging/build.py:
 
   1. appmgr-v<ver>.tar.gz    market/appmgr/  ->  extract at /userdata/local/  (dir: appmgr/)
@@ -28,7 +28,7 @@ import os
 import sys
 import tarfile
 
-VERSION = "1.3.0"
+DEFAULT_VERSION = "1.3.0"
 
 # The 9 shipped apps.
 APPS = [
@@ -151,12 +151,14 @@ def main():
     ap.add_argument("--repo", default=repo_default)
     ap.add_argument("--frontend", required=True, help="path to the web build/ dir")
     ap.add_argument("--out", default=here)
+    ap.add_argument("--version", default=DEFAULT_VERSION,
+                    help=f"release version (default: {DEFAULT_VERSION})")
     args = ap.parse_args()
 
     jobs = [
-        ("appmgr",   f"appmgr-v{VERSION}.tar.gz",   collect_appmgr(os.path.join(args.repo, "market", "appmgr"))),
-        ("frontend", f"frontend-v{VERSION}.tar.gz", collect_frontend(args.frontend)),
-        ("apps",     f"apps-v{VERSION}.tar.gz",     collect_apps(os.path.join(args.repo, "apps"))),
+        ("appmgr",   f"appmgr-v{args.version}.tar.gz",   collect_appmgr(os.path.join(args.repo, "market", "appmgr"))),
+        ("frontend", f"frontend-v{args.version}.tar.gz", collect_frontend(args.frontend)),
+        ("apps",     f"apps-v{args.version}.tar.gz",     collect_apps(os.path.join(args.repo, "apps"))),
     ]
     for label, name, members in jobs:
         out = os.path.join(args.out, name)
