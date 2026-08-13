@@ -131,21 +131,16 @@ class FacemeshReaderApp(App):
         params (`perclos_window_sec`, model input) are apply:"restart" and are
         NOT touched here.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
+        params = self._reload_params(config)
         self.config = config or {}
 
-        def _f(key, cur):
-            try:
-                return float(params.get(key, cur))
-            except (TypeError, ValueError):
-                return cur
-
-        self.conf = _f("confidence", self.conf)
-        self.iou = _f("iou", self.iou)
-        self.presence_threshold = _f("presence_threshold", self.presence_threshold)
+        self.conf = self._reload_float(params, "confidence", self.conf)
+        self.iou = self._reload_float(params, "iou", self.iou)
+        self.presence_threshold = self._reload_float(
+            params, "presence_threshold", self.presence_threshold)
         # crop_pad drives the stage-2 ROI crop; mutate the pipeline in place
         # (do NOT rebuild -- that would reload the landmark RKNN model).
-        self.crop_pad = _f("crop_pad", self.crop_pad)
+        self.crop_pad = self._reload_float(params, "crop_pad", self.crop_pad)
         if getattr(self, "pipeline", None) is not None:
             self.pipeline.pad = self.crop_pad
 
@@ -154,28 +149,25 @@ class FacemeshReaderApp(App):
         # every deque / timer intact.
         logic = getattr(self, "logic", None)
         if logic is not None:
-            logic.ear_threshold = _f("ear_threshold", logic.ear_threshold)
-            logic.mar_threshold = _f("mar_threshold", logic.mar_threshold)
+            logic.ear_threshold = self._reload_float(
+                params, "ear_threshold", logic.ear_threshold)
+            logic.mar_threshold = self._reload_float(
+                params, "mar_threshold", logic.mar_threshold)
             if getattr(logic, "yawn", None) is not None:
                 logic.yawn.mar_threshold = logic.mar_threshold
-                try:
-                    logic.yawn.consecutive_frames = int(
-                        params.get("yawn_consecutive_frames",
-                                   logic.yawn.consecutive_frames))
-                except (TypeError, ValueError):
-                    pass
+                logic.yawn.consecutive_frames = self._reload_int(
+                    params, "yawn_consecutive_frames", logic.yawn.consecutive_frames)
             cfg = getattr(getattr(logic, "drowsy", None), "cfg", None)
             if cfg is not None:
                 cfg.ear_threshold = logic.ear_threshold
-                cfg.ear_continuous_sec = _f("ear_continuous_sec", cfg.ear_continuous_sec)
-                cfg.perclos_critical_pct = _f("perclos_critical_pct",
-                                              cfg.perclos_critical_pct)
-                cfg.alert_cooldown_sec = _f("alert_cooldown_sec", cfg.alert_cooldown_sec)
-                try:
-                    cfg.yawn_count_threshold = int(
-                        params.get("yawn_count_threshold", cfg.yawn_count_threshold))
-                except (TypeError, ValueError):
-                    pass
+                cfg.ear_continuous_sec = self._reload_float(
+                    params, "ear_continuous_sec", cfg.ear_continuous_sec)
+                cfg.perclos_critical_pct = self._reload_float(
+                    params, "perclos_critical_pct", cfg.perclos_critical_pct)
+                cfg.alert_cooldown_sec = self._reload_float(
+                    params, "alert_cooldown_sec", cfg.alert_cooldown_sec)
+                cfg.yawn_count_threshold = self._reload_int(
+                    params, "yawn_count_threshold", cfg.yawn_count_threshold)
         print(f"[facemesh] hot-reload conf={self.conf} iou={self.iou} "
               f"crop_pad={self.crop_pad} presence={self.presence_threshold} "
               f"ear_thr={getattr(logic, 'ear_threshold', None)} "

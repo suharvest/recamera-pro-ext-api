@@ -74,6 +74,29 @@ class App:
         self.conf = float(self.config.get("conf", self.conf))
         self.iou = float(self.config.get("iou", self.iou))
 
+    # -- live-reload value-replace helpers (shared by every app override) --- #
+    @staticmethod
+    def _reload_params(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Drop keys whose value is None so a missing/cleared config item never
+        overwrites a live attribute (the None-filter every app applied by hand)."""
+        return {k: v for k, v in (config or {}).items() if v is not None}
+
+    @staticmethod
+    def _reload_float(params: Dict[str, Any], key: str, cur: float) -> float:
+        """Value-replace a float knob from `params`; keep `cur` on absence/garbage."""
+        try:
+            return float(params.get(key, cur))
+        except (TypeError, ValueError):
+            return cur
+
+    @staticmethod
+    def _reload_int(params: Dict[str, Any], key: str, cur: int) -> int:
+        """Value-replace an int knob from `params`; keep `cur` on absence/garbage."""
+        try:
+            return int(params.get(key, cur))
+        except (TypeError, ValueError):
+            return cur
+
     def on_config_reload(self, config: Dict[str, Any]) -> None:
         """★Live config hot-reload hook★ (SIGHUP -> re-read config.json).
 
@@ -86,21 +109,15 @@ class App:
         values, and NEVER rebuilds the model, frame source, or any pipeline
         state. Subclasses that snapshot extra params into their own attributes
         (e.g. self.max_faces, thresholds, ROI geometry) override this to reapply
-        those the same value-replacing way. Anything structural (model swap,
-        input_size, backend, buffer resize) must NOT be hot-reloaded -- those
-        params are apply:"restart" in the manifest and never reach here.
+        those the same value-replacing way -- use the `_reload_float/_reload_int`
+        helpers above. Anything structural (model swap, input_size, backend,
+        buffer resize) must NOT be hot-reloaded -- those params are
+        apply:"restart" in the manifest and never reach here.
         """
         self.config = config or {}
-        if "conf" in self.config:
-            try:
-                self.conf = float(self.config["conf"])
-            except (TypeError, ValueError):
-                pass
-        if "iou" in self.config:
-            try:
-                self.iou = float(self.config["iou"])
-            except (TypeError, ValueError):
-                pass
+        params = self._reload_params(config)
+        self.conf = self._reload_float(params, "conf", self.conf)
+        self.iou = self._reload_float(params, "iou", self.iou)
 
     # -- hot-reload plumbing (base; apps do not touch) -------------------- #
     def _install_reload_handler(self) -> None:
@@ -387,7 +404,10 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     # --conf/--iou win over that (manual debugging override).
     from kit import config as _cfg
     app_dir = _cfg.app_dir_of(app)
-    eff = _cfg.effective_config(app_dir)
+    # Read the manifest ONCE and thread it through both consumers (effective
+    # config overlay + output-sink assembly) instead of loading it twice.
+    manifest = _cfg.load_manifest(app_dir)
+    eff = _cfg.effective_config(app_dir, manifest=manifest)
     if args.conf is not None:
         eff["conf"] = args.conf
     if args.iou is not None:
@@ -406,8 +426,6 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     # in bypass this entirely and keep the legacy MQTT fan-out below unchanged.
     from kit.adapters.result_sink import MultiSink
     from kit.adapters.output_sink import assemble_output_sink
-    from kit import config as _cfg2
-    manifest = _cfg2.load_manifest(app_dir)
     out_sink, opted_in = assemble_output_sink(
         app, app_dir, manifest, eff, verbose=not args.quiet)
 

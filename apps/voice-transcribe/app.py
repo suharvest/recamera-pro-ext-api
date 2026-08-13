@@ -137,21 +137,18 @@ class VoiceTranscribeApp(App):
         restart, not mid-utterance. See TODO in the port notes re: wiring a live
         SIGHUP path into VoiceStateMachine.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
+        params = self._reload_params(config)
         self.config = config or {}
         if "wakeword" in params:
             self.wakeword = str(params["wakeword"])
 
-        def _f(key, cur):
-            try:
-                return float(params.get(key, cur))
-            except (TypeError, ValueError):
-                return cur
-
-        self.min_silence_sec = _f("min_silence_sec", self.min_silence_sec)
-        self.max_utterance_sec = _f("max_utterance_sec", self.max_utterance_sec)
-        self.preroll_ms = _f("preroll_ms", self.preroll_ms)
-        self.listen_timeout_sec = _f("listen_timeout_sec", self.listen_timeout_sec)
+        self.min_silence_sec = self._reload_float(
+            params, "min_silence_sec", self.min_silence_sec)
+        self.max_utterance_sec = self._reload_float(
+            params, "max_utterance_sec", self.max_utterance_sec)
+        self.preroll_ms = self._reload_float(params, "preroll_ms", self.preroll_ms)
+        self.listen_timeout_sec = self._reload_float(
+            params, "listen_timeout_sec", self.listen_timeout_sec)
         print(f"[voice-transcribe] hot-reload wakeword={self.wakeword!r} "
               f"min_silence={self.min_silence_sec} max_utt={self.max_utterance_sec} "
               f"preroll_ms={self.preroll_ms} listen_timeout={self.listen_timeout_sec} "

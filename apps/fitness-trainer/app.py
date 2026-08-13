@@ -98,29 +98,14 @@ class FitnessTrainerApp(App):
             squat do not carry to push-up). An unchanged mode keeps the running
             accumulator untouched.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
+        params = self._reload_params(config)
         self.config = config or {}
-        try:
-            self.conf = float(params.get("confidence", self.conf))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.kpt_thres = float(params.get("keypoint_confidence", self.kpt_thres))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.target_reps = int(params.get("target_reps", self.target_reps))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.target_sets = int(params.get("target_sets", self.target_sets))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.idle_reset_seconds = float(
-                params.get("idle_reset_seconds", self.idle_reset_seconds))
-        except (TypeError, ValueError):
-            pass
+        self.conf = self._reload_float(params, "confidence", self.conf)
+        self.kpt_thres = self._reload_float(params, "keypoint_confidence", self.kpt_thres)
+        self.target_reps = self._reload_int(params, "target_reps", self.target_reps)
+        self.target_sets = self._reload_int(params, "target_sets", self.target_sets)
+        self.idle_reset_seconds = self._reload_float(
+            params, "idle_reset_seconds", self.idle_reset_seconds)
 
         new_mode = str(params.get("mode", self.mode))
         if new_mode != self.mode:

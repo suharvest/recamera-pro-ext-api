@@ -48,18 +48,9 @@ class YoloDetectorApp(App):
     name = "YOLO Detector"
     postproc = "detect"
 
-    def on_config_reload(self, config):
-        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
-
-        yolo-detector's only apply:"live" knobs are `conf` and `iou`, which it
-        reads straight into self.conf / self.iou via the base App.setup(). The
-        base App.on_config_reload already value-replaces exactly those two keys
-        (never rebuilding the model), so this app just delegates -- the override
-        is kept explicit so the live-reload contract is visible per-app.
-        """
-        super().on_config_reload(config)
-        print(f"[yolo-detector] hot-reload conf={self.conf} iou={self.iou}",
-              flush=True)
+    # on_config_reload is intentionally NOT overridden: yolo-detector's only
+    # apply:"live" knobs are `conf`/`iou`, which the base App.on_config_reload
+    # already value-replaces (never rebuilding the model).
 
     def on_results(self, results, frame):
         """Format each detection into a flat, overlay-friendly event.

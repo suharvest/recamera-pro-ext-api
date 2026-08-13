@@ -140,29 +140,14 @@ class FaceAnalysisApp(App):
         resetting the demographic aggregation window. `aggregate_window_sec` is
         apply:"restart" and is intentionally NOT touched here.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
+        params = self._reload_params(config)
         self.config = config or {}
-        try:
-            self.conf = float(params.get("confidence", self.conf))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.iou = float(params.get("iou", self.iou))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.max_faces = int(params.get("max_faces", self.max_faces))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.crop_pad = float(params.get("crop_pad", self.crop_pad))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.emotion_interval = max(
-                1, int(params.get("emotion_interval", self.emotion_interval)))
-        except (TypeError, ValueError):
-            pass
+        self.conf = self._reload_float(params, "confidence", self.conf)
+        self.iou = self._reload_float(params, "iou", self.iou)
+        self.max_faces = self._reload_int(params, "max_faces", self.max_faces)
+        self.crop_pad = self._reload_float(params, "crop_pad", self.crop_pad)
+        self.emotion_interval = max(
+            1, self._reload_int(params, "emotion_interval", self.emotion_interval))
         if "privacy_blur" in params:
             self.privacy_blur = bool(params["privacy_blur"])
         print(f"[face-analysis] hot-reload conf={self.conf} iou={self.iou} "

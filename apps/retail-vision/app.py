@@ -122,16 +122,10 @@ class RetailVisionApp(App):
         and never reach this hook). `window_duration` is apply:"restart" and is
         intentionally NOT touched here.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
+        params = self._reload_params(config)
         self.config = config or {}
-        try:
-            self.conf = float(params.get("confidence", self.conf))
-        except (TypeError, ValueError):
-            pass
-        try:
-            self.iou = float(params.get("iou", self.iou))
-        except (TypeError, ValueError):
-            pass
+        self.conf = self._reload_float(params, "confidence", self.conf)
+        self.iou = self._reload_float(params, "iou", self.iou)
         # dwell thresholds are apply:"live"; mutate the existing DwellConfig in
         # place so per-track dwell timers are preserved across the reload.
         try:

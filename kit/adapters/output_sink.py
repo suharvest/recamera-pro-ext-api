@@ -40,6 +40,10 @@ from kit.adapters.result_sink import (
     ResultSink,
     WsResultSink,
 )
+# MqttSink is reused for HA state aggregation (`_build_state`). Imported at
+# module level (mqtt_sink has no back-dependency on output_sink, so no cycle)
+# so HaDiscoveryFormatter.format does not re-import it on every frame.
+from kit.adapters.mqtt_sink import MqttSink
 
 # Edge/business events that may bypass rate limiting (spec §2.3).
 EDGE_KINDS = frozenset({"fall", "blink", "yawn", "line_cross", "transcript"})
@@ -232,7 +236,7 @@ def generate_mapping_templates(rows: List[dict]) -> List[dict]:
 class RawJsonFormatter(OutputFormatter):
     """Serialize the canonical envelope compactly, no field loss (spec §4)."""
 
-    def format(self, envelope: dict, *, channel: str) -> List[OutputMessage]:
+    def format(self, envelope: dict, *, channel: str = None) -> List[OutputMessage]:
         body = json.dumps(envelope, separators=(",", ":"),
                           default=str).encode("utf-8")
         return [OutputMessage(body=body, topic=None)]
@@ -277,7 +281,7 @@ class Jinja2Formatter(OutputFormatter):
             raise ValueError(f"invalid topic {topic!r}")
         return topic
 
-    def format(self, envelope: dict, *, channel: str) -> List[OutputMessage]:
+    def format(self, envelope: dict, *, channel: str = None) -> List[OutputMessage]:
         ns = build_namespace(envelope, app_id=self.app_id,
                              device_id=self.device_id)
         out: List[OutputMessage] = []
@@ -324,8 +328,7 @@ class HaDiscoveryFormatter(OutputFormatter):
         self.status_topic = f"{self.base_topic}/{self.app_id}/status"
         self._seq = 0
 
-    def format(self, envelope: dict, *, channel: str) -> List[OutputMessage]:
-        from kit.adapters.mqtt_sink import MqttSink
+    def format(self, envelope: dict, *, channel: str = None) -> List[OutputMessage]:
         self._seq += 1
         state = MqttSink._build_state(
             self.app_id, self._seq, (envelope.get("frame") or {}).get("pts", 0.0),
@@ -807,14 +810,28 @@ class ConfigurableSink(ResultSink):
         if decision is None:
             return
         env, has_edge = decision
-        for ch in self.channels:
-            if not self._rate_ok(ch.name, has_edge):
-                continue
+        # Which channels pass their rate gate this frame (rate_ok arms the token
+        # as a side effect, so evaluate it once per channel, in order).
+        passing = [ch for ch in self.channels
+                   if self._rate_ok(ch.name, has_edge)]
+        if not passing:
+            return
+        # Format ONCE per frame: no formatter reads `channel`, and the formatter
+        # may carry per-frame state (HaDiscoveryFormatter._seq) that must advance
+        # once per frame -- not once per channel. Fan the resulting messages out
+        # to every rate-passing channel.
+        try:
+            msgs = self.formatter.format(env, channel=None)
+        except Exception as e:
+            # A format failure hits all channels alike; log once (throttled on
+            # the first channel's key) and drop this frame.
+            self._log_channel_error(passing[0].name, e)
+            return
+        for ch in passing:
             try:
-                msgs = self.formatter.format(env, channel=ch.name)
                 for m in msgs:
                     ch.publish(m)
-            except Exception as e:  # isolate one channel's failure
+            except Exception as e:  # isolate one channel's publish failure
                 self._log_channel_error(ch.name, e)
 
     def emit_meta(self, payload: dict) -> None:
