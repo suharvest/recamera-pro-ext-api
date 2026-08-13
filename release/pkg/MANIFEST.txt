@@ -2,7 +2,7 @@ recamera-ext-api  v1.3.0
 Built: 2026-08-13   Target: reCamera Pro (RV1126B / recamera_v2)
 
 ARTIFACTS (md5)
-  rkipc                             f93ac217c9920bc962771aeed1ac0550   15579616 B  -> /oem/usr/bin/rkipc
+  rkipc                             9826e9ecf8ed543a6dc78e3731102e0f   15502408 B  -> /oem/usr/bin/rkipc
   entry.cgi                         75a693c87c317a49c37c4dddb6b9ac7a    1057168 B  -> /oem/usr/www/cgi-bin/entry.cgi   (M4 control plane, optional)
   sdk/lib/librecamera_ext.so.1.0.0  5cebfb9e4d9c001c45b58c75daafe934      89496 B  -> /oem/usr/lib/  (+ .so.1, .so symlinks)
   sdk/python/recamera_ext/          (ctypes bindings)                              -> /userdata/sdk/python/

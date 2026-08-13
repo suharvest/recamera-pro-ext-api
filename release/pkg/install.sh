@@ -5,7 +5,7 @@
 set -e
 
 PKG=$(cd "$(dirname "$0")" && pwd)
-RKIPC_MD5=f93ac217c9920bc962771aeed1ac0550
+RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
 SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
 # Rollback safety -- a valid rollback target MUST be a genuine, unmodified factory rkipc.

@@ -13,7 +13,7 @@
 
 | 产物 | 安装目标 | md5 | 大小 | 必需性 |
 |---|---|---|---|---|
-| `rkipc`（含扩展端点：帧代理 / 结果回注 / probe）| `/oem/usr/bin/rkipc` | `2baebbb55155efb0def2c82fb233e345` | 15.5 MB | **核心必需**——扩展端点全在这个二进制里 |
+| `rkipc`（含扩展端点：帧代理 / 结果回注 / probe）| `/oem/usr/bin/rkipc` | `9826e9ecf8ed543a6dc78e3731102e0f` | 15.5 MB | **核心必需**——扩展端点全在这个二进制里 |
 | `entry.cgi`（M4 控制面）| `/oem/usr/www/cgi-bin/entry.cgi` | `75a693c87c317a49c37c4dddb6b9ac7a` | 1.05 MB | 可选（M4 控制面接口）|
 | `librecamera_ext.so.1.0.0`（+ `.so.1` `.so` 软链）| `/oem/usr/lib/` | `137251d7e93cb098c5328ec21e2ef61e` | 86 KB | 给方案商 SDK 运行时；仅当有扩展应用用到才需要 |
 | `recamera_ext/`（Python ctypes 绑定）| `/userdata/sdk/python/` | — | — | 给方案商，可选（`/userdata` 不受 OTA 影响）|
@@ -53,7 +53,7 @@ adb shell "sh /userdata/ext-pkg/install.sh"       # 备份原厂 + md5 校验 + 
 adb reboot                                         # 或 install.sh 传 --reboot
 # 等 ~1-2 分钟自检：
 adb shell "ls -l /run/recamera/"                  # 期望 frame.sock result-in.sock probe.sock apps.d/
-adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 2baebbb55155efb0def2c82fb233e345
+adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78e3731102e0f
 ```
 
 `install.sh` 是**幂等 + md5 校验**的（见 `release/pkg/install.sh`）：
@@ -261,7 +261,7 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 reboot / 部署后依次核对：
 
-- [ ] **rkipc md5**：`md5sum /oem/usr/bin/rkipc` = `2baebbb55155efb0def2c82fb233e345`（或热替换目标值）
+- [ ] **rkipc md5**：`md5sum /oem/usr/bin/rkipc` = `9826e9ecf8ed543a6dc78e3731102e0f`（或热替换目标值）
 - [ ] **三 socket**：`ls -l /run/recamera/` 有 `frame.sock` `result-in.sock` `probe.sock`（+ `apps.d/`）
 - [ ] **RTSP 出流**：`rtsp://<ip>:554/...` 有画面
 - [ ] **内建推理**：官方检测框正常上 OSD / RTSP（内建走同一条 `rc_result_dispatch`）
