@@ -140,7 +140,23 @@ class WsResultSink(ResultSink):
         self._accept_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._seq = 0
+        # Current inference-frame pixel size (base loop calls set_frame_size once
+        # per frame BEFORE emit). Emitted as `frame:{width,height}` so the
+        # /appcenter overlay knows the coordinate reference space the box/keypoint
+        # PIXELS live in -- without it the panel guesses (default 640x480) and
+        # every coordinate is scaled wrong. None until the first frame is seen.
+        self._frame_w: Optional[int] = None
+        self._frame_h: Optional[int] = None
         self._start()
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        """Record the current inference-frame pixel size (base loop calls this
+        per frame). Unlike OfficialResultSink -- which DIVIDES coords by this to
+        normalize -- WsResultSink keeps pixel coords verbatim and just ANNOUNCES
+        the reference size in the wire message so the overlay maps 1:1."""
+        if w and h and w > 0 and h > 0:
+            self._frame_w = int(w)
+            self._frame_h = int(h)
 
     # -- lifecycle -------------------------------------------------------- #
     def _start(self) -> None:
@@ -234,6 +250,11 @@ class WsResultSink(ResultSink):
         payload.setdefault("app", self.app_id)
         payload["pts"] = pts
         payload["seq"] = self._seq
+        # Announce the inference-frame reference size the result coords map to.
+        # The overlay reads this to scale box/keypoint PIXELS into the video
+        # display area; without it the panel falls back to a hard-coded guess.
+        if self._frame_w and self._frame_h:
+            payload["frame"] = {"width": self._frame_w, "height": self._frame_h}
         self._broadcast(payload)
 
     def emit_meta(self, payload: dict) -> None:

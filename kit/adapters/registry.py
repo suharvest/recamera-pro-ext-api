@@ -7,7 +7,10 @@ every adapter factory picks its implementation from the resulting capability
 set:
 
     FrameSource  = caps.frame_broker   ? OfficialFrameSource  : FfmpegRtspSource
-    ResultSink   = caps.result_ingress ? OsdInjectResultSink  : WsResultSink
+    ResultSink   = WsResultSink (DEFAULT, software overlay :8124);
+                   OsdInjectResultSink (burn into码流) is EXPLICIT opt-in only
+                   (RECAMERA_ADAPTER_PREFER=official | RECAMERA_RESULT_OSD=1 |
+                   kind="osd") -- NOT auto-selected on result-in.sock presence.
     AudioSource  = caps.audio_broker   ? OfficialPcmSource     : (workaround TBD)
     ControlPlane = caps.control_api    ? OfficialControl       : CgiControl
     ProbeSource  = ProbeSource (SDK)   -- v1 baseline (probe@1), no workaround alt
@@ -134,15 +137,46 @@ def select_frame_source(url: str, prefer: str = "ffmpeg", **kw):
     return FfmpegRtspSource(url=url, **kw)
 
 
+def _result_osd_opt_in() -> bool:
+    """Whether to burn AI results INTO the RTSP码流 via the official OSD ingress.
+
+    ★S1 decision: AI results are SOFTWARE-overlaid by DEFAULT.★ Unlike
+    select_frame_source (which auto-switches to the official zero-copy broker the
+    moment `caps.frame_broker` probes present), the result sink does NOT auto-
+    switch to OSD burn-in just because `result-in.sock` exists. The default is
+    always the software overlay (`WsResultSink` on :8124), even when the official
+    result-ingress socket is present.
+
+    Burning results into the encoded RTSP stream (`OsdInjectResultSink`) is an
+    EXPLICIT opt-in, reserved for the "must be baked into RTSP" scenario (线A's
+    hardware-OSD switch will drive this later). Opt-in channels:
+      * RECAMERA_ADAPTER_PREFER = official  -- global manifest-style override
+        (docs/guide/adapter-bootstrap.md §3 `prefer: official`).
+      * RECAMERA_RESULT_OSD    = 1/true/... -- dedicated result-sink opt-in, so
+        one app can burn into码流 without flipping every other adapter to official.
+    RECAMERA_ADAPTER_PREFER=workaround still force-selects software. Any other
+    value ("auto" / unset) means software overlay -- socket presence is ignored.
+    """
+    pref = str(os.environ.get("RECAMERA_ADAPTER_PREFER", "auto")).strip().lower()
+    if pref == "official":
+        return True
+    if pref == "workaround":
+        return False
+    return _env_bool("RECAMERA_RESULT_OSD")  # auto -> software unless opted in
+
+
 def select_result_sink(kind: str = "ws", **kw):
     """Pick a ResultSink implementation.
 
-    `kind` = "ws" (broadcast overlay) | "stdout" (debug). The "stdout" debug
-    sink is always honoured verbatim; the official OSD ingress, when present,
-    supersedes the "ws" path only.
+    `kind` = "ws" (broadcast overlay, DEFAULT) | "osd" (force OSD burn-in) |
+    "stdout" (debug).
+
+    Default (S1): the SOFTWARE overlay (`WsResultSink` on :8124). The official
+    OSD ingress is NOT auto-selected on socket presence -- it is explicit opt-in
+    only (see `_result_osd_opt_in`, or pass kind="osd"). The "stdout" debug sink
+    is always honoured verbatim.
     """
-    caps = capabilities()
-    if kind != "stdout" and _prefer_official(caps.result_ingress):
+    if kind != "stdout" and (kind == "osd" or _result_osd_opt_in()):
         from .official import OsdInjectResultSink
         return OsdInjectResultSink(**kw)
     from .result_sink import StdoutSink, WsResultSink

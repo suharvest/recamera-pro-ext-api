@@ -302,8 +302,10 @@ def test_registry_selects_official():
     _install_fake_ext()
     from kit.adapters import registry
     from kit.adapters.official import OfficialFrameSource, OfficialResultSink
+    from kit.adapters.result_sink import WsResultSink
 
-    for k in ("RECAMERA_ADAPTER_PREFER", "RECAMERA_RESULT_INGRESS"):
+    for k in ("RECAMERA_ADAPTER_PREFER", "RECAMERA_RESULT_INGRESS",
+              "RECAMERA_RESULT_OSD"):
         os.environ.pop(k, None)
     with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as ftf, \
          tempfile.NamedTemporaryFile(prefix="result-in-", suffix=".sock") as rtf:
@@ -312,16 +314,30 @@ def test_registry_selects_official():
         caps = registry.capabilities(refresh=True)
         assert caps.frame_broker and caps.result_ingress, caps
 
+        # Frame source STILL auto-switches to the official zero-copy broker.
         src = registry.select_frame_source(url="rtsp://x", prefer="ffmpeg")
         assert isinstance(src, OfficialFrameSource), type(src)
         assert src.sock == ftf.name, src.sock
+
+        # ★S1★ Result sink does NOT auto-switch to OSD burn-in on socket
+        # presence -- the default is the SOFTWARE overlay (WsResultSink).
         sink = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
                                             app_id="demo")
-        assert isinstance(sink, OfficialResultSink), type(sink)
+        assert isinstance(sink, WsResultSink), type(sink)
+
+        # OSD burn-in is opt-in: RECAMERA_RESULT_OSD=1 or kind="osd".
+        os.environ["RECAMERA_RESULT_OSD"] = "1"
+        osd = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
+                                           app_id="demo")
+        assert isinstance(osd, OfficialResultSink), type(osd)
+        os.environ.pop("RECAMERA_RESULT_OSD", None)
+        osd2 = registry.select_result_sink("osd", app_id="demo")
+        assert isinstance(osd2, OfficialResultSink), type(osd2)
     for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK"):
         os.environ.pop(k, None)
     registry.capabilities(refresh=True)
-    print("PASS test_registry_selects_official (frame.sock + result-in.sock -> Official*)")
+    print("PASS test_registry_selects_official (frame.sock -> Official frame; "
+          "result default WS, OSD opt-in)")
 
 
 if __name__ == "__main__":
