@@ -11,7 +11,7 @@
 > - appmgr 后端：`market/appmgr/{server.py,supervisor.py,installer.py,modelstore.py,paths.py}`
 > - 打包/目录：`market/packaging/build.py`、`market/catalog/{gen_catalog.py,models.json}`
 > - 基础环境 provision：`market/deploy/provision-runtime.sh`
-> - 前端安装环：`market/spa/index.html`（`cloudInstall`，`index.html:1156`）
+> - 前端安装环：现役为官方 web 原生 React `AppStore.js`(`cloudInstall`)；`market/spa/index.html` 是早期 vanilla SPA(已 LEGACY),下文行号仅作逻辑参考
 > - 上游总纲：`docs/guide/app-center-publishing.md`、`docs/guide/voice-app.md`
 
 ---
@@ -332,7 +332,9 @@ PYTHONPATH 次序）**叠加**，app 代码里 `import av` 和 `import rknnlite`
 - **`installer.py`**：解压式方案可直接复用 `_vet_member`（`installer.py:52`）解压 wheel；
   真 venv 方案无需改 installer。
 
-### 5.4 前端 `market/spa/index.html`（阶段 B）
+### 5.4 前端安装环（阶段 B）
+
+> 现役前端已迁至官方 React `AppStore.js`；以下按早期 `market/spa/index.html`(LEGACY)描述,仅供代取循环的逻辑参考,落地时改在官方 React 侧对应实现。
 
 - **现状缺口（本次核实）**：`cloudInstall`（`index.html:1156`）当前**只做**
   download → sha256 → `/upload` → `/install`（`index.html:1163-1192`），**根本没有遍历

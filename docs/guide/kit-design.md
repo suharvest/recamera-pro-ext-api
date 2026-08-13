@@ -53,11 +53,11 @@
 
 | 支柱 | 是什么 | 归属 |
 |---|---|---|
-| **应用市场 (market/)** | 应用中心：appmgr(进程管理/安装/卸载) + catalog(云端目录) + 打包签名 + `/appcenter` SPA(画廊+调试面板) + nginx 接入 + 自启动 | 平台基座(通用) |
+| **应用市场 (market/)** | 应用中心：appmgr(进程管理/安装/卸载) + catalog(云端目录) + 打包签名 + nginx 接入 + 自启动。现役前端为官方 web 原生 React `/app-center`(`recamera_web_react`);`market/spa` 是早期 vanilla SPA,已 LEGACY(见 `market/spa/DEPRECATED.md`) | 平台基座(通用) |
 | **Kit (kit/)** | 运行时通用层(适配/推理/后处理/跟踪/输出/管理)——见 §0 分层 | 通用 |
 | **应用 (apps/)** | 9 个应用，每个 = manifest + 薄 app.py | 应用独立 |
 
-**三者关系**：appmgr(市场)负责**装/起/停/管** apps；每个 app 进程 **import kit** 跑推理；app 的结果经 kit 的 ResultSink → `/appcenter` 面板(市场)展示。**市场是"容器与分发"，Kit 是"运行时",应用是"内容"。**
+**三者关系**：appmgr(市场)负责**装/起/停/管** apps；每个 app 进程 **import kit** 跑推理；app 的结果经 kit 的 ResultSink → 官方 React `/app-center` 页(市场)展示。**市场是"容器与分发"，Kit 是"运行时",应用是"内容"。**
 
 ## 2. 目录结构
 
@@ -71,7 +71,7 @@ recamera-pro-apps/
 │   │   └── state.py              #     state.json(active_app) + 事务/回滚
 │   ├── catalog/                  #   云端目录 + 浏览器代取(catalog.json schema, sha256校验)
 │   ├── packaging/                #   打包签名: <id>-<ver>-arm64.tar.gz + 公钥验签
-│   ├── spa/                      #   /appcenter 前端: 画廊(装/卸/切) + 调试面板(叠加/指标/热调/回放)
+│   ├── spa/                      #   LEGACY 早期 vanilla SPA(已被官方 React /app-center 取代,非现役前端)
 │   ├── deploy/                   #   ext_appmgr.conf(nginx) + S94appmgr(自启动) + OTA回注hook
 │   └── auth/                     #   复用 sensecraft_token; nginx auth_request /_jwt_verify
 ├── kit/                          # 通用层 (一个 Python 包, 所有应用 import)

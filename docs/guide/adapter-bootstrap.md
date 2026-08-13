@@ -132,7 +132,7 @@ caps = {
 
 ## 7. 分阶段路线
 
-- **P0 · 地基（市场 + SDK 骨架）**：appmgr + ext_appmgr.conf + 清单/catalog/签名 + `/appcenter` SPA 外壳 + 鉴权复用 + **定义 5 个适配器接口 + 能力注册表**（← 迁移的核心投资，务必先做）。
+- **P0 · 地基（市场 + SDK 骨架）**：appmgr + ext_appmgr.conf + 清单/catalog/签名 + 前端外壳(早期 `/appcenter` SPA,现役已换官方 React `/app-center`) + 鉴权复用 + **定义 5 个适配器接口 + 能力注册表**（← 迁移的核心投资，务必先做）。
 - **P1 · App-1 托管模型**：跑通 catalog→装→官方推理→dashboard 见效。零绕路，最快交付。
 - **P2 · App-2 自建流水线(FR)**：FrameSource+ResultSink+调试面板+注册库；跑通自建全链 + 适配器验证。
 - **P3 · App-3 语音 STT**：AudioSource+接管音频+VAD+STT；验证音频妥协边界。
