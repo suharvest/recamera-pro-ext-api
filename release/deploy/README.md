@@ -117,7 +117,7 @@ python3 build-packages.py --frontend /path/to/recamera_web_react/build
 | 包 | size (bytes) | md5 |
 |----|-------------:|-----|
 | `recamera-ext-api-v1.3.0.tar` | 18616320 | `342b86f1d92ca5d9bdb093f2402c85a4` |
-| `recamera-ext-kit-v1.3.0.tar.gz` | 2090788 | `962363336df46508a23acf8c2dadc636` |
+| `recamera-ext-kit-v1.3.0.tar.gz` | 2092139 | `bc59f67d8ff8c8459004f14080692243` |
 | `appmgr-v1.3.0.tar.gz` | 30551 | `3e1f4578e051d2a08cf13e5002e3eaba` |
 | `frontend-v1.3.0.tar.gz` | 36750911 | `7a0f51cbc01d151b3e4cca47671e3ee6` |
 | `apps-v1.3.0.tar.gz` | 984781 | `8a3059e10648bff5ef0df10ce09751af` |
