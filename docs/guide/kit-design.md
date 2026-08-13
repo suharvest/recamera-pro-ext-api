@@ -44,6 +44,7 @@
 1. **推理只用原生 RKNN**：`RknnModel` = `rknnlite`(rknn_toolkit_lite2，librknnrt 的薄绑定) 或直接 **ctypes 调设备 `librknnrt.so`**。**禁止**引入 onnxruntime/torch/tflite 等重框架。
 2. **系统已有的 native 库不 bundle**：`librknnrt.so`、`librga.so`(RGA 硬件缩放/色转/裁剪)、`librockchip_mpp.so`(硬解) 设备上都在 → 直接 load，**不打进任何包**。
 3. **前处理走 RGA/native，慎用 opencv**：letterbox/resize/crop/NV12→RGB 用 **RGA**(硬件、零额外依赖)；后处理(NMS/softmax/解码/CTC/DB)用 **numpy**。**能不用 opencv-python(几十 MB) 就不用**；确需时用 `opencv-python-headless` 且只装在 Kit venv 一份。
+   → app 侧开启方式(`App.model_frame = "hw"` / `"hw-direct"`，一行类属性)与实测数据见 [hw-preprocess.md](./hw-preprocess.md)。
 4. **共享依赖装 Kit venv 一次，不进 app 包**：`kit` + numpy + rknnlite 装在一个共享 venv(uv 管理，落 `/userdata`)；**app 的 tar 只含 `model.rknn + app.py + manifest.json`**（几十~几百 KB 级），import 共享 kit。
 5. **体积红线**：app 包 = 模型体积 + 几 KB 代码；公共运行时(kit venv)一份共享。目标：装 10 个 app ≈ 10 份模型 + 10 份薄代码，不是 10 份 numpy/opencv。
 

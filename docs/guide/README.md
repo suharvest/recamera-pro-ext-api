@@ -39,6 +39,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **结果推送（notify）** | 现成可用 | 向 `/var/tmp/notify` 写 `InferenceResult`（仅分发，不上 OSD） | [result-push.md](./result-push.md) |
 | **硬件隐私遮罩**（COVER 增量控制） | 固件 + SDK 就绪；线 B 冷启动真机验证通过 | `MaskControl` / C ABI `rc_ext_mask_*`（rkipc RPC，M4） | [hw-mask-api.md](./hw-mask-api.md) |
 | **输出组件**（声明式结果输出） | 现成可用；真机 + 本地 broker 验证（P3b） | manifest `capabilities:["output"]` + `output` 块，`ConfigurableSink`（零 app 代码） | [output-sink.md](./output-sink.md) |
+| **硬件预处理加速**（RGA letterbox） | `hw-direct` 真机 A/B **+49%**；`hw` 验证进行中 | `App.model_frame = "hw"` / `"hw-direct"`（一行类属性，零 RGA 代码） | [hw-preprocess.md](./hw-preprocess.md) |
 | **rkipc RPC / 配置类** | 走 HTTP API | entry.cgi HTTP API（`/var/tmp/rkipc` 是内部接口，勿直连） | [rkipc-rpc-status.md](./rkipc-rpc-status.md) |
 | **观测面（M3）** | 已实现（真机验证）；SDK client `ProbeSource`（v1.2.0） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §4.8 与规格 §4 |
 | 控制面（M4）/ 显示（M5）/ 生态（M6）/ 沙箱分发 | 规划中 | — | 见本文 §8 与规格 |
