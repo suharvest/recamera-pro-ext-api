@@ -51,6 +51,14 @@
   ],
   "default_model": "ppocr_det_fp16",
   "postproc": "db_ocr",
+  "render": {
+    "events": {
+      "text": {
+        "as": "badge",
+        "text": "{{ text }}"
+      }
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,

@@ -33,6 +33,21 @@
   ],
   "default_model": "yolo11n_pose_rawhead_int8",
   "postproc": "pose",
+  "render": {
+    "keypoints": {
+      "layout": "coco17",
+      "point_radius": 3,
+      "line_width": 2,
+      "conf_min": 0.3
+    },
+    "events": {
+      "workout": {
+        "as": "panel",
+        "position": "top-left",
+        "fields": ["mode", "reps", "set", "stage"]
+      }
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,

@@ -50,6 +50,13 @@
   ],
   "default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
+  "render": {
+    "keypoints": {
+      "layout": "facemesh468",
+      "point_radius": 1,
+      "skeleton": []
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,
@@ -248,6 +255,24 @@
             "max": 10,
             "step": 1,
             "default": 3
+          }
+        ]
+      },
+      {
+        "key": "display",
+        "title": "Overlay display",
+        "title_zh": "画面显示",
+        "items": [
+          {
+            "key": "point_radius",
+            "type": "integer",
+            "apply": "live",
+            "title": "Landmark dot radius (px)",
+            "title_zh": "关键点半径（像素）",
+            "min": 1,
+            "max": 6,
+            "step": 1,
+            "default": 1
           }
         ]
       }

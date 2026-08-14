@@ -44,6 +44,14 @@
     "runtime": "numpy"
   },
   "postproc": "pose",
+  "render": {
+    "keypoints": {
+      "layout": "coco17",
+      "point_radius": 3,
+      "line_width": 2,
+      "conf_min": 0.3
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,

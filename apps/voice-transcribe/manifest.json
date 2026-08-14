@@ -26,6 +26,20 @@
     "audio",
     "cpu"
   ],
+  "render": {
+    "events": {
+      "transcript": {
+        "as": "subtitle",
+        "position": "bottom",
+        "max_lines": 2,
+        "duration_sec": 4,
+        "text": "{{ text }}"
+      },
+      "state": {
+        "as": "none"
+      }
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,

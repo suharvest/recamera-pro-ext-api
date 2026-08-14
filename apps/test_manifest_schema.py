@@ -139,6 +139,81 @@ class IntegerSemanticsTests(unittest.TestCase):
         self.assertEqual(unclassified, [], unclassified)
 
 
+class RenderDeclarationTests(unittest.TestCase):
+    """Shipped `render` blocks (RENDER_DECLARATION_SPEC §1/§7).
+
+    The overlay is a generic renderer: it only knows `layout` names and the five
+    display primitives. A typo here silently drops the app back to the
+    shape-driven fallback, which is exactly the class of bug this pins.
+    """
+
+    _LAYOUTS = {"coco17", "facemesh468", "hand21", "custom"}
+    _PRIMITIVES = {"subtitle", "panel", "toast", "badge", "none"}
+
+    # app -> expected keypoint layout (§7)
+    _EXPECTED_LAYOUT = {
+        "facemesh-reader": "facemesh468",
+        "fall-detection": "coco17",
+        "fitness-trainer": "coco17",
+    }
+    # app -> {event kind: expected primitive} (§7)
+    _EXPECTED_EVENTS = {
+        "voice-transcribe": {"transcript": "subtitle"},
+        "retail-vision": {"line_cross": "toast", "metrics": "panel"},
+        "ppocr-reader": {"text": "badge"},
+    }
+
+    def _render(self, app):
+        return _load(os.path.join(_ROOT, "apps", app, "manifest.json")).get("render")
+
+    def test_expected_keypoint_layouts(self):
+        for app, layout in self._EXPECTED_LAYOUT.items():
+            with self.subTest(app=app):
+                self.assertEqual(self._render(app)["keypoints"]["layout"], layout)
+
+    def test_expected_event_primitives(self):
+        for app, kinds in self._EXPECTED_EVENTS.items():
+            events = (self._render(app) or {}).get("events") or {}
+            for kind, prim in kinds.items():
+                with self.subTest(app=app, kind=kind):
+                    self.assertEqual(events[kind]["as"], prim)
+
+    def test_facemesh_draws_no_skeleton_with_1px_dots(self):
+        kp = self._render("facemesh-reader")["keypoints"]
+        self.assertEqual(kp["point_radius"], 1)
+        self.assertEqual(kp["skeleton"], [], "468 landmarks: dots only")
+
+    def test_yolo_colours_boxes_by_label(self):
+        self.assertEqual(self._render("yolo-detector")["boxes"]["color_by"],
+                         "label")
+
+    def test_every_declaration_uses_known_vocabulary(self):
+        for path in _MANIFESTS:
+            app = os.path.basename(os.path.dirname(path))
+            render = _load(path).get("render")
+            if render is None:
+                continue            # declaring nothing is legal (§3 fallback)
+            with self.subTest(app=app):
+                self.assertIsInstance(render, dict)
+                kp = render.get("keypoints")
+                if kp is not None:
+                    self.assertIn(kp.get("layout"), self._LAYOUTS)
+                for kind, spec in (render.get("events") or {}).items():
+                    self.assertIn(spec.get("as"), self._PRIMITIVES,
+                                  f"{app}.events.{kind}")
+
+    def test_facemesh_point_radius_is_live_tunable(self):
+        """§2: at least one shipped app proves visual params need no release."""
+        man = _load(os.path.join(_ROOT, "apps", "facemesh-reader",
+                                 "manifest.json"))
+        spec = kitconfig.schema_items(man)["point_radius"]
+        self.assertEqual(spec["apply"], "live")
+        self.assertEqual(spec["type"], "integer")
+        self.assertEqual(spec["default"],
+                         man["render"]["keypoints"]["point_radius"],
+                         "schema default must match the declared default")
+
+
 class FlatCompatBranchTests(unittest.TestCase):
     """The deprecated flat form must still parse (third-party packages)."""
 

@@ -28,6 +28,12 @@
     }
   ],
   "postproc": "detect",
+  "render": {
+    "boxes": {
+      "color_by": "label",
+      "line_width": 2
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,

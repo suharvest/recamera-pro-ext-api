@@ -33,6 +33,25 @@
   ],
   "default_model": "yolo8n_rawhead_int8",
   "postproc": "detect",
+  "render": {
+    "boxes": {
+      "color_by": "track_id",
+      "line_width": 2
+    },
+    "events": {
+      "line_cross": {
+        "as": "toast",
+        "position": "top-center",
+        "duration_sec": 2,
+        "text": "{{ dir }} #{{ track_id }}"
+      },
+      "metrics": {
+        "as": "panel",
+        "position": "top-left",
+        "fields": ["occupancy", "entry_count", "exit_count", "peak"]
+      }
+    }
+  },
   "output": {
     "sink": "ws",
     "port": 8124,
