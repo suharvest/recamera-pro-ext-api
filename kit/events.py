@@ -13,14 +13,15 @@ an event is produced.
 
 This module is deliberately grown one converter at a time, as each app is
 migrated to the new shape. Today: ``detection`` (yolo-detector), ``track`` and
-``metrics`` (retail-vision), ``text`` (ppocr-reader).
+``metrics`` (retail-vision), ``text`` (ppocr-reader) and
+``face_attributes`` (face-analysis).
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any, Dict
 
-__all__ = ["detection", "text", "track", "metrics"]
+__all__ = ["detection", "text", "track", "metrics", "face_attributes"]
 
 
 def detection(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -111,6 +112,41 @@ def track(tr, frame, *, state, in_zone: bool) -> Dict[str, Any]:
         "score": round(tr.score, 3),
         "speed_px_s": round(tr.speed_px_s, 1),
         "box": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+    }
+
+
+def face_attributes(r: Dict[str, Any], *, blur: bool) -> Dict[str, Any]:
+    """One annotated face result dict -> one flat ``face`` attribute event.
+
+    Field-for-field identical to the hand-written mapping face-analysis carried
+    in ``on_results()`` before the migration. Purely mechanical (spec §5.3):
+    copies ``box`` / ``score`` and the six FairFace + two emotion attribute
+    fields off the result dict with ``.get`` (a missing attribute stays
+    ``None``), coerces ``blur`` to bool, and fills in ``kind``.
+
+    What it does NOT do -- the app owns all of it:
+
+      * WHICH faces get an event (the top-K ``max_faces`` slice),
+      * whether the emotion fields are fresh or a cached earlier verdict
+        (the ``emotion_interval`` cadence),
+      * the value of ``blur`` -- the caller passes the privacy setting in.
+
+    It holds no state, applies no threshold, and never decides whether an event
+    is produced.
+    """
+    return {
+        "kind": "face",
+        "box": r["box"],
+        "score": r.get("score"),
+        "gender": r.get("gender"),
+        "gender_conf": r.get("gender_conf"),
+        "age": r.get("age"),
+        "age_conf": r.get("age_conf"),
+        "race": r.get("race"),
+        "race_conf": r.get("race_conf"),
+        "emotion": r.get("emotion"),
+        "emotion_conf": r.get("emotion_conf"),
+        "blur": bool(blur),
     }
 
 
