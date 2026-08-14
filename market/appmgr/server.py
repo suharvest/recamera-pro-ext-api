@@ -194,6 +194,12 @@ def do_list() -> dict:
                 # appmgr endpoint that actually serves it; otherwise null, and
                 # the front end falls back (its bundled art, then a placeholder).
                 "icon_url": _icon_url(name, man),
+                # ★Display declaration★ (RENDER_DECLARATION_SPEC §4): the second
+                # of the front end's three lookups (envelope.render -> THIS ->
+                # shape-driven fallback). Passed through RAW -- appmgr never
+                # interprets a layout / `as` primitive, it only carries the block
+                # so the overlay can read it without fetching the package.
+                "render": man.get("render"),
                 "installed": True,
                 "running": pid is not None,
                 "pid": pid,
@@ -231,6 +237,7 @@ def _builtin_entry(active_self: str) -> dict:
         "scene": man.get("scene"),
         "scene_zh": man.get("scene_zh"),
         "author": man.get("author"),
+        "render": man.get("render"),
         "installed": True,
         "running": running,
         "pid": None,

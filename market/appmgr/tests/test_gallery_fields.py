@@ -292,9 +292,33 @@ class I18nPassthroughTests(_Pinned):
         installed = [e for e in listing if e["id"] == APP][0]
         builtin = [e for e in listing if e["type"] == "builtin"][0]
         keys = {"name", "name_zh", "description", "description_zh",
-                "scene", "scene_zh", "image", "author"}
+                "scene", "scene_zh", "image", "author", "render"}
         self.assertTrue(keys <= set(installed), keys - set(installed))
         self.assertTrue(keys <= set(builtin), keys - set(builtin))
+
+
+# --------------------------------------------------------------------------- #
+# render declaration passthrough (RENDER_DECLARATION_SPEC §4, lookup #2)
+# --------------------------------------------------------------------------- #
+class RenderPassthroughTests(_Pinned):
+    RENDER = {"keypoints": {"layout": "facemesh468", "point_radius": 1},
+              "events": {"blink": {"as": "toast", "duration_sec": 2}}}
+
+    def test_render_block_reaches_do_list_verbatim(self):
+        """appmgr carries the block; it never interprets a layout or `as`."""
+        installer.install(make_pkg(man=manifest(render=self.RENDER)))
+        self.assertEqual(self._entry()["render"], self.RENDER)
+
+    def test_unknown_vocabulary_is_still_passed_through(self):
+        """Forward compat: a primitive newer than this appmgr must not be
+        filtered out on the way to the front end."""
+        weird = {"events": {"x": {"as": "hologram", "spin": True}}}
+        installer.install(make_pkg(man=manifest(render=weird)))
+        self.assertEqual(self._entry()["render"], weird)
+
+    def test_manifest_without_render_lists_null(self):
+        installer.install(make_pkg())
+        self.assertIsNone(self._entry()["render"])
 
 
 # --------------------------------------------------------------------------- #
