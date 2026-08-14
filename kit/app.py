@@ -415,6 +415,69 @@ def _class_file_path(rel: str, app_dir: Optional[str], who: str) -> Optional[str
     return path
 
 
+# --------------------------------------------------------------------------- #
+# manifest `render` -> envelope.render   (RENDER_DECLARATION_SPEC §1-§3)
+# --------------------------------------------------------------------------- #
+# Keys inside a render section that are SEMANTIC (bound to the model / topology)
+# rather than visual. They describe *what* the points mean, so a user twiddling
+# a config knob must never be able to change them -- only `apply:"restart"`-grade
+# metadata (a model swap) legitimately changes a layout, and that goes through a
+# new manifest, not config.json.
+_RENDER_FROZEN_KEYS = frozenset({"layout", "skeleton", "as"})
+
+
+def _render_overlay(spec: Any, cfg: Dict[str, Any],
+                    prefix: Optional[str] = None) -> Any:
+    """Overlay runtime config onto ONE declared render section.
+
+    Only keys the manifest already declares are overridable -- the declaration
+    is the contract of "what this app lets you tune"; an unrelated config key
+    (`conf`, `max_faces`, ...) can never leak into the render block just by
+    being named alike. Precedence, per §2:
+
+        `<prefix>_<key>` in config  >  `<key>` in config  >  declared default
+
+    The prefixed form exists because bare names collide across sections/events
+    (three declarations can each carry `duration_sec`); e.g. an app can expose
+    `line_cross_duration_sec` to tune just that toast.
+    """
+    if not isinstance(spec, dict):
+        return spec
+    merged = dict(spec)
+    for key in spec:
+        if key in _RENDER_FROZEN_KEYS:
+            continue
+        pk = f"{prefix}_{key}" if prefix else None
+        if pk is not None and pk in cfg:
+            merged[key] = cfg[pk]
+        elif key in cfg:
+            merged[key] = cfg[key]
+    return merged
+
+
+def effective_render(manifest: Optional[dict],
+                     config: Optional[Dict[str, Any]]) -> Optional[dict]:
+    """Merge `manifest.render` with the running config -> the EFFECTIVE block.
+
+    Returns None when the app declares nothing, so `emit()` leaves the key out
+    entirely and the front end keeps its shape-driven fallback (§3, backward
+    compatible). A None-valued config item is ignored, same rule as everywhere
+    else in the kit: a cleared field must not wipe a declared default.
+    """
+    decl = (manifest or {}).get("render")
+    if not isinstance(decl, dict) or not decl:
+        return None
+    cfg = {k: v for k, v in (config or {}).items() if v is not None}
+    out: Dict[str, Any] = {}
+    for section, body in decl.items():
+        if section == "events" and isinstance(body, dict):
+            out["events"] = {kind: _render_overlay(spec, cfg, prefix=kind)
+                             for kind, spec in body.items()}
+        else:
+            out[section] = _render_overlay(body, cfg, prefix=section)
+    return out
+
+
 class App:
     """Base application. Subclass with `owns_loop = True` and define `run()`."""
 
@@ -511,6 +574,11 @@ class App:
         self._warmed: bool = False
         self._processed: int = 0
         self._last_payload: Optional[Dict[str, Any]] = None
+        # Render declaration (§3): merging manifest+config every frame would be
+        # pure waste -- the inputs only move on SIGHUP. `_config_version` is
+        # bumped by each successful reload; `_render_cache` is (version, block).
+        self._config_version: int = 0
+        self._render_cache: Optional[tuple] = None
 
     # -- application hooks (override these) -------------------------------- #
     def setup(self, config: Dict[str, Any]) -> None:
@@ -591,6 +659,12 @@ class App:
             print(f"[app:{self.id}] config reload skipped (read failed: {e})",
                   flush=True)
             return
+        # The render block is derived from the effective config, so it must see
+        # the fresh values whether or not the app's on_config_reload override
+        # remembers to call super(). Assign here (the base hook re-assigns the
+        # same dict below) and invalidate the cache in one place.
+        self.config = cfg
+        self._config_version += 1
         # New-shape apps: re-bind the apply:"live" config_schema keys onto self
         # BEFORE the (usually absent) on_config_reload hook, so an override can
         # still see/adjust the freshly bound values. Legacy apps never reach
@@ -1070,6 +1144,24 @@ class App:
         finally:
             self._t_pre += time.monotonic() - t0
 
+    def _render_block(self) -> Optional[dict]:
+        """The effective render declaration for the CURRENT config, cached.
+
+        Recomputed only when `_config_version` moves (i.e. after a SIGHUP
+        reload), so the per-frame cost is one integer compare. A malformed
+        declaration degrades to "no render key" rather than killing the loop.
+        """
+        cached = self._render_cache
+        if cached is not None and cached[0] == self._config_version:
+            return cached[1]
+        try:
+            block = effective_render(self._manifest, self.config)
+        except Exception as e:                  # a bad manifest must not stop emit
+            print(f"[app:{self.id}] render declaration ignored ({e})", flush=True)
+            block = None
+        self._render_cache = (self._config_version, block)
+        return block
+
     def emit(self, events=None, ts: Optional[float] = None, *,
              results=None, extra: Optional[Dict[str, Any]] = None) -> None:
         """Publish one frame's output through the manifest-configured sinks.
@@ -1098,6 +1190,13 @@ class App:
                                 if self._t_frame0 else 0.0),
                 "stream_id": "camera-0",
             }
+            # ★Self-describing stream★ (§3): the EFFECTIVE render declaration
+            # rides along every frame, so a third-party consumer on :8124 draws
+            # the overlay correctly without ever fetching the manifest. Absent
+            # for an app that declares nothing -- the front end then falls back.
+            render = self._render_block()
+            if render is not None:
+                payload["render"] = render
             if extra:
                 payload.update(extra)
             self._last_payload = payload

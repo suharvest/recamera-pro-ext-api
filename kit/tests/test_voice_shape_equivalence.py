@@ -561,7 +561,12 @@ class _Base(unittest.TestCase):
         return sink, app, stubs
 
 
-_ADDED_KEYS = {"inference_time_ms", "pipeline_ms", "stream_id"}
+_ADDED_KEYS = {"inference_time_ms", "pipeline_ms", "stream_id",
+               # `render`: the kit-injected display declaration, added after
+               # this reference was frozen (RENDER_DECLARATION_SPEC §3). It is
+               # metadata about drawing, not app output -- own suite in
+               # kit/tests/test_render_declaration.py.
+               "render"}
 
 
 def _core(payload):

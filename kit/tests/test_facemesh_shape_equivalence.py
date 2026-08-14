@@ -413,7 +413,11 @@ def _strip_timing(payloads):
     out = []
     for payload, pts in payloads:
         p = {k: v for k, v in payload.items()
-             if k not in ("inference_time_ms", "pipeline_ms")}
+             # `render` is a kit-injected display declaration (added after
+             # this reference was frozen; RENDER_DECLARATION_SPEC §3) --
+             # metadata about drawing, not app output. Its own suite is
+             # kit/tests/test_render_declaration.py.
+             if k not in ("inference_time_ms", "pipeline_ms", "render")}
         out.append((p, pts))
     return out
 
