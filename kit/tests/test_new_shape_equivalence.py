@@ -35,6 +35,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit import events as E                                          # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
@@ -126,7 +127,7 @@ class _RecordingSink(ResultSink):
 
 
 # ---- OLD shape: verbatim copy of the pre-migration yolo-detector ------- #
-class _LegacyYoloApp(kit_app.App):
+class _LegacyYoloApp(LegacyLoopApp):
     """yolo-detector exactly as it was before the migration (git e2177c7)."""
     id = "yolo-detector"
     name = "YOLO Detector"
@@ -384,23 +385,14 @@ class NewShapeApiTests(unittest.TestCase):
             _Mixed().start(None, sink=_RecordingSink(), verbose=False,
                            app_dir=APP_DIR, manifest={"id": "mixed"}, config={})
 
-    def test_shape_detection(self):
-        self.assertFalse(kit_app._is_new_shape(_LegacyYoloApp()))
-        self.assertTrue(kit_app._is_new_shape(_load_new_app_class()()))
+    def test_shape_check_accepts_the_migrated_app(self):
+        self.assertIsNone(kit_app._check_loop_shape(_load_new_app_class()()))
 
-    def test_legacy_run_override_is_not_new_shape(self):
-        """voice-transcribe overrides run() with the LEGACY signature; it must
-        keep going down the legacy path, not through start()."""
-
-        class _TakeOver(kit_app.App):
-            id = "voice-like"
-            needs_model = False
-
-            def run(self, model_path=None, *, source="ffmpeg", url=None,
-                    sink=None, n=0, every=1, verbose=True, **kw):
-                pass
-
-        self.assertFalse(kit_app._is_new_shape(_TakeOver()))
+    def test_shape_check_rejects_the_pre_migration_app(self):
+        """The frozen oracle is NOT a runnable app shape any more."""
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._check_loop_shape(_LegacyYoloApp())
+        self.assertIn("owns_loop = True", str(cm.exception))
 
     def test_event_helper_matches_legacy_mapping(self):
         d = {"box": [1.0, 2.0, 3.0, 4.0], "cls": 7, "cls_name": "truck",
@@ -419,20 +411,22 @@ class NewShapeApiTests(unittest.TestCase):
 class LoopShapeDeclarationTests(unittest.TestCase):
     """`owns_loop` is the ONLY shape switch -- and a mismatch is a hard error.
 
-    The 2x2 matrix of (owns_loop declared?) x (run() looks new-shape?):
+    The pre-migration callback loop is gone, so "not loop-owning" is no longer a
+    runnable state: it is an error too. The remaining matrix is
 
-        owns_loop | run() signature          | expected
-        ----------+--------------------------+--------------------------------
-        True      | no positional args       | new shape
-        False     | legacy positional args   | legacy shape
-        False     | no positional args       | RuntimeError (the trap: this
-                  |                          | used to be silently misrouted
-                  |                          | to the legacy camera loop)
-        True      | legacy positional args   | RuntimeError
+        owns_loop | run() signature       | expected
+        ----------+-----------------------+-------------------------------------
+        True      | no positional args    | OK
+        True      | positional args       | RuntimeError (removed old signature)
+        True      | not overridden        | RuntimeError
+        False     | anything              | RuntimeError ("declare owns_loop")
+
+    plus: any leftover on_results / run_postproc / process_frame -> RuntimeError,
+    because nothing dispatches to them and the logic would silently never run.
     """
 
-    # 1. declared + new-shape signature -> new shape
-    def test_declared_and_no_positional_is_new_shape(self):
+    # 1. declared + loop-owning signature -> accepted
+    def test_declared_and_no_positional_is_accepted(self):
         class _Ok(kit_app.App):
             id = "ok"
             owns_loop = True
@@ -440,11 +434,11 @@ class LoopShapeDeclarationTests(unittest.TestCase):
             def run(self):
                 pass
 
-        self.assertTrue(kit_app._is_new_shape(_Ok()))
+        self.assertIsNone(kit_app._check_loop_shape(_Ok()))
 
-    def test_declared_with_keyword_only_args_is_new_shape(self):
-        """`def run(self, *, debug=False)` is a legitimate new shape -- the old
-        signature sniffing rejected it and silently opened a camera."""
+    def test_declared_with_keyword_only_args_is_accepted(self):
+        """`def run(self, *, debug=False)` is legitimate -- the old signature
+        sniffing rejected it and silently opened a camera."""
 
         class _Kw(kit_app.App):
             id = "kw"
@@ -453,28 +447,9 @@ class LoopShapeDeclarationTests(unittest.TestCase):
             def run(self, *, debug=False):
                 pass
 
-        self.assertTrue(kit_app._is_new_shape(_Kw()))
+        self.assertIsNone(kit_app._check_loop_shape(_Kw()))
 
-    # 2. not declared + legacy signature -> legacy shape, no error
-    def test_undeclared_legacy_signature_is_legacy_shape(self):
-        """voice-transcribe's take-over run() keeps working, silently."""
-
-        class _TakeOver(kit_app.App):
-            id = "voice-like"
-
-            def run(self, model_path=None, *, source="ffmpeg", url=None,
-                    sink=None, n=0, every=1, verbose=True, **kw):
-                pass
-
-        self.assertFalse(kit_app._is_new_shape(_TakeOver()))
-
-    def test_no_run_override_is_legacy_shape(self):
-        class _Plain(kit_app.App):
-            id = "plain"
-
-        self.assertFalse(kit_app._is_new_shape(_Plain()))
-
-    # 3. THE TRAP: looks new-shape but never declared -> hard error
+    # 2. THE TRAP: looks loop-owning but never declared -> hard error
     def test_undeclared_new_signature_raises(self):
         class _Trap(kit_app.App):
             id = "trap"
@@ -483,7 +458,7 @@ class LoopShapeDeclarationTests(unittest.TestCase):
                 pass
 
         with self.assertRaises(RuntimeError) as cm:
-            kit_app._is_new_shape(_Trap())
+            kit_app._check_loop_shape(_Trap())
         msg = str(cm.exception)
         self.assertIn("owns_loop = True", msg)
         self.assertIn("_Trap", msg)
@@ -496,7 +471,7 @@ class LoopShapeDeclarationTests(unittest.TestCase):
                 pass
 
         with self.assertRaises(RuntimeError) as cm:
-            kit_app._is_new_shape(_Trap2())
+            kit_app._check_loop_shape(_Trap2())
         self.assertIn("owns_loop = True", str(cm.exception))
 
     def test_undeclared_new_signature_raises_from_start(self):
@@ -513,6 +488,28 @@ class LoopShapeDeclarationTests(unittest.TestCase):
             _Trap3().start(None, sink=_RecordingSink(), verbose=False,
                            app_dir=APP_DIR, manifest={"id": "trap3"}, config={})
 
+    # 3. the removed pre-migration shapes -> hard error, not silent fallback
+    def test_undeclared_legacy_signature_raises(self):
+        """The old take-over run(model_path, ...) used to be accepted silently."""
+
+        class _TakeOver(kit_app.App):
+            id = "voice-like"
+
+            def run(self, model_path=None, *, source="ffmpeg", url=None,
+                    sink=None, n=0, every=1, verbose=True, **kw):
+                pass
+
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._check_loop_shape(_TakeOver())
+        self.assertIn("owns_loop = True", str(cm.exception))
+
+    def test_no_run_override_raises(self):
+        class _Plain(kit_app.App):
+            id = "plain"
+
+        with self.assertRaises(RuntimeError):
+            kit_app._check_loop_shape(_Plain())
+
     # 4. declared but run() still takes positional args -> hard error
     def test_declared_with_positional_run_raises(self):
         class _Bad(kit_app.App):
@@ -523,7 +520,7 @@ class LoopShapeDeclarationTests(unittest.TestCase):
                 pass
 
         with self.assertRaises(RuntimeError) as cm:
-            kit_app._is_new_shape(_Bad())
+            kit_app._check_loop_shape(_Bad())
         self.assertIn("positional", str(cm.exception))
 
     def test_declared_without_run_override_raises(self):
@@ -532,8 +529,30 @@ class LoopShapeDeclarationTests(unittest.TestCase):
             owns_loop = True
 
         with self.assertRaises(RuntimeError) as cm:
-            kit_app._is_new_shape(_Bad2())
+            kit_app._check_loop_shape(_Bad2())
         self.assertIn("not overridden", str(cm.exception))
+
+    # 5. leftover pre-migration hooks -> hard error
+    def test_leftover_callback_hook_raises(self):
+        for hook in ("on_results", "run_postproc", "process_frame"):
+            with self.subTest(hook=hook):
+                cls = type("_Stale", (kit_app.App,), {
+                    "id": "stale", "owns_loop": True, "needs_model": False,
+                    "run": lambda self: None,
+                    hook: lambda self, *a, **kw: [],
+                })
+                with self.assertRaises(RuntimeError) as cm:
+                    kit_app._check_loop_shape(cls())
+                self.assertIn(hook, str(cm.exception))
+
+    def test_base_run_raises_not_implemented(self):
+        """App.run() is now an abstract stub, not a hidden camera loop."""
+
+        class _Plain(kit_app.App):
+            id = "plain2"
+
+        with self.assertRaises(NotImplementedError):
+            kit_app.App.run(_Plain())
 
 
 if __name__ == "__main__":

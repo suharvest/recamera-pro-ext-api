@@ -42,6 +42,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit import pipeline                                             # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
@@ -211,7 +212,7 @@ def _quad_bbox(quad):
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
-class _LegacyPpocrApp(kit_app.App):
+class _LegacyPpocrApp(LegacyLoopApp):
     """ppocr-reader exactly as it was before the migration (git 3896acc).
 
     Only two mechanical deviations, both test-harness plumbing:

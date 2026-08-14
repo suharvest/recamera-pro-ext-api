@@ -46,6 +46,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
 
@@ -168,7 +169,7 @@ class _RecordingSink(ResultSink):
 
 
 # ---- OLD shape: verbatim copy of the pre-migration qrcode-reader ---------- #
-class _LegacyQrcodeApp(kit_app.App):
+class _LegacyQrcodeApp(LegacyLoopApp):
     """qrcode-reader exactly as it was before the migration (git 75bd143)."""
 
     id = "qrcode-reader"
@@ -377,8 +378,11 @@ class QrcodeEquivalenceTests(_Base):
         self.assertFalse(cls.needs_model, "qrcode-reader has no NPU model")
         # legacy callbacks are gone (start() would refuse to run otherwise)
         for hook in ("process_frame", "on_results", "run_postproc"):
-            self.assertIs(getattr(cls, hook), getattr(kit_app.App, hook),
-                          f"legacy hook {hook} is still overridden")
+            # the pre-migration hooks were deleted from kit.app.App; defining
+            # one on an app is now dead code (and a _check_loop_shape error)
+            self.assertFalse(hasattr(kit_app.App, hook))
+            self.assertFalse(hasattr(cls, hook),
+                             f"removed hook {hook} is still defined")
 
 
 if __name__ == "__main__":

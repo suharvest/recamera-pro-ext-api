@@ -57,6 +57,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.result_sink import MultiSink, ResultSink           # noqa: E402
 
 APP_DIR = os.path.join(_REPO, "apps", "voice-transcribe")
@@ -285,7 +286,7 @@ def _find_configurable_sink(sink):
     return None
 
 
-class _LegacyVoiceApp(kit_app.App):
+class _LegacyVoiceApp(LegacyLoopApp):
     id = "voice-transcribe"
     name = "Voice Transcribe"
     postproc = "voice"
@@ -736,8 +737,11 @@ class VoiceEquivalenceTests(_Base):
         self.assertFalse(cls.needs_frames)
         self.assertFalse(cls.needs_model)
         for hook in ("process_frame", "on_results", "run_postproc"):
-            self.assertIs(getattr(cls, hook), getattr(kit_app.App, hook),
-                          f"legacy hook {hook} is still overridden")
+            # the pre-migration hooks were deleted from kit.app.App; defining
+            # one on an app is now dead code (and a _check_loop_shape error)
+            self.assertFalse(hasattr(kit_app.App, hook))
+            self.assertFalse(hasattr(cls, hook),
+                             f"removed hook {hook} is still defined")
         # run() takes no positional args (the new-shape signature)
         self.assertFalse(kit_app._run_takes_positional(cls.run))
 

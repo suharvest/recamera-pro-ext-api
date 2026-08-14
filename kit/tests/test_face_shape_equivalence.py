@@ -46,6 +46,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit import pipeline                                             # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
@@ -233,7 +234,7 @@ class _RecordingSink(ResultSink):
 
 
 # ---- OLD shape: verbatim copy of the pre-migration face-analysis --------- #
-class _LegacyFaceApp(kit_app.App):
+class _LegacyFaceApp(LegacyLoopApp):
     """face-analysis exactly as it was before the migration (git d5a40d3).
 
     Only three mechanical deviations, all test-harness plumbing:

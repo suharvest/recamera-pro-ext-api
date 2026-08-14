@@ -155,7 +155,7 @@ if padded is None:
 
 `kit/adapters/_rga.py` 的 `RgaNV12ToRGB` 接受的是 **dma-buf fd + NV12 平面信息**（`resize_nv12_to_rgb(fd, width, height, y_stride, y_vstride, dst_width, dst_height)`），不是 numpy 数组。它服务的是"帧代理原始缓冲区 → 模型输入"这一段。
 
-因此 app 在 `on_results` 里对 **numpy 图像**做的二次裁剪 / 缩放（`crop_square_roi`、`perspective_crop`、`fit_rec_input` 等）**用不上这个组件** —— 那些数据已经离开 dma-buf。要给那一段也上硬件加速，需要另开一条 numpy/fd 路径，属于新开发，不在当前实现范围内。
+因此 app 在 `run()` 里对 **numpy 图像**做的二次裁剪 / 缩放（`crop_square_roi`、`perspective_crop`、`fit_rec_input` 等）**用不上这个组件** —— 那些数据已经离开 dma-buf。要给那一段也上硬件加速，需要另开一条 numpy/fd 路径，属于新开发，不在当前实现范围内。
 
 ## 6. 一句话
 

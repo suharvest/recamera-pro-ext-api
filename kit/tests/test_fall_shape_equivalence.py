@@ -60,6 +60,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
 from kit.logic.geometry import make_observation                      # noqa: E402
@@ -324,7 +325,7 @@ _make_temporal_frame = _NEW._make_temporal_frame
 
 
 # ---- OLD shape: verbatim copy of the pre-migration fall-detection ---------- #
-class _LegacyFallApp(kit_app.App):
+class _LegacyFallApp(LegacyLoopApp):
     """fall-detection exactly as it was before the migration (git 37c4ef9)."""
 
     id = "fall-detection"

@@ -1,7 +1,7 @@
 # 09 — 接入输出组件（声明式结果输出）· 可用/已实现
 
 > 演示怎么让 kit 把 app 的每帧推理结果**声明式**发到 MQTT / HTTP / UART / WS，
-> **app.py 里对 `on_results` 一行输出代码都不用写**。
+> **app.py 的 `run()` 里对输出一行代码都不用写**。
 >
 > 事实来源：[`docs/guide/output-sink.md`](../../docs/guide/output-sink.md)（用法）+
 > `internal/OUTPUT_SINK_SPEC.md`（权威契约）。落地代码 `kit/adapters/output_sink.py`，
@@ -35,7 +35,7 @@
 
 ## 不想用 kit 输出？
 
-**不声明 `output` capability** → kit 完全不介入，行为与现状一致；app 在 `on_results` 里自己
+**不声明 `output` capability** → kit 完全不介入，行为与现状一致；app 在 `run()` 里自己
 `import paho`/`requests` 发（带 per-app 依赖）。两者可混用，但**别对同一外部 topic 双发**同一份数据。
 
 ## 依赖

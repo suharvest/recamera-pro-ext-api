@@ -128,15 +128,19 @@ class RknnModel:
 class Postprocessor(ABC):
     def process(self, tensors, meta) -> Results: ...  # 注册表按 task 取
 
-# L3 应用基类 —— 应用 override 的就这几个钩子
+# L3 应用基类 —— 应用自己写循环, 基类提供原语
 class App(ABC):
-    def setup(self, config): ...                     # 读 config_schema 参数
-    def on_results(self, results, frame) -> Events:  # ★业务逻辑唯一入口(应用重写)
-        ...
-    # 取帧→前处理→engine→后处理→(on_results)→输出, 全在基类, 应用不碰
+    owns_loop = True                                 # 唯一形态, 显式声明
+    def setup(self, config): ...                     # 可选: 由已绑定的参数派生对象
+    def run(self):                                   # ★整条流水线就是普通 Python
+        for frame in self.frames():                  #   取帧/跳灰帧/热更/预热=基类
+            x = self.pre(frame)                      #   letterbox(可走 RGA)
+            outs = self.models.det.infer(x.data)     #   manifest models[] 已加载
+            self.emit(events, frame.pts, results=r)  #   输出扇出=基类
 ```
 
-一个应用 = `manifest.json`(声明) + `app.py`(继承 App, 只写 `setup` + `on_results` 业务逻辑)。
+一个应用 = `manifest.json`(声明) + `app.py`(继承 App, 写 `run()` 业务循环, 需要时加 `setup`)。
+`config_schema` 里的参数由基类自动绑定为 `self.<key>`(SIGHUP 热更同一路径), 应用不解析 config。
 
 ## 4. 适配层 = "曲折现在 / 官方将来" 的唯一切换点
 - `kit/adapters/registry.py` 启动探测官方口(frame.sock/audio.sock/结果注入/版本化API)是否存在 → 每个适配器工厂选 `Official*` 或 `Workaround*`。
@@ -180,14 +184,18 @@ class App(ABC):
 ```python
 # apps/fall-detection/app.py  —— 应用独立层就这么薄
 from kit.app import App
-from kit.logic.temporal import TemporalStateMachine
+from kit.runtime.postprocess.pose import postprocess
 class FallApp(App):
+    owns_loop = True
     def setup(self, cfg):
-        self.sm = FallStateMachine(cfg)          # 唯一独有逻辑
-    def on_results(self, results, frame):
-        kps = results.keypoints                   # 通用 pose 后处理已给好
-        ev = self.sm.update(kps, frame.pts)       # 髋降速+躯干角时序判定
-        return [Event("fall", ev.box)] if ev.fallen else []
+        self.sm = FallStateMachine(self)          # 唯一独有逻辑(读已绑定的 self.<参数>)
+    def run(self):
+        for frame in self.frames():
+            x = self.pre(frame)
+            kps = postprocess(self.models.pose.infer(x.data), x.info)  # 通用 pose 解码
+            ev = self.sm.update(kps, frame.pts)   # 髋降速+躯干角时序判定
+            self.emit([Event("fall", ev.box)] if ev.fallen else [],
+                      frame.pts, results=kps)
 ```
 `manifest.json` 声明 `models:[yolo11n-pose] · postproc:pose · config_schema:{...}`。取帧/推理/pose解码/输出/叠加/MQTT 全通用层。**移植 = 把一代 `fall_detector.cpp` 的状态机逻辑翻成这 ~100 行 Python**，其余不写。
 

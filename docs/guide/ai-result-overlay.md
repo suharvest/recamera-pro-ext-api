@@ -32,7 +32,7 @@ kit 的 `App` 基类持有一个 `ResultSink`，每帧调 `emit()` 发一条结�
   "seq":  42,                     // 单调帧计数
   "frame": { "width": 640, "height": 480 },   // ★推理帧像素尺寸 = 坐标参考系
   "results": [ { "box": [x1,y1,x2,y2], "cls": 0, "cls_name": "person", "score": 0.92 }, ... ],
-  "events":  [ ... ]             // on_results() 产出的应用级事件
+  "events":  [ ... ]             // run() 通过 self.emit() 产出的应用级事件
 }
 ```
 

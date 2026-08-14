@@ -38,6 +38,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
 from kit.logic.tracker import Tracker, TrackerConfig                 # noqa: E402
@@ -154,7 +155,7 @@ class _RecordingSink(ResultSink):
 PERSON_CLS = 0
 
 
-class _LegacyRetailApp(kit_app.App):
+class _LegacyRetailApp(LegacyLoopApp):
     """retail-vision exactly as it was before the migration (git 3b64087)."""
     id = "retail-vision"
     name = "Retail People Counting"

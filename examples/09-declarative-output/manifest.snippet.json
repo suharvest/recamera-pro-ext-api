@@ -1,5 +1,5 @@
 {
-  "_comment": "接入输出组件的最小声明示例（可用/已实现）。把 `capabilities` 加 \"output\"、加一个 `output` 块，即可让 kit 把每帧结果声明式发到 MQTT/HTTP/UART/WS——app.py 里对 on_results 一行输出代码都不用写。字段/映射/模板语义见 docs/guide/output-sink.md。真实活样本见 apps/yolo-detector/manifest.json。",
+  "_comment": "接入输出组件的最小声明示例（可用/已实现）。把 `capabilities` 加 \"output\"、加一个 `output` 块，即可让 kit 把每帧结果声明式发到 MQTT/HTTP/UART/WS——app.py 的 run() 里对输出一行代码都不用写。字段/映射/模板语义见 docs/guide/output-sink.md。真实活样本见 apps/yolo-detector/manifest.json。",
   "id": "my-detector",
   "version": "0.1.0",
   "entry": "app.py",

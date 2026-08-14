@@ -50,6 +50,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.frame_source import Frame                          # noqa: E402
 from kit.adapters.result_sink import ResultSink                      # noqa: E402
 from kit.logic.rep_counter import create_exercise, exercise_ids      # noqa: E402
@@ -233,7 +234,7 @@ class _RecordingSink(ResultSink):
 
 
 # ---- OLD shape: verbatim copy of the pre-migration fitness-trainer -------- #
-class _LegacyFitnessApp(kit_app.App):
+class _LegacyFitnessApp(LegacyLoopApp):
     """fitness-trainer exactly as it was before the migration (git 75bd143)."""
 
     id = "fitness-trainer"

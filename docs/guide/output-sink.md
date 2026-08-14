@@ -7,7 +7,7 @@
 
 ## 0. 定位
 
-app 产出的每帧结果envelope（`results` / `events` / `frame` / `timestamp` / `seq`）由 kit 统一转成**可配置、可并发的外部输出**。app 只在 manifest 里**声明**要输出什么、默认发到哪，运行时 kit 负责编码 + 发送。**app.py 里对 on_results 一行输出代码都不用写。**
+app 产出的每帧结果envelope（`results` / `events` / `frame` / `timestamp` / `seq`）由 kit 统一转成**可配置、可并发的外部输出**。app 只在 manifest 里**声明**要输出什么、默认发到哪，运行时 kit 负责编码 + 发送。**app.py 的 `run()` 里对输出一行代码都不用写。**
 
 与其他输出通路的区别：
 - **软件叠加**（画框到 /preview canvas）→ [ai-result-overlay.md](./ai-result-overlay.md)（WS :8124）。
@@ -143,7 +143,7 @@ kit 独占所有 availability 消息，app 和模板不能覆盖：
 
 ## 6. 不用 kit 输出组件：app 自己发
 
-**不声明 `output` capability** → kit 完全不介入输出。app 在 `on_results` 里自己 `import paho` / `requests` 发（带 per-app 依赖，见 [per-app-dependencies.md](./per-app-dependencies.md)）。
+**不声明 `output` capability** → kit 完全不介入输出。app 在 `run()` 里自己 `import paho` / `requests` 发（带 per-app 依赖，见 [per-app-dependencies.md](./per-app-dependencies.md)）。
 
 两者可混用：声明 `output` 让 kit 发软件叠加/MQTT/HA，同时 app 自己再发一路别的外部 topic。**约束**：opt-in 后 kit 拥有配置的外部通道，app **不要**再自己往同一个外部 topic 发同一份数据（会重复发布）。
 

@@ -5,7 +5,7 @@ This is the shared skeleton for the "detect -> crop ROI -> second model" family
 of apps (facemesh-reader, and later face-analysis / anything that runs a
 per-object second network). The generic Kit base loop (kit.app.App) already
 does stage-1 (letterbox 640 -> detector -> boxes in ORIGINAL-frame pixels). An
-app then, inside on_results(), hands the full frame + stage-1 boxes to a
+app then, inside run(), hands the full frame + stage-1 boxes to a
 CascadePipeline which:
 
     for each target box (top-K by score):
