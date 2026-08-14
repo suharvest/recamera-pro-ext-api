@@ -21,11 +21,13 @@ collision that a bare `app` module would cause.
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import signal
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, List, Optional
 
 import numpy as np
 
@@ -39,6 +41,202 @@ from kit.runtime.postprocess.detect import postprocess, COCO80
 # including CPU-only / audio apps (e.g. voice-transcribe under the sherpa venv
 # /userdata/rknnenv, which has no rknnlite). Model-backed vision apps still get
 # it the moment run() constructs a model; behaviour there is unchanged.
+
+
+# --------------------------------------------------------------------------- #
+# New app shape (internal/KIT_APP_SHAPE_SPEC.md §1/§2): the app owns an explicit
+# `run()` loop and calls back into these kit-owned primitives. Everything below
+# is ADDITIVE -- the legacy `run(model_path, ...)` loop further down is
+# untouched, so apps that have not been migrated keep working unchanged.
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class PreparedInput:
+    """What `App.pre(frame)` returns: model-space pixels + the letterbox map.
+
+    `.data` is a uint8 HWC (or 1HWC) RGB array ready for `.infer()`; `.info` is
+    a `LetterboxInfo`-compatible object post-processing uses to map coordinates
+    back to ORIGINAL camera geometry.
+    """
+    data: Any
+    info: Any
+
+    def __iter__(self):            # allows `x, info = self.pre(frame)`
+        return iter((self.data, self.info))
+
+
+class _ModelHandle:
+    """One preloaded model. `infer()` is timed into the owning app's frame budget."""
+
+    def __init__(self, model_id: str, path: str, owner: "App", impl: Any):
+        self.id = model_id
+        self.path = path
+        self._owner = owner
+        self._impl = impl
+
+    def infer(self, x):
+        """Run one forward pass. Accepts a raw array or a `PreparedInput`."""
+        if isinstance(x, PreparedInput):
+            x = x.data
+        t0 = time.monotonic()
+        try:
+            return self._impl.infer(x)
+        finally:
+            self._owner._t_infer += time.monotonic() - t0
+
+    def release(self) -> None:
+        rel = getattr(self._impl, "release", None)
+        if rel is not None:
+            try:
+                rel()
+            except Exception:
+                pass
+
+    def __repr__(self) -> str:      # pragma: no cover - debug aid
+        return f"<model {self.id} {self.path}>"
+
+
+# task -> extra short aliases, so `self.models.det` works for a manifest model
+# declared as {"id": "yolo8n_rawhead_int8", "task": "detect"}.
+_TASK_ALIASES = {
+    "detect": ("det",),
+    "detection": ("det",),
+    "recognize": ("rec",),
+    "recognition": ("rec",),
+    "rec": ("rec",),
+    "classify": ("cls",),
+    "classification": ("cls",),
+    "landmark": ("lmk",),
+    "segment": ("seg",),
+    "segmentation": ("seg",),
+}
+
+
+class ModelRegistry:
+    """`self.models` -- attribute / index access to the manifest's `models[]`.
+
+    Every model is reachable by its manifest `id`. Convenience aliases are added
+    when unambiguous: the model's `task` (e.g. `.detect`), a short form of it
+    (`.det`, `.rec`, ...), and -- for a single-model app -- `.model`/`.first`.
+    An alias claimed by two models is dropped rather than resolved arbitrarily.
+    """
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_by_id", {})
+        object.__setattr__(self, "_alias", {})
+        object.__setattr__(self, "_order", [])
+        object.__setattr__(self, "_ambiguous", set())
+
+    # -- construction (kit-internal) ------------------------------------- #
+    def _register(self, model_id: str, handle: _ModelHandle, aliases=()) -> None:
+        self._by_id[model_id] = handle
+        self._order.append(handle)
+        for a in aliases:
+            if not a or a == model_id or a in self._by_id:
+                continue
+            if a in self._alias and self._alias[a] is not handle:
+                self._ambiguous.add(a)
+                self._alias.pop(a, None)
+                continue
+            if a in self._ambiguous:
+                continue
+            self._alias[a] = handle
+
+    def _all(self) -> List[_ModelHandle]:
+        return list(self._order)
+
+    # -- access ----------------------------------------------------------- #
+    def __getattr__(self, name):
+        by_id = object.__getattribute__(self, "_by_id")
+        if name in by_id:
+            return by_id[name]
+        alias = object.__getattribute__(self, "_alias")
+        if name in alias:
+            return alias[name]
+        known = sorted(set(list(by_id) + list(alias)))
+        if name in object.__getattribute__(self, "_ambiguous"):
+            raise AttributeError(
+                f"model alias {name!r} is ambiguous (several models claim it); "
+                f"use the manifest id: {known}")
+        raise AttributeError(
+            f"no model {name!r} in manifest models[]; available: {known}")
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._order[key]
+        return getattr(self, key)
+
+    def __len__(self) -> int:
+        return len(self._order)
+
+    def __iter__(self):
+        return iter(self._order)
+
+    def __repr__(self) -> str:      # pragma: no cover - debug aid
+        return f"<ModelRegistry {[h.id for h in self._order]}>"
+
+
+def _schema_items(manifest: Optional[dict]) -> Dict[str, dict]:
+    """Return {key: spec} from a FLAT or GROUPED `config_schema`.
+
+    Both structures exist in the wild today (yolo-detector is flat, the rest are
+    grouped); auto-binding must handle either. Mirrors `kit.config.flatten_schema`
+    but keeps the whole spec dict (we need `type` and `apply`, not just default).
+    """
+    cs = (manifest or {}).get("config_schema") or {}
+    out: Dict[str, dict] = {}
+    if isinstance(cs, dict) and "groups" in cs:
+        for g in cs.get("groups") or []:
+            for it in g.get("items") or []:
+                key = it.get("key")
+                if key:
+                    out[key] = it
+    elif isinstance(cs, dict):
+        for k, v in cs.items():
+            if isinstance(v, dict):
+                out[k] = v
+    return out
+
+
+def _coerce(spec_type: Optional[str], value):
+    """Best-effort conversion of a config value to its declared schema type.
+
+    Never raises: an unconvertible value is returned unchanged so a typo in
+    config.json degrades to "wrong value" rather than "app will not start".
+    """
+    try:
+        if spec_type == "number":
+            return float(value)
+        if spec_type == "integer":
+            return int(value)
+        if spec_type == "boolean":
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+        if spec_type == "string":
+            return value if isinstance(value, str) else str(value)
+    except (TypeError, ValueError):
+        return value
+    return value
+
+
+def _is_new_shape(app: "App") -> bool:
+    """True when the subclass overrides `run()` with the new no-argument form.
+
+    The new shape is exactly `def run(self):` -- no parameters. Deliberately
+    strict: voice-transcribe already overrides the LEGACY signature
+    (`run(self, model_path=None, *, source=..., ...)`) to take over the loop, and
+    a looser test would misroute it through the new `start()` path (which opens a
+    camera frame source it does not want).
+    """
+    fn = getattr(type(app), "run", None)
+    if fn is None or fn is App.run:
+        return False
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):     # pragma: no cover - exotic callables
+        return False
+    return [n for n in sig.parameters if n != "self"] == []
 
 
 class App:
@@ -91,6 +289,24 @@ class App:
         # the real re-read on the next frame -- signal handlers must stay tiny
         # and must not touch the model / pipeline.
         self._reload_flag: bool = False
+
+        # -- new-shape runtime state (unused by legacy apps) --------------- #
+        # `self.models` is populated by start(); an empty registry until then so
+        # attribute access fails with a clear message instead of AttributeError
+        # on `self.models` itself.
+        self.models = ModelRegistry()
+        self._rt: Optional[Dict[str, Any]] = None   # runtime options from start()
+        self._manifest: Optional[dict] = None
+        self._params_bound: bool = False
+        self._pre_size: int = 0
+        self._cur_frame: Optional[Frame] = None
+        self._t_frame0: float = 0.0
+        self._t_pre: float = 0.0
+        self._t_infer: float = 0.0
+        self._t_emit: float = 0.0
+        self._warmed: bool = False
+        self._processed: int = 0
+        self._last_payload: Optional[Dict[str, Any]] = None
 
     # -- application hooks (override these) -------------------------------- #
     def setup(self, config: Dict[str, Any]) -> None:
@@ -171,12 +387,416 @@ class App:
             print(f"[app:{self.id}] config reload skipped (read failed: {e})",
                   flush=True)
             return
+        # New-shape apps: re-bind the apply:"live" config_schema keys onto self
+        # BEFORE the (usually absent) on_config_reload hook, so an override can
+        # still see/adjust the freshly bound values. Legacy apps never reach
+        # this branch -- _params_bound is only set by start().
+        if self._params_bound:
+            try:
+                changed = self._bind_params(cfg, live_only=True)
+                if changed:
+                    self.on_params_changed(changed)
+            except Exception as e:             # binding bug must not kill loop
+                print(f"[app:{self.id}] param rebind failed: {e}", flush=True)
         try:
             self.on_config_reload(cfg)
             print(f"[app:{self.id}] config hot-reloaded ({len(cfg)} keys)",
                   flush=True)
         except Exception as e:                 # app hook bug must not kill loop
             print(f"[app:{self.id}] config reload failed: {e}", flush=True)
+
+    # ------------------------------------------------------------------ #
+    # New app shape: start / frames / pre / models / emit / tick
+    # (internal/KIT_APP_SHAPE_SPEC.md §2). A migrated app overrides `run(self)`
+    # and drives these; `run_app` wires them up.
+    # ------------------------------------------------------------------ #
+    def _load_model(self, path: str):
+        """Construct the NPU model for `path`. Overridable seam (tests stub it)."""
+        from kit.runtime.engine import RknnModel  # lazy: only vision apps need rknnlite
+        return RknnModel(path)
+
+    def on_params_changed(self, changed: set) -> None:
+        """Called after SIGHUP re-bound the apply:"live" params onto `self`.
+
+        `changed` is the set of keys whose value actually differs. Override only
+        when a derived object must be rebuilt (state machine, cached geometry).
+        Plain scalar knobs need nothing -- they are already re-bound.
+        """
+        pass
+
+    def _bind_params(self, config: Dict[str, Any], *, live_only: bool = False) -> set:
+        """Bind `config_schema` keys onto `self` as plain attributes.
+
+        Returns the set of keys whose value changed. `live_only` restricts the
+        pass to `apply:"live"` items (the SIGHUP re-bind); the initial pass binds
+        everything. A None value is skipped so a cleared config item never wipes
+        a live attribute (same rule as `_reload_params`). A key that would shadow
+        a method/property on the class is skipped with a warning.
+        """
+        schema = _schema_items(self._manifest)
+        changed = set()
+        for key, spec in schema.items():
+            if live_only and (spec.get("apply") or "live") != "live":
+                continue
+            if key not in config:
+                continue
+            value = config[key]
+            if value is None:
+                continue
+            attr = getattr(type(self), key, None)
+            if callable(attr) or isinstance(attr, property):
+                print(f"[app:{self.id}] config key {key!r} not auto-bound "
+                      f"(would shadow a method/property)", flush=True)
+                continue
+            value = _coerce(spec.get("type"), value)
+            if getattr(self, key, object()) != value:
+                changed.add(key)
+            setattr(self, key, value)
+        self._params_bound = True
+        return changed
+
+    def start(
+        self,
+        model_path: Optional[str] = None,
+        *,
+        source: str = "ffmpeg",
+        url: str = DEFAULT_SUB_STREAM,
+        sink: Optional[ResultSink] = None,
+        n: int = 0,
+        every: int = 1,
+        skip_gray_std: float = 8.0,
+        max_gray_skip: int = 120,
+        verbose: bool = True,
+        app_dir: Optional[str] = None,
+        manifest: Optional[dict] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> "App":
+        """Prepare the kit-owned runtime for a new-shape `run()`.
+
+        Loads the manifest's `models[]` (paths made absolute against the install
+        dir), binds `config_schema` params onto `self`, opens the frame source and
+        installs the SIGHUP handler. `run_app` calls this; `finish()` tears it down.
+        `model_path` (the `--model` CLI flag) overrides the FIRST manifest model.
+        """
+        from kit import config as _cfg
+        if app_dir is None:
+            app_dir = _cfg.app_dir_of(self)
+        if manifest is None:
+            manifest = _cfg.load_manifest(app_dir)
+        self._manifest = manifest or {}
+
+        # Migration guard (spec §6): the new shape and the old callback shape
+        # must never both be present -- a silent precedence rule would be worse
+        # than a startup failure.
+        cls = type(self)
+        legacy = [h for h in ("on_results", "process_frame", "run_postproc")
+                  if getattr(cls, h, None) is not getattr(App, h, None)]
+        if legacy:
+            raise RuntimeError(
+                f"{cls.__name__}: new-shape run() cannot be combined with legacy "
+                f"hook(s) {legacy}; move that logic into run() (spec §6)")
+
+        self._bind_params(config if config is not None else (self.config or {}))
+
+        # -- models: preload + absolutise paths --------------------------- #
+        self.models = ModelRegistry()
+        decls = list(self._manifest.get("models") or [])
+        if self.needs_model:
+            for i, m in enumerate(decls):
+                mid = m.get("id") or f"model{i}"
+                rel = m.get("file") or ""
+                path = rel if os.path.isabs(rel) else os.path.join(app_dir, rel)
+                if i == 0 and model_path:
+                    # --model overrides the primary model. supervisor passes it
+                    # RELATIVE (`models/x.rknn`), so absolutise it the same way.
+                    path = (model_path if os.path.isabs(model_path)
+                            else os.path.join(app_dir, model_path))
+                aliases = []
+                task = (m.get("task") or "").strip().lower()
+                if task:
+                    aliases.append(task)
+                    aliases.extend(_TASK_ALIASES.get(task, ()))
+                if len(decls) == 1:
+                    aliases.extend(("model", "first"))
+                self.models._register(mid, _ModelHandle(mid, path, self,
+                                                        self._load_model(path)),
+                                      aliases)
+            if not decls and model_path:
+                # No manifest models[] but a --model was supplied: expose it as
+                # `.model` so a hand-run app still works.
+                p = (model_path if os.path.isabs(model_path)
+                     else os.path.join(app_dir, model_path))
+                self.models._register("model",
+                                      _ModelHandle("model", p, self,
+                                                   self._load_model(p)),
+                                      ("first",))
+
+        # -- model input geometry: manifest first, class attribute as fallback #
+        size = None
+        if decls:
+            inp = decls[0].get("input")
+            if isinstance(inp, (list, tuple)) and len(inp) >= 3:
+                try:
+                    size = int(inp[1])
+                except (TypeError, ValueError):
+                    size = None
+        self._pre_size = size or self.input_size
+
+        mode = self.model_frame if self.needs_model else "cpu"
+        if mode not in ("cpu", "hw", "hw-direct"):
+            raise ValueError(
+                "%s: model_frame must be 'cpu', 'hw' or 'hw-direct' (got %r)"
+                % (self.id, self.model_frame))
+        src = open_frame_source(
+            url=url,
+            prefer=source,
+            input_size=self._pre_size if mode != "cpu" else 0,
+            direct_preprocess=(mode == "hw-direct"),
+            hw_letterbox=(mode == "hw"),
+        )
+
+        if sink is None:
+            sink = open_result_sink("stdout")
+            own_sink = True
+        else:
+            own_sink = False
+
+        self._rt = {
+            "src": src, "sink": sink, "own_sink": own_sink, "n": n,
+            "every": every, "skip_gray_std": skip_gray_std,
+            "max_gray_skip": max_gray_skip, "verbose": verbose,
+            "app_dir": app_dir, "source": source, "url": url,
+            "grays_skipped": 0, "loop_start": None,
+        }
+        self._warmed = False
+        self._processed = 0
+        self._install_reload_handler()
+        if verbose:
+            print(f"[app:{self.id}] models={[h.path for h in self.models]} "
+                  f"source={source} url={url} input={self._pre_size} "
+                  f"sink={type(sink).__name__}", flush=True)
+        return self
+
+    def finish(self) -> None:
+        """Release everything `start()` acquired and print the run summary."""
+        rt, self._rt = self._rt, None
+        if rt is None:
+            return
+        try:
+            rt["src"].close()
+        except Exception:
+            pass
+        for h in self.models:
+            h.release()
+        if rt["own_sink"]:
+            try:
+                rt["sink"].close()
+            except Exception:
+                pass
+        loop_start = rt.get("loop_start")
+        if self._processed and loop_start:
+            wall = time.monotonic() - loop_start
+            print(f"\n[app:{self.id}] === {self._processed} frames "
+                  f"(grey-skipped {rt['grays_skipped']}) ===", flush=True)
+            print(f"[app:{self.id}] end-to-end {self._processed/wall:4.1f} fps",
+                  flush=True)
+        elif rt["verbose"]:
+            print(f"[app:{self.id}] no frames processed", file=sys.stderr)
+
+    def frames(self) -> Iterator[Frame]:
+        """Yield frames to the app's `run()` loop, kit-managed.
+
+        What it does for you (spec §2, and §8's "say what it hides"):
+          * opens/owns the frame source (`start()`), releases each frame by
+            simply advancing the iterator -- do NOT hold a frame past one turn;
+          * skips the camera's grey warm-up placeholder frames;
+          * honours `--every N` frame skipping;
+          * applies pending SIGHUP config hot-reloads at the frame boundary;
+          * runs the FIRST real frame as a model warm-up: your loop body executes
+            normally (so the NPU gets warm) but that frame's `emit()` is dropped,
+            exactly as the legacy loop did;
+          * measures the frame budget and flushes the periodic `metrics` meta
+            event (pre/infer/emit measured by kit, the remainder is `app`);
+          * stops after `--n` processed frames.
+        """
+        rt = self._rt
+        if rt is None:
+            raise RuntimeError(
+                f"{type(self).__name__}.frames() called before start(); use "
+                f"run_app(app) (or app.start(...)) to drive a new-shape app")
+        verbose = rt["verbose"]
+        every = max(1, int(rt["every"] or 1))
+        n = int(rt["n"] or 0)
+
+        METRICS_PERIOD = 1.0
+        m_t0 = time.monotonic()
+        m_frames = 0
+        m_pre = m_inf = m_emit = m_app = 0.0
+
+        got_real = False
+        fidx = 0
+
+        for frame in rt["src"].frames():
+            self._maybe_reload()
+
+            if not got_real:
+                std = float(np.asarray(frame.data).std())
+                if (std < rt["skip_gray_std"]
+                        and rt["grays_skipped"] < rt["max_gray_skip"]):
+                    rt["grays_skipped"] += 1
+                    continue
+                got_real = True
+                if verbose:
+                    print(f"[app:{self.id}] skipped {rt['grays_skipped']} grey "
+                          f"warm-up frames; first real frame std={std:.1f}",
+                          flush=True)
+
+            fidx += 1
+            if every > 1 and (fidx % every) != 0:
+                continue
+
+            # -- frame boundary: reset the per-frame timing buckets --------- #
+            self._cur_frame = frame
+            self._t_pre = self._t_infer = self._t_emit = 0.0
+            self._t_frame0 = time.monotonic()
+            self._last_payload = None
+
+            yield frame                                   # <-- app's loop body
+
+            total = time.monotonic() - self._t_frame0
+            self._cur_frame = None
+
+            if not self._warmed:
+                self._warmed = True
+                rt["loop_start"] = time.monotonic()
+                if verbose:
+                    print(f"[app:{self.id}] warmup frame {frame.w}x{frame.h} "
+                          f"fmt={frame.fmt} (output dropped)", flush=True)
+                continue
+
+            self._processed += 1
+            app_ms = total - self._t_pre - self._t_infer - self._t_emit
+            m_frames += 1
+            m_pre += self._t_pre
+            m_inf += self._t_infer
+            m_emit += self._t_emit
+            m_app += max(0.0, app_ms)
+
+            m_now = time.monotonic()
+            m_dt = m_now - m_t0
+            if m_dt >= METRICS_PERIOD and m_frames:
+                try:
+                    rt["sink"].emit_meta({
+                        "type": "metrics",
+                        "kind": "metrics",
+                        "app": self.id,
+                        "fps": round(m_frames / m_dt, 1),
+                        "latency_ms": {
+                            # `pre`/`infer`/`post` keep the existing appmgr /
+                            # debug-panel contract; in the new shape the app owns
+                            # post-processing, so `post` IS the app bucket. `app`
+                            # and `emit` are additive detail (spec §4).
+                            "pre": round(m_pre / m_frames * 1000, 1),
+                            "infer": round(m_inf / m_frames * 1000, 1),
+                            "post": round(m_app / m_frames * 1000, 1),
+                            "app": round(m_app / m_frames * 1000, 1),
+                            "emit": round(m_emit / m_frames * 1000, 1),
+                        },
+                        "frames": self._processed,
+                        "pts": frame.pts,
+                    })
+                except Exception:
+                    pass    # telemetry must never break the inference loop
+                m_t0 = m_now
+                m_frames = 0
+                m_pre = m_inf = m_emit = m_app = 0.0
+
+            if verbose:
+                p = self._last_payload or {}
+                res = p.get("results") or []
+                evs = p.get("events") or []
+
+                def _label(d):
+                    name = (d.get("cls_name") or d.get("text")
+                            or d.get("label") or "?")
+                    return (f"{name}:{d['score']:.2f}" if "score" in d
+                            else f"{name}")
+                names = ", ".join(_label(d) for d in res[:6])
+                print(f"[app:{self.id}] frame#{self._processed:03d} "
+                      f"dets={len(res):2d} events={len(evs)} "
+                      f"clients={getattr(rt['sink'], 'client_count', lambda: 0)()} "
+                      f"{names}", flush=True)
+
+            if n and self._processed >= n:
+                break
+
+    def pre(self, frame: Frame) -> PreparedInput:
+        """Produce the model input for `frame` (letterbox to the manifest size).
+
+        Prefers what the frame source already did on RGA -- `frame.model_data`
+        (hw) or a `frame.model_info`-annotated `frame.data` (hw-direct) -- and
+        only falls back to the Python letterbox. Geometry is identical in every
+        case; `.info` always maps back to ORIGINAL camera pixels.
+        """
+        t0 = time.monotonic()
+        try:
+            info = getattr(frame, "model_info", None)
+            padded = getattr(frame, "model_data", None)
+            if padded is None:
+                if info is not None:
+                    padded = frame.data
+                else:
+                    padded, info = letterbox(frame.data, self._pre_size
+                                             or self.input_size)
+            return PreparedInput(padded, info)
+        finally:
+            self._t_pre += time.monotonic() - t0
+
+    def emit(self, events=None, ts: Optional[float] = None, *,
+             results=None, extra: Optional[Dict[str, Any]] = None) -> None:
+        """Publish one frame's output through the manifest-configured sinks.
+
+        `events` are the app-level events; `results` (optional) are the raw
+        per-frame detections/records that the /appcenter overlay and the
+        manifest `output` field mappings read as `results[]`. `ts` defaults to
+        the current frame's pts.
+
+        During the warm-up frame this is a no-op (same as the legacy loop).
+        """
+        rt = self._rt
+        if rt is None:
+            raise RuntimeError("emit() called outside a started run()")
+        t0 = time.monotonic()
+        try:
+            frame = self._cur_frame
+            payload = {
+                "results": list(results) if results is not None else [],
+                "events": list(events) if events is not None else [],
+                "inference_time_ms": round(self._t_infer * 1000.0, 3),
+                "pipeline_ms": round((t0 - self._t_frame0) * 1000.0, 3),
+                "stream_id": "camera-0",
+            }
+            if extra:
+                payload.update(extra)
+            self._last_payload = payload
+            if not self._warmed:
+                return                      # warm-up frame: output discarded
+            sink = rt["sink"]
+            if frame is not None:
+                sink.set_frame_size(frame.w, frame.h)
+            if ts is None:
+                ts = frame.pts if frame is not None else time.monotonic()
+            sink.emit(payload, ts)
+        finally:
+            self._t_emit += time.monotonic() - t0
+
+    def tick(self) -> None:
+        """Apply a pending SIGHUP config hot-reload.
+
+        `frames()` already ticks at every frame boundary; only an app that takes
+        over the loop entirely (audio chunks, multi-stream) needs to call this.
+        """
+        self._maybe_reload()
 
     def run_postproc(self, outs, info) -> List[dict]:
         """Turn raw RKNN outputs into result dicts. Default = YOLO detect.
@@ -236,8 +856,7 @@ class App:
         self._install_reload_handler()
 
         if self.needs_model:
-            from kit.runtime.engine import RknnModel  # lazy: only vision apps need rknnlite
-            model = RknnModel(model_path)
+            model = self._load_model(model_path)
         else:
             model = None
         mode = self.model_frame if self.needs_model else "cpu"
@@ -497,8 +1116,19 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
             sinks.append(mqtt)
     sink: ResultSink = MultiSink(sinks) if len(sinks) > 1 else sinks[0]
     try:
-        app.run(args.model, source=args.source, url=args.url, sink=sink,
-                n=args.n, every=args.every, verbose=not args.quiet)
+        if _is_new_shape(app):
+            # New shape (KIT_APP_SHAPE_SPEC §1): the app owns the loop; kit
+            # supplies frames/pre/models/emit/tick via start().
+            app.start(args.model, source=args.source, url=args.url, sink=sink,
+                      n=args.n, every=args.every, verbose=not args.quiet,
+                      app_dir=app_dir, manifest=manifest, config=eff)
+            try:
+                app.run()
+            finally:
+                app.finish()
+        else:
+            app.run(args.model, source=args.source, url=args.url, sink=sink,
+                    n=args.n, every=args.every, verbose=not args.quiet)
     finally:
         sink.close()
 
