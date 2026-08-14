@@ -81,6 +81,25 @@ MAX_PKG_BYTES = int(os.environ.get("APPMGR_MAX_PKG_BYTES", str(200 * 1024 * 1024
 MAX_UNPACKED_BYTES = int(os.environ.get("APPMGR_MAX_UNPACKED_BYTES", str(400 * 1024 * 1024)))
 MAX_MEMBERS = int(os.environ.get("APPMGR_MAX_MEMBERS", "4096"))
 
+# ★Package-bundled app icon★ (RENDER_DECLARATION_SPEC §5 P0-1).
+# manifest's `"image": "/appcenter/apps/<id>.png"` is a dead URL on the device:
+# that nginx alias serves /userdata/local/appcenter/apps/, which holds only
+# install packages + the catalog, while the app itself is unpacked to
+# /userdata/local/apps/<id>/. A package may therefore ship its own `icon.<ext>`
+# at the tar's top level; appmgr serves it from the install dir via
+# GET /api/appMgr/icon?id=<id>, so third-party apps stop depending on the
+# front-end's hard-coded image bundle.
+# SVG is deliberately NOT allowed: it is an active document (script/xlink) and
+# we serve it same-origin behind the JWT edge.
+ICON_EXTS = (".png", ".webp", ".jpg", ".jpeg")
+ICON_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+MAX_ICON_BYTES = int(os.environ.get("APPMGR_MAX_ICON_BYTES", str(1024 * 1024)))  # 1 MiB
+
 APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 HTTP_HOST = os.environ.get("APPMGR_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("APPMGR_HTTP_PORT", "8130"))
@@ -101,6 +120,24 @@ def venv_dir(app_id: str) -> str:
 def appdata_dir(app_id: str) -> str:
     """Per-app user-data dir (survives install/upgrade/uninstall)."""
     return os.path.join(APPDATA_DIR, app_id)
+
+
+def icon_file(app_id: str):
+    """Absolute path of the app's bundled icon, or None if it ships none.
+
+    Extensions are probed in ICON_EXTS order so a package shipping both
+    icon.webp and icon.png gets a deterministic answer. Returns None (never
+    raises) for an unknown/invalid id -- callers turn that into a 404 / a null
+    icon_url and the front end falls back to its own placeholder.
+    """
+    if not valid_app_id(app_id):
+        return None
+    d = app_dir(app_id)
+    for ext in ICON_EXTS:
+        p = os.path.join(d, "icon" + ext)
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def pidfile(app_id: str) -> str:

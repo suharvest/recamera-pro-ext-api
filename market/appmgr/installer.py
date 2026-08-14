@@ -71,6 +71,38 @@ def _vet_member(m: tarfile.TarInfo, dest_root: str) -> None:
     root = os.path.realpath(dest_root)
     if target != root and not target.startswith(root + os.sep):
         raise InstallError(f"zip-slip: member escapes target dir: {name!r}")
+    _vet_icon_member(m, name)
+
+
+def _vet_icon_member(m: tarfile.TarInfo, name: str) -> None:
+    """Extra rules for a package's top-level `icon.*` (§5 P0-1).
+
+    appmgr SERVES this file back to the browser (GET /api/appMgr/icon), so it is
+    the one package member whose bytes reach a rendering context. Two rules:
+
+      * extension whitelist -- raster only (paths.ICON_EXTS). An `icon.svg`
+        would be an active document served same-origin behind the JWT edge, and
+        `icon.html`/`icon.js` even more obviously so, hence a hard refusal
+        rather than "ignore it": a package that thinks it ships an icon and
+        silently doesn't is a worse outcome than a loud install failure.
+      * size cap -- paths.MAX_ICON_BYTES. The whole-package caps are 200/400 MB;
+        a card thumbnail has no business being anywhere near that.
+
+    Only the TOP-LEVEL member is governed: `assets/icon.svg` is just an ordinary
+    package file that appmgr never serves.
+    """
+    norm = name.replace("\\", "/").lstrip("./")
+    if "/" in norm or not m.isfile():
+        return
+    stem, ext = os.path.splitext(norm)
+    if stem.lower() != "icon":
+        return
+    if ext.lower() not in paths.ICON_EXTS:
+        raise InstallError(
+            f"unsupported icon type {name!r}: allowed {paths.ICON_EXTS}")
+    if m.size > paths.MAX_ICON_BYTES:
+        raise InstallError(
+            f"icon too large: {m.size} > {paths.MAX_ICON_BYTES} ({name!r})")
 
 
 def _read_manifest_from_tar(tar: tarfile.TarFile) -> dict:

@@ -12,6 +12,15 @@ Concurrency (APP_CENTER_PORT_DESIGN §4.1):
 
 API (loopback 127.0.0.1:8130; nginx /_jwt_verify guards the public edge):
   GET  /api/appMgr/list      -> installed apps + manifest + running + active
+  GET  /api/appMgr/icon?id=  -> the app's package-bundled icon.<ext> bytes
+                                (image/png|webp|jpeg). manifest's `image` field
+                                points at /appcenter/apps/<id>.png, which serves
+                                only .tar.gz + catalog and therefore 404s on the
+                                device; this endpoint serves the icon out of the
+                                install dir instead, so a third-party app can
+                                have a card image without shipping it inside the
+                                front-end bundle. `icon_url` in /list points here
+                                (null when the package ships no icon).
   POST /api/appMgr/install   {path: "/userdata/.../x.tar.gz"}
   POST /api/appMgr/uninstall {id}   (stop if running, clear active, rm app dir;
                                      shared /userdata/local/models untouched)
@@ -42,7 +51,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 from . import (builtin, config as appconfig, installer, modelstore,
                mqtt as mqttcfg, paths, state, supervisor)
@@ -94,6 +103,48 @@ def _read_manifest(app_id: str):
         return None
 
 
+ICON_ENDPOINT = "/api/appMgr/icon"
+
+
+def _icon_url(app_id: str, manifest: dict = None):
+    """URL for a package-bundled icon, or None when the package ships none.
+
+    The `v=<version>` suffix is a cache-buster: the response carries a long
+    max-age, so without it an upgraded app would keep showing the old artwork.
+    """
+    if paths.icon_file(app_id) is None:
+        return None
+    ver = str((manifest or {}).get("version") or "")
+    q = "id=" + quote(app_id, safe="")
+    if ver:
+        q += "&v=" + quote(ver, safe="")
+    return f"{ICON_ENDPOINT}?{q}"
+
+
+def do_icon(app_id: str):
+    """Return (bytes, content_type) for an app's bundled icon.
+
+    Raises ValueError for an invalid id and FileNotFoundError when the app ships
+    no icon -- the HTTP layer maps those to 400 / 404. Nothing here can read
+    outside /userdata/local/apps/<id>/: the id is whitelist-validated and the
+    filename is one of a fixed set built by paths.icon_file().
+    """
+    if not paths.valid_app_id(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    p = paths.icon_file(app_id)
+    if p is None:
+        raise FileNotFoundError(f"app {app_id!r} has no bundled icon")
+    ext = os.path.splitext(p)[1].lower()
+    ctype = paths.ICON_CONTENT_TYPES.get(ext, "application/octet-stream")
+    with open(p, "rb") as f:
+        data = f.read(paths.MAX_ICON_BYTES + 1)
+    if len(data) > paths.MAX_ICON_BYTES:
+        # Belt-and-braces: the installer caps this at unpack time, but an icon
+        # dropped in by hand must not turn the endpoint into a memory hog.
+        raise ValueError(f"icon too large: > {paths.MAX_ICON_BYTES}")
+    return data, ctype
+
+
 def do_list() -> dict:
     active = state.get_active()
     apps = []
@@ -116,10 +167,25 @@ def do_list() -> dict:
                 "type": man.get("type"),
                 # Gallery presentation fields (image + copy). Kept optional so
                 # older manifests without them still list cleanly.
+                # ★i18n★: the *_zh variants are passed through RAW -- the backend
+                # never picks a language, the front end does that per locale
+                # (RENDER_DECLARATION_SPEC §5 P0-2). _builtin_entry() below has
+                # always passed them; installed apps used to drop them silently,
+                # so a third-party app could ship Chinese copy that never showed.
                 "image": man.get("image"),
                 "description": man.get("description"),
                 "scene": man.get("scene"),
                 "author": man.get("author"),
+                "name_zh": man.get("name_zh"),
+                "description_zh": man.get("description_zh"),
+                "scene_zh": man.get("scene_zh"),
+                # ★Usable★ icon URL (§5 P0-1). manifest's `image` points at
+                # /appcenter/apps/<id>.png, which 404s on the device -- so the
+                # front end could only render cards for the ids baked into its
+                # own bundle. When the package ships icon.<ext> we hand back the
+                # appmgr endpoint that actually serves it; otherwise null, and
+                # the front end falls back (its bundled art, then a placeholder).
+                "icon_url": _icon_url(name, man),
                 "installed": True,
                 "running": supervisor.is_running(name) is not None,
                 "pid": supervisor.is_running(name),
@@ -149,6 +215,7 @@ def _builtin_entry(active_self: str) -> dict:
         "description": man.get("description"),
         "description_zh": man.get("description_zh"),
         "scene": man.get("scene"),
+        "scene_zh": man.get("scene_zh"),
         "author": man.get("author"),
         "installed": True,
         "running": running,
@@ -557,6 +624,19 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, code: int, data: bytes, content_type: str,
+                    cache: str = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        if cache:
+            self.send_header("Cache-Control", cache)
+        # Served same-origin to <img>; nothing here is a document, and the
+        # extension whitelist already excludes SVG -- pin the type anyway.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _body_json(self) -> dict:
         n = int(self.headers.get("Content-Length", 0) or 0)
         if not n:
@@ -582,6 +662,22 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_get_config(app_id))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
+        if path == ICON_ENDPOINT:
+            app_id = (parse_qs(parsed.query).get("id") or [None])[0]
+            if not app_id:
+                return self._send(400, {"error": "missing 'id'"})
+            try:
+                data, ctype = do_icon(app_id)
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except FileNotFoundError as e:
+                return self._send(404, {"error": str(e)})
+            except OSError as e:
+                return self._send(500, {"error": repr(e)})
+            # Immutable per (id, version): the URL carries `v=<version>`, so a
+            # long max-age is safe and an upgrade busts it by changing the URL.
+            return self._send_bytes(200, data, ctype,
+                                    cache="public, max-age=86400")
         if path == "/api/appMgr/mqtt":
             return self._send(200, do_get_mqtt())
         if path == "/api/appMgr/metrics":

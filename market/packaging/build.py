@@ -27,7 +27,15 @@ import tarfile
 
 # Files/dirs that belong in an app package. Anything else in the app dir
 # (kit/, __pycache__, logs/, run.pid, .DS_Store, hidden files) is excluded.
-INCLUDE_TOP = ("manifest.json", "app.py", "models", "hooks", "run")
+# `icon.<ext>` is the app's card artwork (RENDER_DECLARATION_SPEC §5 P0-1):
+# appmgr's installer keeps it in the install dir and serves it at
+# GET /api/appMgr/icon?id=<id>, which is how a THIRD-PARTY app gets a card image
+# without being baked into the front-end bundle. Raster only -- the installer
+# refuses any other icon.* extension (SVG is an active document).
+# Label files for `models[].classes` need no entry here: they live under
+# `models/`, which is packed wholesale.
+INCLUDE_TOP = ("manifest.json", "app.py", "models", "hooks", "run",
+               "icon.png", "icon.webp", "icon.jpg", "icon.jpeg")
 ID_RE_HINT = "[a-z0-9-]{1,64}"
 
 

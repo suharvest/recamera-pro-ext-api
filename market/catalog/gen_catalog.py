@@ -267,6 +267,15 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             "name": man.get("name", app_id),
             "version": man.get("version"),
             "description": man.get("description", ""),
+            # Gallery presentation + i18n, passed through RAW from the manifest
+            # (RENDER_DECLARATION_SPEC §5 P0-1/P0-2). The catalog is what the
+            # browser renders BEFORE anything is installed, so dropping these
+            # meant a third-party app could never show its own art or Chinese
+            # copy in the store listing. Language selection stays a front-end
+            # decision; keys absent from the manifest are omitted entirely.
+            **{k: man[k] for k in ("image", "scene", "author",
+                                   "name_zh", "description_zh", "scene_zh")
+               if man.get(k) is not None},
             "arch": "arm64",
             "package": package,
             # Shared models the browser drops into target_path before install.
