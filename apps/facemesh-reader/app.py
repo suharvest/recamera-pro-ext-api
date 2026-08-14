@@ -3,28 +3,47 @@
 facemesh-reader -- reCamera Pro two-stage face cascade app (port of the
 first-gen SSCMA facemesh-reader / drowsiness solution).
 
-Cascade pipeline (the reusable skeleton lives in kit.pipeline + kit.runtime):
+Migrated to the new kit shape (internal/KIT_APP_SHAPE_SPEC.md §1/§3): `run()`
+owns the loop and the two-stage cascade reads top to bottom as ordinary Python:
 
-  live frame -> letterbox 640 -> YOLOv8n-face RKNN -> face_detect post-process
-     (stage 1, handled by the generic Kit base loop -> boxes in original px)
-  -> on_results(): for the primary face box,
-       crop padded SQUARE ROI from the ORIGINAL frame -> resize 192 ->
-       face_landmark RKNN -> landmark post-process (468x3 mapped back to px)
-       (stage 2, kit.pipeline.CascadePipeline)
-  -> DrowsinessLogic: EAR / MAR from the 468 points + yawn + PERCLOS temporal
-     -> emit metrics + blink / yawn / drowsiness events.
+  frame -> self.pre()             letterbox to 640 (manifest models[0].input)
+        -> self.models.det        YOLOv8n-face rawhead
+        -> face_post.postprocess  face boxes in ORIGINAL pixels, score-desc
+        -> self.cascade.process   <-- stage 2, an ordinary call in run():
+                                  crop a padded SQUARE ROI out of the FULL-RES
+                                  frame -> resize 192 -> self.models.lmk ->
+                                  landmark.decode (468x3 mapped back to px)
+        -> self.logic.update      ★business★ EAR / MAR + yawn + PERCLOS
+                                  temporal state (cross-frame)
+        -> self.emit()            metrics + blink / yawn / drowsiness events
 
-appmgr's supervisor launches `app.py --model models[0].file --sink ws --port`
-(stage-1 model only), so this app loads its OWN stage-2 landmark model in
-setup() by reading models[1] from its manifest -- exactly the pattern
-fall-detection uses to read its extra tuning params. appmgr stays generic.
+`model_frame` stays "cpu" ON PURPOSE. Stage 2 crops SOURCE-RESOLUTION pixels out
+of `frame.data`, so "hw-direct" -- which letterboxes into `frame.data` itself --
+would silently feed the landmark model a 640x640 model image instead of the
+camera frame. A 2026-08-14 device A/B also measured "hw" at +0.8% (noise)
+because it still pays the full-res convert plus an extra RGA resize. See
+docs/guide/hw-preprocess.md before touching this.
+
+Both models are declared in the manifest `models[]` and preloaded by the kit,
+so the hand-written "scan the manifest for role==stage2_landmark" loop is gone:
+the stage-2 `CascadePipeline` ADOPTS `self.models.lmk` instead of loading a
+second copy of the same rknn.
+
+★Renamed★: the stage-2 pipeline used to live on `self.pipeline`, which now
+reads as if it were a kit API (it never was -- the same-named `manifest.pipeline`
+field was unrelated dead data). It is `self.cascade` here; `self.pipeline` no
+longer exists anywhere in this app.
+
+Every knob is auto-bound from the manifest config_schema and re-bound on SIGHUP
+for the apply:"live" ones, so there is no setup() param-copying and no
+on_config_reload; `on_params_changed` only mirrors the live values into the two
+derived objects (`self.cascade`, `self.logic`) BY IN-PLACE MUTATION.
 
 Run on device (inference requires root):
     KIT=/userdata/local/kit
     PYTHONPATH=$KIT python3 app.py \
         --model models/yolov8n_face_rawhead_fp16.rknn --sink ws --port 8124
 """
-import json
 import os
 import sys
 
@@ -46,226 +65,212 @@ for _cand in (
         break
 
 from kit.app import App, run_app                                       # noqa: E402
+from kit import events as E                                            # noqa: E402
 from kit.pipeline import CascadePipeline                               # noqa: E402
-from kit.runtime.postprocess import face_detect as face_post          # noqa: E402
-from kit.runtime.postprocess import landmark as landmark_post         # noqa: E402
+from kit.runtime.postprocess import face_detect as face_post           # noqa: E402
+from kit.runtime.postprocess import landmark as landmark_post          # noqa: E402
 from kit.logic.drowsiness import DrowsinessLogic, DrowsinessConfig     # noqa: E402
+
+LMK_INPUT = 192          # stage-2 landmark input side (manifest models[1].input)
 
 
 class FacemeshReaderApp(App):
     id = "facemesh-reader"
     name = "Facemesh Reader"
-    postproc = "face_detect"
-    # Stays on "cpu": these crop source-resolution pixels, so "hw-direct" is
-    # unsafe, and a 2026-08-14 device A/B measured "hw" at +0.8% (noise) --
-    # it still pays the full-res convert plus an extra RGA resize.
-    # See docs/guide/hw-preprocess.md before switching.
+    owns_loop = True          # explicit new shape: run() drives self.frames()
+    # Stage 2 crops original-resolution pixels out of frame.data -- see the
+    # module docstring for why this must not become "hw"/"hw-direct".
+    model_frame = "cpu"
+
+    # Fallbacks for the auto-bound config_schema keys (used when a key is
+    # missing from the effective config; the manifest supplies each default).
+    confidence = 0.4
+    crop_pad = 0.25
+    presence_threshold = 0.5
+    ear_threshold = 0.21
+    mar_threshold = 0.65
+    yawn_consecutive_frames = 5
+    ear_continuous_sec = 2.0
+    perclos_window_sec = 60.0
+    perclos_critical_pct = 20.0
+    alert_cooldown_sec = 5.0
+    yawn_count_threshold = 3
 
     def setup(self, config):
+        """Build the derived, cross-frame objects from the already-bound params.
+
+        Called by `App.start()` AFTER the config_schema auto-bind, so every
+        `self.<knob>` below is already populated. The stage-2 landmark rknn is
+        preloaded by the kit (`self.models.lmk`); the CascadePipeline adopts it.
+        """
         super().setup(config)
-        manifest = {}
-        try:
-            with open(os.path.join(_here, "manifest.json")) as f:
-                manifest = json.load(f)
-        except Exception as e:                                        # pragma: no cover
-            print(f"[facemesh] WARN could not read manifest: {e}",
-                  file=sys.stderr, flush=True)
 
-        # Config from the unified effective config (kit.config); manifest is
-        # read only for the stage-2 landmark model below.
-        params = {k: v for k, v in (config or {}).items() if v is not None}
-
-        # --- stage-1 face detection thresholds ---
-        self.conf = float(params.get("confidence", 0.4))
-        self.iou = float(params.get("iou", 0.45))
-        self.crop_pad = float(params.get("crop_pad", 0.25))
-        self.presence_threshold = float(params.get("presence_threshold", 0.5))
-
-        # --- stage-2 landmark model (models[1]); appmgr only passes models[0] ---
-        lmk_file = "models/face_landmark_fp16.rknn"
-        lmk_input = 192
-        for m in manifest.get("models", []):
-            if m.get("role") == "stage2_landmark" or m.get("task") == "landmark":
-                lmk_file = m.get("file", lmk_file)
-                inp = m.get("input")
-                if isinstance(inp, list) and len(inp) == 4:
-                    lmk_input = int(inp[1])
-        lmk_path = lmk_file if os.path.isabs(lmk_file) else os.path.join(_here, lmk_file)
-
-        self.pipeline = CascadePipeline(
-            model_path=lmk_path,
-            input_size=lmk_input,
+        self.cascade = CascadePipeline(
+            model=self.models.lmk,   # preloaded by the kit; never a 2nd copy
+            input_size=LMK_INPUT,
             decode_fn=landmark_post.decode,
-            pad=self.crop_pad,
+            pad=float(self.crop_pad),
             max_targets=1,          # primary face drives the drowsiness state
         )
 
-        # --- CPU temporal logic (EAR/MAR + yawn + PERCLOS drowsiness) ---
+        # --- CPU temporal logic (EAR/MAR + yawn + PERCLOS drowsiness) ---- #
         cfg = DrowsinessConfig(
-            ear_threshold=float(params.get("ear_threshold", 0.21)),
-            ear_continuous_sec=float(params.get("ear_continuous_sec", 2.0)),
-            perclos_window_sec=float(params.get("perclos_window_sec", 60.0)),
-            perclos_critical_pct=float(params.get("perclos_critical_pct", 20.0)),
-            alert_cooldown_sec=float(params.get("alert_cooldown_sec", 5.0)),
-            yawn_count_threshold=int(params.get("yawn_count_threshold", 3)),
+            ear_threshold=float(self.ear_threshold),
+            ear_continuous_sec=float(self.ear_continuous_sec),
+            perclos_window_sec=float(self.perclos_window_sec),
+            perclos_critical_pct=float(self.perclos_critical_pct),
+            alert_cooldown_sec=float(self.alert_cooldown_sec),
+            yawn_count_threshold=int(self.yawn_count_threshold),
         )
         self.logic = DrowsinessLogic(
             drowsy_cfg=cfg,
-            mar_threshold=float(params.get("mar_threshold", 0.65)),
-            yawn_consecutive_frames=int(params.get("yawn_consecutive_frames", 5)),
-            ear_threshold=float(params.get("ear_threshold", 0.21)),
+            mar_threshold=float(self.mar_threshold),
+            yawn_consecutive_frames=int(self.yawn_consecutive_frames),
+            ear_threshold=float(self.ear_threshold),
         )
         # blink edge-detect (eyes_closed rising edge, event-debounced)
         self._prev_closed = False
         self._blink_count = 0
         self._prev_yawn_count = 0
 
-        print(f"[facemesh] setup conf={self.conf} iou={self.iou} "
-              f"crop_pad={self.crop_pad} landmark={os.path.basename(lmk_path)} "
-              f"input={lmk_input} ear_thr={cfg.ear_threshold} "
+        print(f"[facemesh] setup conf={self.confidence} iou={self.iou} "
+              f"crop_pad={self.crop_pad} landmark={self.models.lmk.id} "
+              f"input={LMK_INPUT} ear_thr={cfg.ear_threshold} "
               f"mar_thr={self.logic.mar_threshold}", flush=True)
 
-    def on_config_reload(self, config):
-        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+    def on_params_changed(self, changed):
+        """★S1 live hot-reload★ -- only what the auto-bind cannot do by itself.
 
-        facemesh-reader stores live knobs under app-specific keys and inside the
-        stage-2 CascadePipeline + the CPU DrowsinessLogic. Reapply by VALUE-
-        REPLACE only: mutate the existing pipeline/logic objects in place so the
-        landmark model and the PERCLOS/yawn accumulator state survive. Structural
-        params (`perclos_window_sec`, model input) are apply:"restart" and are
-        NOT touched here.
+        The scalars are already re-bound onto `self` by the time this runs; what
+        is left is mirroring them into the two DERIVED objects, and that is done
+        by MUTATING THOSE OBJECTS IN PLACE -- never by rebuilding them:
+
+          * `self.cascade.pad` -- rebuilding the CascadePipeline is what the old
+            code explicitly avoided; today it would re-adopt the same handle
+            rather than reload the rknn, but it would still drop the object the
+            loop holds mid-frame. Assign the field.
+          * `self.logic` (+ `logic.yawn`, `logic.drowsy.cfg`) -- these carry the
+            PERCLOS deque, the continuous-closure timer, the 5-minute yawn
+            window and the alert cooldown. A fresh instance would silently reset
+            every one of them, so only the threshold FIELDS are replaced.
+
+        Nothing here touches `self._prev_closed` / `self._blink_count` either.
+        `perclos_window_sec` is apply:"restart" and never reaches here.
         """
-        params = self._reload_params(config)
-        self.config = config or {}
+        if "crop_pad" in changed:
+            self.cascade.pad = float(self.crop_pad)
 
-        self.conf = self._reload_float(params, "confidence", self.conf)
-        self.iou = self._reload_float(params, "iou", self.iou)
-        self.presence_threshold = self._reload_float(
-            params, "presence_threshold", self.presence_threshold)
-        # crop_pad drives the stage-2 ROI crop; mutate the pipeline in place
-        # (do NOT rebuild -- that would reload the landmark RKNN model).
-        self.crop_pad = self._reload_float(params, "crop_pad", self.crop_pad)
-        if getattr(self, "pipeline", None) is not None:
-            self.pipeline.pad = self.crop_pad
-
-        # EAR / MAR / yawn / drowsiness knobs live inside self.logic (+ its
-        # YawnTracker and DrowsinessTracker.cfg). Mutating fields in place keeps
-        # every deque / timer intact.
-        logic = getattr(self, "logic", None)
-        if logic is not None:
-            logic.ear_threshold = self._reload_float(
-                params, "ear_threshold", logic.ear_threshold)
-            logic.mar_threshold = self._reload_float(
-                params, "mar_threshold", logic.mar_threshold)
+        logic = self.logic
+        if changed & {"ear_threshold", "mar_threshold",
+                      "yawn_consecutive_frames", "ear_continuous_sec",
+                      "perclos_critical_pct", "alert_cooldown_sec",
+                      "yawn_count_threshold"}:
+            logic.ear_threshold = float(self.ear_threshold)
+            logic.mar_threshold = float(self.mar_threshold)
             if getattr(logic, "yawn", None) is not None:
                 logic.yawn.mar_threshold = logic.mar_threshold
-                logic.yawn.consecutive_frames = self._reload_int(
-                    params, "yawn_consecutive_frames", logic.yawn.consecutive_frames)
+                logic.yawn.consecutive_frames = int(self.yawn_consecutive_frames)
             cfg = getattr(getattr(logic, "drowsy", None), "cfg", None)
             if cfg is not None:
                 cfg.ear_threshold = logic.ear_threshold
-                cfg.ear_continuous_sec = self._reload_float(
-                    params, "ear_continuous_sec", cfg.ear_continuous_sec)
-                cfg.perclos_critical_pct = self._reload_float(
-                    params, "perclos_critical_pct", cfg.perclos_critical_pct)
-                cfg.alert_cooldown_sec = self._reload_float(
-                    params, "alert_cooldown_sec", cfg.alert_cooldown_sec)
-                cfg.yawn_count_threshold = self._reload_int(
-                    params, "yawn_count_threshold", cfg.yawn_count_threshold)
-        print(f"[facemesh] hot-reload conf={self.conf} iou={self.iou} "
-              f"crop_pad={self.crop_pad} presence={self.presence_threshold} "
-              f"ear_thr={getattr(logic, 'ear_threshold', None)} "
-              f"mar_thr={getattr(logic, 'mar_threshold', None)}", flush=True)
+                cfg.ear_continuous_sec = float(self.ear_continuous_sec)
+                cfg.perclos_critical_pct = float(self.perclos_critical_pct)
+                cfg.alert_cooldown_sec = float(self.alert_cooldown_sec)
+                cfg.yawn_count_threshold = int(self.yawn_count_threshold)
 
-    def run_postproc(self, outs, info):
-        return face_post.postprocess(outs, info, conf_thres=self.conf,
-                                     iou_thres=self.iou)
+        print(f"[facemesh] hot-reload changed={sorted(changed)} "
+              f"conf={self.confidence} iou={self.iou} "
+              f"crop_pad={self.cascade.pad} presence={self.presence_threshold} "
+              f"ear_thr={logic.ear_threshold} mar_thr={logic.mar_threshold}",
+              flush=True)
 
-    def on_results(self, results, frame):
-        # tag every detected face for the overlay
-        for r in results:
-            r["kind"] = "face"
+    def run(self):
+        for frame in self.frames():
+            # -- 1. pre / infer / stage-1 post --------------------------- #
+            x = self.pre(frame)
+            outs = self.models.det.infer(x.data)
+            results = face_post.postprocess(outs, x.info,
+                                            conf_thres=self.confidence,
+                                            iou_thres=self.iou)
 
-        t = frame.pts
-        primary = results[0] if results else None
+            # tag every detected face for the overlay
+            for r in results:
+                r["kind"] = "face"
 
-        landmarks = None
-        presence = 0.0
-        if primary is not None:
-            stage2 = self.pipeline.process(frame.data, [primary])
-            if stage2:
-                lm_xyz, presence = stage2[0]["decoded"]
-                if presence >= self.presence_threshold:
-                    landmarks = lm_xyz     # (468,3) original-frame px
+            t = frame.pts
+            primary = results[0] if results else None
 
-        # Drive the CPU temporal logic (ticks with neutral input when no face).
-        metrics, yawn_state, drowsy_state, yawn_event = self.logic.update(landmarks, t)
+            # -- 2. stage 2: landmarks for the PRIMARY face -------------- #
+            # `frame.data` is the ORIGINAL camera frame (model_frame="cpu"),
+            # which is what crop_square_roi inside the cascade must cut from.
+            landmarks = None
+            presence = 0.0
+            if primary is not None:
+                stage2 = self.cascade.process(frame.data, [primary])
+                if stage2:
+                    lm_xyz, presence = stage2[0]["decoded"]
+                    # ★business★ below the presence floor the landmarks are
+                    # discarded and the temporal logic ticks with no face.
+                    if presence >= self.presence_threshold:
+                        landmarks = lm_xyz     # (468,3) original-frame px
 
-        events = []
+            # -- 3. ★business★ CPU temporal logic (ticks with neutral input
+            #       when no face) ---------------------------------------- #
+            metrics, yawn_state, drowsy_state, yawn_event = \
+                self.logic.update(landmarks, t)
 
-        # Attach per-face metrics + a small landmark summary to the primary result.
-        if primary is not None:
-            primary["presence"] = round(float(presence), 3)
-            primary["landmark_count"] = int(len(landmarks)) if landmarks is not None else 0
+            events = []
+
+            # Attach per-face metrics + a small landmark summary to the primary.
+            if primary is not None:
+                primary["presence"] = round(float(presence), 3)
+                primary["landmark_count"] = (int(len(landmarks))
+                                             if landmarks is not None else 0)
+                if metrics.valid:
+                    primary["ear"] = round(metrics.avg_ear, 3)
+                    primary["mar"] = round(metrics.mar, 3)
+                    # keypoints as [x,y] pairs for overlay (rounded)
+                    primary["keypoints"] = [
+                        [round(float(p[0]), 1), round(float(p[1]), 1)]
+                        for p in landmarks
+                    ] if landmarks is not None else []
+
+            # Always surface the current metrics/state so an overlay can render.
+            events.append(E.drowsiness_metrics(metrics, yawn_state,
+                                               drowsy_state))
+
+            # ★business★ edge event: blink (eyes-closed rising edge, valid face)
             if metrics.valid:
-                primary["ear"] = round(metrics.avg_ear, 3)
-                primary["mar"] = round(metrics.mar, 3)
-                # keypoints as [x,y] pairs for overlay (rounded, sub-sampled off)
-                primary["keypoints"] = [
-                    [round(float(p[0]), 1), round(float(p[1]), 1)]
-                    for p in landmarks
-                ] if landmarks is not None else []
+                if metrics.eyes_closed and not self._prev_closed:
+                    self._blink_count += 1
+                    events.append({"kind": "blink",
+                                   "blink_count": self._blink_count,
+                                   "avg_ear": round(metrics.avg_ear, 3)})
+                self._prev_closed = metrics.eyes_closed
+            else:
+                self._prev_closed = False
 
-        # Always surface the current metrics/state so an overlay can render it.
-        events.append({
-            "kind": "metrics",
-            "face_valid": bool(metrics.valid),
-            "avg_ear": round(metrics.avg_ear, 3),
-            "left_ear": round(metrics.left_ear, 3),
-            "right_ear": round(metrics.right_ear, 3),
-            "mar": round(metrics.mar, 3),
-            "eyes_closed": bool(metrics.eyes_closed),
-            "mouth_open": bool(metrics.mouth_open),
-            "state": drowsy_state.state,
-            "drowsiness_level": round(drowsy_state.drowsiness_level, 3),
-            "perclos_pct": round(drowsy_state.perclos_pct, 1),
-            "continuous_closure_sec": round(drowsy_state.continuous_closure_sec, 2),
-            "is_yawning": bool(yawn_state.is_yawning_now),
-            "yawn_count_5min": int(yawn_state.yawn_count_5min),
-            "alert_active": bool(drowsy_state.alert_active),
-        })
+            # ★business★ edge event: yawn onset.
+            if yawn_event:
+                events.append({"kind": "yawn",
+                               "yawn_count_5min": int(yawn_state.yawn_count_5min),
+                               "mar": round(metrics.mar, 3)})
+                print(f"[facemesh] *** YAWN #{yawn_state.yawn_count_5min} "
+                      f"mar={metrics.mar:.2f} at t={t:.2f} ***", flush=True)
 
-        # Edge event: blink (eyes-closed rising edge on a valid face).
-        if metrics.valid:
-            if metrics.eyes_closed and not self._prev_closed:
-                self._blink_count += 1
-                events.append({"kind": "blink", "blink_count": self._blink_count,
-                               "avg_ear": round(metrics.avg_ear, 3)})
-            self._prev_closed = metrics.eyes_closed
-        else:
-            self._prev_closed = False
+            # ★business★ edge event: drowsiness alert active (Drowsy/Danger).
+            if drowsy_state.alert_active:
+                events.append({
+                    "kind": "drowsiness",
+                    "state": drowsy_state.state,
+                    "drowsiness_level": round(drowsy_state.drowsiness_level, 3),
+                    "drowsy_by_ear": bool(drowsy_state.drowsy_by_ear),
+                    "drowsy_by_perclos": bool(drowsy_state.drowsy_by_perclos),
+                    "drowsy_by_yawn": bool(drowsy_state.drowsy_by_yawn),
+                    "perclos_pct": round(drowsy_state.perclos_pct, 1),
+                })
 
-        # Edge event: yawn onset.
-        if yawn_event:
-            events.append({"kind": "yawn",
-                           "yawn_count_5min": int(yawn_state.yawn_count_5min),
-                           "mar": round(metrics.mar, 3)})
-            print(f"[facemesh] *** YAWN #{yawn_state.yawn_count_5min} "
-                  f"mar={metrics.mar:.2f} at t={t:.2f} ***", flush=True)
-
-        # Edge event: drowsiness alert active (state Drowsy/Danger).
-        if drowsy_state.alert_active:
-            events.append({
-                "kind": "drowsiness",
-                "state": drowsy_state.state,
-                "drowsiness_level": round(drowsy_state.drowsiness_level, 3),
-                "drowsy_by_ear": bool(drowsy_state.drowsy_by_ear),
-                "drowsy_by_perclos": bool(drowsy_state.drowsy_by_perclos),
-                "drowsy_by_yawn": bool(drowsy_state.drowsy_by_yawn),
-                "perclos_pct": round(drowsy_state.perclos_pct, 1),
-            })
-
-        return events
+            self.emit(events, frame.pts, results=results)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ FacemeshPipeline::cropAndResize so landmark geometry matches the reference.
 """
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -206,13 +206,29 @@ class CascadePipeline:
     different second model + decode_fn.
     """
 
-    def __init__(self, model_path: str, input_size: int,
-                 decode_fn: Callable, pad: float = 0.25,
-                 max_targets: int = 1):
-        # Lazy import: rknnlite only exists on-device, keep this module importable
-        # off-device (unit tests, packaging) where only crop_square_roi is used.
-        from kit.runtime.engine import RknnModel
-        self.model = RknnModel(model_path)
+    def __init__(self, model_path: Optional[str] = None, input_size: int = 192,
+                 decode_fn: Optional[Callable] = None, pad: float = 0.25,
+                 max_targets: int = 1, model: Any = None):
+        """`model_path` loads its own RKNN; `model` adopts an ALREADY-loaded one.
+
+        The new app shape (KIT_APP_SHAPE_SPEC §2) preloads every manifest
+        `models[]` entry into `App.models`, so a migrated cascade app passes
+        `model=self.models.<id>` and this class never loads (nor releases) a
+        second copy of the same rknn. Exactly one of the two must be given.
+        """
+        if (model is None) == (model_path is None):
+            raise ValueError("CascadePipeline: pass exactly one of "
+                             "model_path=... or model=<preloaded handle>")
+        if model is not None:
+            self.model = model
+            self._owns_model = False
+        else:
+            # Lazy import: rknnlite only exists on-device, keep this module
+            # importable off-device (unit tests, packaging) where only
+            # crop_square_roi is used.
+            from kit.runtime.engine import RknnModel
+            self.model = RknnModel(model_path)
+            self._owns_model = True
         self.input_size = int(input_size)
         self.decode_fn = decode_fn
         self.pad = float(pad)
@@ -240,4 +256,11 @@ class CascadePipeline:
         return out
 
     def release(self) -> None:
-        self.model.release()
+        """Release the stage-2 model -- only if this pipeline loaded it itself.
+
+        A pipeline built with `model=<App.models handle>` does NOT own the
+        model; `App.finish()` releases it once, and releasing here too would be
+        a double free.
+        """
+        if self._owns_model:
+            self.model.release()

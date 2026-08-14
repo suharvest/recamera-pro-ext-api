@@ -13,15 +13,16 @@ an event is produced.
 
 This module is deliberately grown one converter at a time, as each app is
 migrated to the new shape. Today: ``detection`` (yolo-detector), ``track`` and
-``metrics`` (retail-vision), ``text`` (ppocr-reader) and
-``face_attributes`` (face-analysis).
+``metrics`` (retail-vision), ``text`` (ppocr-reader), ``face_attributes``
+(face-analysis), ``drowsiness_metrics`` (facemesh-reader).
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any, Dict
 
-__all__ = ["detection", "text", "track", "metrics", "face_attributes"]
+__all__ = ["detection", "text", "track", "metrics", "face_attributes",
+           "drowsiness_metrics"]
 
 
 def detection(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -147,6 +148,44 @@ def face_attributes(r: Dict[str, Any], *, blur: bool) -> Dict[str, Any]:
         "emotion": r.get("emotion"),
         "emotion_conf": r.get("emotion_conf"),
         "blur": bool(blur),
+    }
+
+
+def drowsiness_metrics(m, yawn, drowsy) -> Dict[str, Any]:
+    """The three drowsiness dataclasses -> one flat ``metrics`` event.
+
+    Field-for-field identical to the hand-written mapping facemesh-reader
+    carried in ``on_results()`` before the migration. Purely mechanical
+    (spec §5.3): copies named fields off ``FaceMetrics`` / ``YawnState`` /
+    ``DrowsinessState``, rounds (EAR/MAR/level to 3 dp, PERCLOS to 1 dp,
+    closure seconds to 2 dp), coerces the flags to bool/int and fills in
+    ``kind``.
+
+    What it does NOT do -- the app (and ``kit.logic.drowsiness``) owns it:
+
+      * every threshold and temporal decision that PRODUCED these values
+        (EAR/MAR thresholds, PERCLOS window, yawn debounce, alert cooldown),
+      * the blink / yawn / drowsiness edge events, which depend on cross-frame
+        state and stay in the app,
+      * when to publish -- the app calls this once per frame it has already
+        decided to report.
+    """
+    return {
+        "kind": "metrics",
+        "face_valid": bool(m.valid),
+        "avg_ear": round(m.avg_ear, 3),
+        "left_ear": round(m.left_ear, 3),
+        "right_ear": round(m.right_ear, 3),
+        "mar": round(m.mar, 3),
+        "eyes_closed": bool(m.eyes_closed),
+        "mouth_open": bool(m.mouth_open),
+        "state": drowsy.state,
+        "drowsiness_level": round(drowsy.drowsiness_level, 3),
+        "perclos_pct": round(drowsy.perclos_pct, 1),
+        "continuous_closure_sec": round(drowsy.continuous_closure_sec, 2),
+        "is_yawning": bool(yawn.is_yawning_now),
+        "yawn_count_5min": int(yawn.yawn_count_5min),
+        "alert_active": bool(drowsy.alert_active),
     }
 
 

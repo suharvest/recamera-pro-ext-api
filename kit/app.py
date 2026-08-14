@@ -563,12 +563,6 @@ class App:
 
         cfg = config if config is not None else (self.config or {})
         self._bind_params(cfg)
-        # setup() runs AFTER the auto-bind so an app that still needs one (to
-        # build derived objects: trackers, zone geometry, state machines) can
-        # read the already-bound `self.<param>` attributes instead of digging
-        # through the raw config dict. `run_app` therefore does NOT call setup()
-        # for a loop-owning app -- start() owns that call.
-        self.setup(cfg)
 
         # -- models: preload + absolutise paths --------------------------- #
         self.models = ModelRegistry()
@@ -613,6 +607,16 @@ class App:
                 except (TypeError, ValueError):
                     size = None
         self._pre_size = size or self.input_size
+
+        # setup() runs AFTER the auto-bind AND after the models are registered,
+        # so an app that still needs one (to build derived objects: trackers,
+        # zone geometry, state machines, a stage-2 cascade) can read the
+        # already-bound `self.<param>` attributes AND adopt `self.models.<id>`
+        # instead of digging through the raw config dict or loading a second
+        # copy of a model the kit already holds (facemesh-reader's
+        # CascadePipeline does exactly that). `run_app` therefore does NOT call
+        # setup() for a loop-owning app -- start() owns that call.
+        self.setup(cfg)
 
         mode = self.model_frame if self.needs_model else "cpu"
         if mode not in ("cpu", "hw", "hw-direct"):
