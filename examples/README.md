@@ -23,6 +23,7 @@
 | [`07-shared-model/`](./07-shared-model/) | JSON/发布流 | catalog `models[]` + `/putModel` | **可用/已实现**：共享大模型不打进包，走 `models[]`+`target_path` 由浏览器代取下发（活样本 voice-transcribe） |
 | [`08-app-with-deps/`](./08-app-with-deps/) | JSON/skeleton | manifest `deps` + per-app venv | **skeleton/未实现**：app 独有 Python 依赖（如 PyAV）随包分发、装进 per-app venv 的设计示范（见设计文档） |
 | [`09-declarative-output/`](./09-declarative-output/) | JSON/manifest | manifest `capabilities:["output"]` + `output` 块 | **可用/已实现**：声明式把结果发到 MQTT/HTTP/UART/WS + HA Discovery，app.py 零输出代码（`ConfigurableSink`，活样本 yolo-detector） |
+| [`10-video-backends/`](./10-video-backends/) | Python | kit `FrameSource` ABC + GStreamer/FFmpeg/OpenCV | 第三方视频框架旁路拉 RTSP 取帧，与 kit 原生 `frames()` 对照（取舍：丢 RGA 硬件 letterbox） |
 
 建议阅读顺序：01 → 02 → 03（03 是"方案商自带流水线"的核心示例），04/05/06 按需。
 
