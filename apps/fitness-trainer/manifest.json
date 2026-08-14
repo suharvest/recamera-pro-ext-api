@@ -106,7 +106,7 @@
           },
           {
             "key": "target_reps",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Reps per set",
             "title_zh": "每组次数",
@@ -117,7 +117,7 @@
           },
           {
             "key": "target_sets",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Sets",
             "title_zh": "组数",

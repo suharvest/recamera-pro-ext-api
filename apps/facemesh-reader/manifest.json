@@ -178,7 +178,7 @@
           },
           {
             "key": "yawn_consecutive_frames",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Yawn hold frames",
             "title_zh": "打哈欠持续帧数",
@@ -240,7 +240,7 @@
           },
           {
             "key": "yawn_count_threshold",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Yawns/5min for drowsy",
             "title_zh": "5 分钟打哈欠数阈值",

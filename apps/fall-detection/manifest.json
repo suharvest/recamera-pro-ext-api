@@ -176,7 +176,7 @@
           },
           {
             "key": "min_suspected_features",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Minimum evidence features",
             "title_zh": "最少证据特征数",

@@ -78,13 +78,13 @@ class FitnessTrainerApp(App):
         # machine needs its own record to tell "the mode really changed" from
         # "the same mode was re-applied".
         self._ex_mode = self.mode
-        self.exercise.set_targets(int(self.target_reps), int(self.target_sets))
+        self.exercise.set_targets(self.target_reps, self.target_sets)
 
         self._last_person_pts = None   # last frame pts a subject was seen at
         self._last_workout_complete = False
 
-        print(f"[fitness] setup mode={self.mode} target={int(self.target_reps)}x"
-              f"{int(self.target_sets)} conf={self.confidence} "
+        print(f"[fitness] setup mode={self.mode} target={self.target_reps}x"
+              f"{self.target_sets} conf={self.confidence} "
               f"kpt_thres={self.keypoint_confidence} "
               f"idle_reset={self.idle_reset_seconds}s", flush=True)
 
@@ -122,9 +122,9 @@ class FitnessTrainerApp(App):
             # same exercise: apply the live keypoint threshold in place.
             self.exercise.kpt_thres = float(self.keypoint_confidence)
         # targets are always safe to (re)apply -- set_targets keeps current reps.
-        self.exercise.set_targets(int(self.target_reps), int(self.target_sets))
+        self.exercise.set_targets(self.target_reps, self.target_sets)
         print(f"[fitness] hot-reload changed={sorted(changed)} mode={self.mode} "
-              f"target={int(self.target_reps)}x{int(self.target_sets)} "
+              f"target={self.target_reps}x{self.target_sets} "
               f"conf={self.confidence} kpt_thres={self.keypoint_confidence} "
               f"idle_reset={self.idle_reset_seconds}s", flush=True)
 
@@ -152,8 +152,8 @@ class FitnessTrainerApp(App):
                   and self._last_person_pts is not None
                   and now - self._last_person_pts >= self.idle_reset_seconds):
                 self.exercise.reset()
-                self.exercise.set_targets(int(self.target_reps),
-                                          int(self.target_sets))
+                self.exercise.set_targets(self.target_reps,
+                                          self.target_sets)
                 self._last_person_pts = None
                 self._last_workout_complete = False
                 print(f"[fitness] idle reset after "
@@ -166,8 +166,8 @@ class FitnessTrainerApp(App):
             event = {
                 "kind": "workout",
                 "mode": self.mode,
-                "target_reps": int(self.target_reps),
-                "target_sets": int(self.target_sets),
+                "target_reps": self.target_reps,
+                "target_sets": self.target_sets,
                 "person_score": (round(float(primary["score"]), 3)
                                  if primary else 0.0),
             }
@@ -176,7 +176,7 @@ class FitnessTrainerApp(App):
 
             if st.rep_completed:
                 print(f"[fitness] rep -> set {st.set} reps {st.reps}/"
-                      f"{int(self.target_reps)} (stage={st.stage} "
+                      f"{self.target_reps} (stage={st.stage} "
                       f"angle={st.angle:.0f})"
                       + (f" [{st.form_warning}]" if st.form_warning else ""),
                       flush=True)

@@ -145,7 +145,7 @@
           },
           {
             "key": "max_faces",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Max faces / frame",
             "title_zh": "每帧最大人脸数",
@@ -174,7 +174,7 @@
         "items": [
           {
             "key": "emotion_interval",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Emotion every N frames",
             "title_zh": "情绪每 N 帧",

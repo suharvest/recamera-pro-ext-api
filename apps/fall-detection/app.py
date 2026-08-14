@@ -406,7 +406,7 @@ class FallDetectionApp(App):
             motion_window_sec=float(self.motion_window_sec),
             torso_angle_threshold_deg=float(self.torso_angle_threshold_deg),
             bbox_aspect_ratio_threshold=float(self.bbox_aspect_ratio_threshold),
-            min_suspected_features=int(self.min_suspected_features),
+            min_suspected_features=self.min_suspected_features,
             confirmation_sec=float(self.confirmation_sec),
             suspected_timeout_sec=float(self.suspected_timeout_sec),
             occlusion_grace_sec=float(self.occlusion_grace_sec),

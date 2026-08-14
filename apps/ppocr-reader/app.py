@@ -116,7 +116,7 @@ class PpocrReaderApp(App):
                                   # config_schema types max_boxes as "number",
                                   # so the auto-bind hands us a float; decode
                                   # slices with it.
-                                  max_boxes=int(self.max_boxes))
+                                  max_boxes=self.max_boxes)
 
             # ★business★ reading order: top-to-bottom, then left-to-right,
             # with a 20 px row tolerance so a slightly tilted line stays one row.

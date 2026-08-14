@@ -8,6 +8,7 @@ keys. Apps without the capability are untouched (legacy bypass).
 
 Runnable with plain stdlib: `python3 tests/test_output_config.py` (or pytest).
 """
+import json
 import os
 import sys
 import tempfile
@@ -116,6 +117,50 @@ class OutputSchemaInjectionTests(unittest.TestCase):
         man = _manifest([])          # not opted in -> output keys are unknown
         _, errors = appconfig.validate_config(man, {"dMqtt": {"sURL": "x"}})
         self.assertTrue(any("dMqtt" in e for e in errors))
+
+
+class IntegerControlTests(unittest.TestCase):
+    """`type:"integer"` validates to a real int and enforces min/max."""
+
+    SPEC = {"groups": [{"key": "g", "items": [
+        {"key": "max_faces", "type": "integer", "default": 5,
+         "min": 1, "max": 16, "step": 1}]}]}
+
+    def _man(self):
+        return _manifest([], config_schema=self.SPEC)
+
+    def test_accepts_int_and_keeps_it_int(self):
+        clean, errors = appconfig.validate_config(self._man(), {"max_faces": 8})
+        self.assertEqual(errors, [])
+        self.assertIsInstance(clean["max_faces"], int)
+        self.assertEqual(clean["max_faces"], 8)
+
+    def test_accepts_integral_float_and_narrows(self):
+        clean, errors = appconfig.validate_config(self._man(), {"max_faces": 8.0})
+        self.assertEqual(errors, [])
+        self.assertIsInstance(clean["max_faces"], int)
+
+    def test_rejects_fractional(self):
+        _, errors = appconfig.validate_config(self._man(), {"max_faces": 8.5})
+        self.assertTrue(any("max_faces" in e for e in errors), errors)
+
+    def test_enforces_range(self):
+        for bad in (0, 17):
+            _, errors = appconfig.validate_config(self._man(), {"max_faces": bad})
+            self.assertTrue(any("max_faces" in e for e in errors), (bad, errors))
+
+    def test_real_manifest_roundtrip(self):
+        """The shipped face-analysis schema really produces ints."""
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))),
+            "apps", "face-analysis", "manifest.json")
+        with open(path) as f:
+            man = json.load(f)
+        clean, errors = appconfig.validate_config(man, {"max_faces": 7,
+                                                        "emotion_interval": 2})
+        self.assertEqual(errors, [])
+        self.assertIsInstance(clean["max_faces"], int)
+        self.assertIsInstance(clean["emotion_interval"], int)
 
 
 if __name__ == "__main__":

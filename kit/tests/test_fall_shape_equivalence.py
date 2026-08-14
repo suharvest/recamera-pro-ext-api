@@ -923,10 +923,13 @@ class FallHotReloadTests(_Base):
         try:
             self.assertEqual(app.confidence, 0.6)
             self.assertEqual(app.keypoint_confidence, 0.35)
-            # `type: "number"` -> the auto-bind hands over FLOATs ...
-            self.assertIsInstance(app.min_suspected_features, float)
+            # `type: "integer"` -> the auto-bind hands over an INT, so the use
+            # site no longer needs an int() band-aid ...
+            self.assertIsInstance(app.min_suspected_features, int)
+            self.assertNotIsInstance(app.min_suspected_features, bool)
+            # ... while a genuinely-float knob (an angle: 55.5 is legal) stays
+            # `type: "number"` and binds as float.
             self.assertIsInstance(app.torso_angle_threshold_deg, float)
-            # ... and the use site coerces the integer-semantic one back.
             self.assertIsInstance(
                 app._fall_config.min_suspected_features, int)
             self.assertEqual(app._fall_config.min_suspected_features, 3)

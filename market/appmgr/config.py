@@ -268,6 +268,19 @@ def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
     t = spec.get("type", "number")
     key = spec.get("key", "?")
 
+    if t == "integer":
+        # ★Integer-semantics control★: counts, frame intervals, list caps. The
+        # value MUST come back out as an `int` -- it ends up in slices/indices
+        # (`results[:max_faces]`) and in event payloads where `12.0` is wrong.
+        if not _is_num(value) or float(value) != int(float(value)):
+            return False, None, f"{key}: expected integer, got {value!r}"
+        v = int(float(value))
+        if "min" in spec and v < int(spec["min"]):
+            return False, None, f"{key}: {v} < min {spec['min']}"
+        if "max" in spec and v > int(spec["max"]):
+            return False, None, f"{key}: {v} > max {spec['max']}"
+        return True, v, ""
+
     if t == "number":
         if not _is_num(value):
             return False, None, f"{key}: expected number, got {type(value).__name__}"

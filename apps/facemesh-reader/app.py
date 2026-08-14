@@ -100,12 +100,12 @@ class FacemeshReaderApp(App):
             perclos_window_sec=float(self.perclos_window_sec),
             perclos_critical_pct=float(self.perclos_critical_pct),
             alert_cooldown_sec=float(self.alert_cooldown_sec),
-            yawn_count_threshold=int(self.yawn_count_threshold),
+            yawn_count_threshold=self.yawn_count_threshold,
         )
         self.logic = DrowsinessLogic(
             drowsy_cfg=cfg,
             mar_threshold=float(self.mar_threshold),
-            yawn_consecutive_frames=int(self.yawn_consecutive_frames),
+            yawn_consecutive_frames=self.yawn_consecutive_frames,
             ear_threshold=float(self.ear_threshold),
         )
         # blink edge-detect (eyes_closed rising edge, event-debounced)
@@ -149,14 +149,14 @@ class FacemeshReaderApp(App):
             logic.mar_threshold = float(self.mar_threshold)
             if getattr(logic, "yawn", None) is not None:
                 logic.yawn.mar_threshold = logic.mar_threshold
-                logic.yawn.consecutive_frames = int(self.yawn_consecutive_frames)
+                logic.yawn.consecutive_frames = self.yawn_consecutive_frames
             cfg = getattr(getattr(logic, "drowsy", None), "cfg", None)
             if cfg is not None:
                 cfg.ear_threshold = logic.ear_threshold
                 cfg.ear_continuous_sec = float(self.ear_continuous_sec)
                 cfg.perclos_critical_pct = float(self.perclos_critical_pct)
                 cfg.alert_cooldown_sec = float(self.alert_cooldown_sec)
-                cfg.yawn_count_threshold = int(self.yawn_count_threshold)
+                cfg.yawn_count_threshold = self.yawn_count_threshold
 
         print(f"[facemesh] hot-reload changed={sorted(changed)} "
               f"conf={self.confidence} iou={self.iou} "

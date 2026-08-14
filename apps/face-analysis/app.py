@@ -166,14 +166,14 @@ class FaceAnalysisApp(App):
             # ★business★ cross-frame frame counter drives the emotion cadence.
             self._frame_idx += 1
             t = frame.pts
-            interval = max(1, int(self.emotion_interval))
+            interval = max(1, self.emotion_interval)
             run_emotion = (self._frame_idx % interval) == 0
 
             # -- 2. stages 2+3: one padded square ROI per face ----------- #
             # A plain Python loop, not a declared pipeline stage. `frame.data`
             # is the ORIGINAL camera frame (model_frame="cpu"), which is what
             # crop_square_roi must cut from.
-            faces = results[: int(self.max_faces)]
+            faces = results[: self.max_faces]
             for i, r in enumerate(faces):
                 r["kind"] = "face"
                 r["blur"] = self.privacy_blur

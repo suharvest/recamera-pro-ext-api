@@ -67,6 +67,78 @@ class ManifestSchemaShapeTests(unittest.TestCase):
                 self.assertEqual(set(kitconfig.schema_items(man)), declared)
 
 
+# --------------------------------------------------------------------------- #
+# integer-semantics controls
+# --------------------------------------------------------------------------- #
+# Keys whose value is a COUNT / INDEX / FRAME INTERVAL: they must bind as `int`
+# because they end up in slices (`results[:max_faces]`), modulo arithmetic and
+# event payloads where `12.0` is the wrong wire value.
+_INTEGER_KEYS = {
+    "face-analysis": {"max_faces", "emotion_interval"},
+    "facemesh-reader": {"yawn_consecutive_frames", "yawn_count_threshold"},
+    "fall-detection": {"min_suspected_features"},
+    "ppocr-reader": {"max_boxes"},
+    "fitness-trainer": {"target_reps", "target_sets"},
+}
+
+# Keys with an INTEGER-LOOKING default that are semantically FLOAT -- angles the
+# user may set to 55.5, seconds, px/s speeds. Deliberately left `type:"number"`;
+# a blanket "integral default => integer" sweep would have silently truncated
+# these the first time somebody typed a decimal.
+_DELIBERATE_NUMBER_KEYS = {
+    "fall-detection": {"torso_angle_threshold_deg", "recovery_torso_angle_deg"},
+    "fitness-trainer": {"idle_reset_seconds"},
+    "retail-vision": {"dwell_assist", "dwell_speed", "window_duration"},
+}
+
+
+class IntegerSemanticsTests(unittest.TestCase):
+
+    def _specs(self, app):
+        man = _load(os.path.join(_ROOT, "apps", app, "manifest.json"))
+        return kitconfig.schema_items(man)
+
+    def test_declared_integer_keys(self):
+        for app, keys in _INTEGER_KEYS.items():
+            specs = self._specs(app)
+            for k in keys:
+                with self.subTest(app=app, key=k):
+                    self.assertEqual(specs[k]["type"], "integer")
+                    self.assertIsInstance(specs[k]["default"], int)
+                    self.assertNotIsInstance(specs[k]["default"], bool)
+
+    def test_float_semantics_keys_stay_number(self):
+        for app, keys in _DELIBERATE_NUMBER_KEYS.items():
+            specs = self._specs(app)
+            for k in keys:
+                with self.subTest(app=app, key=k):
+                    self.assertEqual(specs[k]["type"], "number")
+
+    def test_integer_type_binds_to_int(self):
+        """`_coerce` is what the auto-bind runs; it must produce a real int."""
+        from kit.app import _coerce
+        self.assertIsInstance(_coerce("integer", 5), int)
+        self.assertIsInstance(_coerce("integer", 5.0), int)
+        self.assertIsInstance(_coerce("integer", "7"), int)
+        self.assertIsInstance(_coerce("number", 5), float)
+
+    def test_no_other_integer_looking_number_key_slipped_in(self):
+        """A new `type:"number"` with an integral default is a review prompt.
+
+        Either it is a count (-> `integer`) or a genuine float that happens to
+        default to a round value (-> add it to _DELIBERATE_NUMBER_KEYS)."""
+        unclassified = []
+        for path in _MANIFESTS:
+            app = os.path.basename(os.path.dirname(path))
+            known = _DELIBERATE_NUMBER_KEYS.get(app, set())
+            for k, spec in kitconfig.schema_items(_load(path)).items():
+                d = spec.get("default")
+                if (spec.get("type") == "number" and isinstance(d, int)
+                        and not isinstance(d, bool) and k not in known):
+                    unclassified.append(f"{app}.{k}")
+        self.assertEqual(unclassified, [], unclassified)
+
+
 class FlatCompatBranchTests(unittest.TestCase):
     """The deprecated flat form must still parse (third-party packages)."""
 

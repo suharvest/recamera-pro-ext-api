@@ -123,7 +123,7 @@
           },
           {
             "key": "max_boxes",
-            "type": "number",
+            "type": "integer",
             "apply": "live",
             "title": "Max text boxes / frame",
             "title_zh": "每帧最大文本框",
