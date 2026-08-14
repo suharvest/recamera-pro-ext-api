@@ -9,7 +9,7 @@
 |------|------|----------|
 | `recamera-ext-kit-v1.3.0.tar.gz` | kit 运行时 + SDK(python/lib/头文件) + 离线推理 wheels（含 rknnlite / jinja2 / markupsafe），自带 `INSTALL.sh` | `/userdata/local/kit`、`/userdata/sdk`、`/userdata/rknnenv` |
 | `appmgr-v1.3.0.tar.gz` | App Center 管理器全部代码（builtin/config/server/…）**含签名公钥 `keys/`**；已排除 `__pycache__`/`tests`/`*.bak*` | `/userdata/local/appmgr` |
-| `frontend-v1.3.0.tar.gz` | React 前端构建产物（`main.b8a720ca.js` 那批，含 P2/official/webp 静态资源 + 推理页收敛/画廊单活收口） | `/oem/usr/www` |
+| `frontend-v1.3.0.tar.gz` | React 前端构建产物（`main.fc8a67e8.js` 那批，含 P2/official/webp 静态资源 + 推理页收敛/画廊单活收口 + OCR 识别文本标签修复） | `/oem/usr/www` |
 | `apps-v1.3.0.tar.gz` | 9 个 app 的 `manifest.json` + `app.py`（+ 小配置）。**不含大模型 `*.rknn`/`*.onnx`**（模型是设备侧共享依赖，走 catalog） | `/userdata/local/apps` |
 | `recamera-ext-api-v1.3.0.tar` | 遮罩固件（rkipc + entry.cgi + 扩展 `.so` + SDK + wheels），自带 `install.sh`/`rollback.sh` | `/oem`（**高危，冷启动**） |
 | `deploy-app.sh` | 应用层一键部署主脚本（安全） | — |
@@ -117,7 +117,7 @@ python3 build-packages.py --frontend /path/to/recamera_web_react/build
 | 包 | size (bytes) | md5 |
 |----|-------------:|-----|
 | `recamera-ext-api-v1.3.0.tar` | 18616320 | `342b86f1d92ca5d9bdb093f2402c85a4` |
-| `recamera-ext-kit-v1.3.0.tar.gz` | 2092139 | `bc59f67d8ff8c8459004f14080692243` |
+| `recamera-ext-kit-v1.3.0.tar.gz` | 2093614 | `a5fbb9b49b8312c7119816355a8fe7fb` |
 | `appmgr-v1.3.0.tar.gz` | 30551 | `3e1f4578e051d2a08cf13e5002e3eaba` |
-| `frontend-v1.3.0.tar.gz` | 36750911 | `7a0f51cbc01d151b3e4cca47671e3ee6` |
-| `apps-v1.3.0.tar.gz` | 984781 | `8a3059e10648bff5ef0df10ce09751af` |
+| `frontend-v1.3.0.tar.gz` | 36750969 | `0af9d76dbdec7c95156735fce9eb5948` |
+| `apps-v1.3.0.tar.gz` | 985548 | `16d9db07ae13f5d812a0af987d84969e` |
