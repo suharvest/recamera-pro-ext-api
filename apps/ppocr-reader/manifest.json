@@ -51,23 +51,6 @@
   ],
   "default_model": "ppocr_det_fp16",
   "postproc": "db_ocr",
-  "pipeline": [
-    {
-      "model": "ppocr_det_fp16",
-      "postproc": "db_ocr",
-      "stage": "detect",
-      "input_size": 480
-    },
-    {
-      "model": "ppocr_rec_fp16",
-      "postproc": "ctc",
-      "stage": "roi_recognize",
-      "input_size": [
-        48,
-        320
-      ]
-    }
-  ],
   "output": {
     "sink": "ws",
     "port": 8124,

@@ -80,27 +80,6 @@
   ],
   "default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
-  "pipeline": [
-    {
-      "model": "yolov8n_face_rawhead_fp16",
-      "postproc": "face_detect",
-      "stage": "detect"
-    },
-    {
-      "model": "fairface_fp16",
-      "postproc": "classify",
-      "stage": "roi_classify",
-      "input_size": 224,
-      "crop_pad": 0.15
-    },
-    {
-      "model": "emotion_enet_b0_fp16",
-      "postproc": "classify",
-      "stage": "roi_classify",
-      "input_size": 224,
-      "crop_pad": 0.15
-    }
-  ],
   "output": {
     "sink": "ws",
     "port": 8124,

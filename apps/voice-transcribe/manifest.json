@@ -20,14 +20,6 @@
   "needs_model": false,
   "models": [],
   "postproc": "voice",
-  "pipeline": [
-    {
-      "model": "sensevoice-int8",
-      "path": "cpu",
-      "task": "asr",
-      "postproc": "voice"
-    }
-  ],
   "tags": [
     "voice",
     "asr",

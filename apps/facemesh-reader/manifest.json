@@ -50,20 +50,6 @@
   ],
   "default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
-  "pipeline": [
-    {
-      "model": "yolov8n_face_rawhead_fp16",
-      "postproc": "face_detect",
-      "stage": "detect"
-    },
-    {
-      "model": "face_landmark_fp16",
-      "postproc": "landmark",
-      "stage": "roi_landmark",
-      "input_size": 192,
-      "crop_pad": 0.25
-    }
-  ],
   "output": {
     "sink": "ws",
     "port": 8124,

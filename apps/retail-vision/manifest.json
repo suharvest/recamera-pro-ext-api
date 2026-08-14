@@ -33,12 +33,6 @@
   ],
   "default_model": "yolo8n_rawhead_int8",
   "postproc": "detect",
-  "pipeline": [
-    {
-      "model": "yolo8n_rawhead_int8",
-      "postproc": "detect"
-    }
-  ],
   "output": {
     "sink": "ws",
     "port": 8124,

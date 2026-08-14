@@ -14,14 +14,6 @@
   ],
   "models": [],
   "postproc": "qrcode",
-  "pipeline": [
-    {
-      "model": "quirc",
-      "path": "cpu",
-      "task": "qrcode-decode",
-      "postproc": "qrcode"
-    }
-  ],
   "tags": [
     "qrcode",
     "cpu"

@@ -108,7 +108,6 @@ apps/<id>/
 | `models[]` | | supervisor/kit | 模型列表。**supervisor 只用 `models[0].file` 作为 `--model` 传入**（`supervisor._build_cmd`）；`models[]` 为空则不传 `--model`（CPU-only app，如 qrcode-reader）。每个元素常见键：`id`、`file`（相对路径，如 `models/x.rknn`）、`task`（detect/pose/classify/recognize…）、`input`（NHWC 形状）、`quant`（int8/fp16）、`classes`/`keypoints`/`heads`、`norm`、`output`、`role`、`dict`。除 `file` 外均由 kit 运行时/前端消费，appmgr 不解析。 |
 | `default_model` | | kit | 默认模型 id（多模型级联时）。 |
 | `postproc` | | kit | 后处理器名，如 `detect`/`pose`/`db_ocr`/`voice`。 |
-| `pipeline[]` | | kit | 多级流水线声明（模型 + 后处理 + stage）。 |
 | `tags[]` | | UI | 标签数组。 |
 | `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor._build_cmd`）。 |
 | `config_schema` | | config API | 可配置项 schema，**扁平** 或 **分组**（`groups[]`）两种写法（`config.py:27-40`）。控件类型：`number`（带 min/max/step）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
@@ -238,7 +237,8 @@ app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方
 - 开发时放 `apps/<id>/models/`，manifest `models[].file` 用相对路径 `models/xxx.rknn`。
 - 打包时 `models/` 整个进包（`build.py:28`）。
 - 运行时 supervisor 以 app 安装目录为 cwd，把 `models[0].file` 作为 `--model` 传给
-  `app.py`（`supervisor._build_cmd`）。多模型级联由 kit 依 `pipeline[]` 自行加载。
+  `app.py`（`supervisor._build_cmd`）。多模型级联由 app 自己在 `setup()` 里按
+  `models[]` 逐个 `self.models.load(...)`。
 
 ### 两种模型分发形态：随包 bundle vs 共享 `models[]`+`target_path`
 

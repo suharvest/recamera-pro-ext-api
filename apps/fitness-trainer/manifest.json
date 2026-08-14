@@ -33,12 +33,6 @@
   ],
   "default_model": "yolo11n_pose_rawhead_int8",
   "postproc": "pose",
-  "pipeline": [
-    {
-      "model": "yolo11n_pose_rawhead_int8",
-      "postproc": "pose"
-    }
-  ],
   "output": {
     "sink": "ws",
     "port": 8124,
