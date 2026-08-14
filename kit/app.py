@@ -178,25 +178,14 @@ class ModelRegistry:
 
 
 def _schema_items(manifest: Optional[dict]) -> Dict[str, dict]:
-    """Return {key: spec} from a FLAT or GROUPED `config_schema`.
+    """Return {key: spec} from a manifest `config_schema` (grouped form).
 
-    Both structures exist in the wild today (yolo-detector is flat, the rest are
-    grouped); auto-binding must handle either. Mirrors `kit.config.flatten_schema`
-    but keeps the whole spec dict (we need `type` and `apply`, not just default).
+    Thin alias for `kit.config.schema_items` -- the single place that knows the
+    schema shape. Kept as a module-level name because the auto-bind code and its
+    tests refer to it.
     """
-    cs = (manifest or {}).get("config_schema") or {}
-    out: Dict[str, dict] = {}
-    if isinstance(cs, dict) and "groups" in cs:
-        for g in cs.get("groups") or []:
-            for it in g.get("items") or []:
-                key = it.get("key")
-                if key:
-                    out[key] = it
-    elif isinstance(cs, dict):
-        for k, v in cs.items():
-            if isinstance(v, dict):
-                out[k] = v
-    return out
+    from kit.config import schema_items
+    return schema_items(manifest)
 
 
 def _coerce(spec_type: Optional[str], value):

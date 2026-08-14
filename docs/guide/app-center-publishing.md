@@ -110,7 +110,7 @@ apps/<id>/
 | `postproc` | | kit | 后处理器名，如 `detect`/`pose`/`db_ocr`/`voice`。 |
 | `tags[]` | | UI | 标签数组。 |
 | `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor._build_cmd`）。 |
-| `config_schema` | | config API | 可配置项 schema，**扁平** 或 **分组**（`groups[]`）两种写法（`config.py:27-40`）。控件类型：`number`（带 min/max/step）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
+| `config_schema` | | config API | 可配置项 schema，**必须用分组写法** `groups[].items[]`（每个 item 带 `key`）。扁平写法 `{key: spec}` 已弃用，仅为老包保留兼容分支并打印弃用日志（`kit/config.py:_flat_to_grouped`、`market/appmgr/config.py:_flat_to_grouped`）。控件类型：`number`（带 min/max/step）、`integer`（整数语义，绑定后为 `int`）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
 | `ha_entities[]` | | MQTT/HA | Home Assistant 实体声明（component/object_id/name/value_template/device_class…），app 开启 MQTT 后据此上报。 |
 | `privacy_blur` | | app 逻辑 | 隐私开关声明（face-analysis 用）。 |
 

@@ -40,7 +40,9 @@
       {"source": "events.qrcode | map(attribute='text') | reject('equalto','') | list", "target": "texts", "topic": "recamera/{{ app }}/text"}
     ]
   },
-  "config_schema": {},
+  "config_schema": {
+    "groups": []
+  },
   "ha_entities": [
     {
       "component": "sensor",

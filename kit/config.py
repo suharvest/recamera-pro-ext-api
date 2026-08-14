@@ -25,26 +25,54 @@ import sys
 from typing import Any, Dict, Optional
 
 
-def flatten_schema(manifest: dict) -> Dict[str, Any]:
-    """Return {key: default} from a grouped OR flat config_schema.
+def schema_items(manifest: Optional[dict]) -> Dict[str, dict]:
+    """Return {key: item_spec} from a manifest `config_schema`.
 
-    Flat form  : config_schema[key] = {type, default, ...}
-    Grouped    : config_schema.groups[].items[] = {key, type, default, ...}
+    ★Canonical form is GROUPED★: `config_schema.groups[].items[] = {key, type,
+    default, ...}`. All in-repo apps use it and the frontend SchemaForm renders
+    by group, so there is exactly one main code path here.
+
+    A legacy FLAT `config_schema[key] = {type, default, ...}` (no `groups`) is
+    still accepted for third-party packages built before the unification; it is
+    normalised to the grouped form by `_flat_to_grouped` and logged once per
+    process. Support for it will be dropped -- publish grouped.
+    """
+    cs = (manifest or {}).get("config_schema") or {}
+    if not isinstance(cs, dict):
+        return {}
+    if "groups" not in cs:
+        cs = _flat_to_grouped(cs, (manifest or {}).get("id"))
+    out: Dict[str, dict] = {}
+    for g in cs.get("groups") or []:
+        for it in g.get("items") or []:
+            key = it.get("key")
+            if key:
+                out[key] = it
+    return out
+
+
+_flat_warned: set = set()
+
+
+def _flat_to_grouped(cs: Dict[str, Any], app_id: Optional[str] = None) -> dict:
+    """DEPRECATED input form: flat {key: spec} -> {"groups":[{items:[...]}]}."""
+    items = [{"key": k, **v} for k, v in cs.items() if isinstance(v, dict)]
+    if items and app_id not in _flat_warned:
+        _flat_warned.add(app_id)
+        print(f"[kit.config] {app_id or '<app>'}: flat `config_schema` is "
+              f"deprecated; publish the grouped form "
+              f"(config_schema.groups[].items[])", file=sys.stderr, flush=True)
+    return {"groups": [{"key": "general", "title": "General", "items": items}]}
+
+
+def flatten_schema(manifest: dict) -> Dict[str, Any]:
+    """Return {key: default} for every schema item that declares one.
+
     Items with no "default" (e.g. retail zone/line controls) are omitted -- they
     only exist in config.json once the user draws them.
     """
-    cs = (manifest or {}).get("config_schema") or {}
-    out: Dict[str, Any] = {}
-    if "groups" in cs:
-        for g in cs.get("groups", []):
-            for it in g.get("items", []):
-                if "key" in it and "default" in it:
-                    out[it["key"]] = it["default"]
-    else:
-        for k, v in cs.items():
-            if isinstance(v, dict) and "default" in v:
-                out[k] = v["default"]
-    return out
+    return {k: v["default"] for k, v in schema_items(manifest).items()
+            if "default" in v}
 
 
 def load_manifest(app_dir: str) -> dict:

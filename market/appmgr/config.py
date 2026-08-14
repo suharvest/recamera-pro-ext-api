@@ -63,37 +63,62 @@ def _output_schema_items(manifest: dict) -> List[dict]:
     ]
 
 
-def _has_output_group(cs: dict) -> bool:
+_flat_warned: set = set()
+
+
+def _flat_to_grouped(cs: dict, app_name: str = "") -> dict:
+    """DEPRECATED input form: flat {key: spec} -> {"groups":[{items:[...]}]}.
+
+    ★Canonical `config_schema` is GROUPED★ (`groups[].items[]`) -- every in-repo
+    app publishes it and the frontend SchemaForm renders by group. A flat schema
+    from a third-party package built before the unification is normalised here,
+    once, at the manifest boundary, so every consumer below sees only groups.
+    """
+    items = [{"key": k, **v} for k, v in cs.items() if isinstance(v, dict)]
+    if items and app_name not in _flat_warned:
+        _flat_warned.add(app_name)
+        print(f"[appmgr.config] {app_name or '<app>'}: flat `config_schema` is "
+              f"deprecated; publish the grouped form "
+              f"(config_schema.groups[].items[])", flush=True)
+    return {"groups": [{"key": "general", "title": "General", "items": items}]}
+
+
+def _normalized_schema(manifest: dict) -> dict:
+    """The manifest's `config_schema` in canonical grouped form."""
+    cs = (manifest or {}).get("config_schema") or {}
+    if not isinstance(cs, dict):
+        return {"groups": []}
     if "groups" in cs:
-        for g in cs.get("groups", []):
-            for it in g.get("items", []):
-                if it.get("key") == "output_channels":
-                    return True
-        return False
-    return "output_channels" in cs
+        return dict(cs)
+    return _flat_to_grouped(cs, (manifest or {}).get("id")
+                            or (manifest or {}).get("name") or "")
+
+
+def _has_output_group(cs: dict) -> bool:
+    for g in cs.get("groups") or []:
+        for it in g.get("items") or []:
+            if it.get("key") == "output_channels":
+                return True
+    return False
 
 
 def effective_manifest(manifest: dict) -> dict:
-    """Return the manifest with the `output` config_schema group injected when
-    (and only when) the app declares `capabilities:["output"]`.
+    """Return the manifest with its `config_schema` in canonical grouped form,
+    plus the `output` group injected when the app declares
+    `capabilities:["output"]`.
 
     Pure + idempotent. This is the single source `schema_specs`, `get_config`,
     and `do_set_config`/`validate_config` share so GET validation, POST
-    validation and apply-mode classification all agree on the output keys. Apps
-    without the capability are returned unchanged (legacy bypass)."""
+    validation and apply-mode classification all agree on the output keys."""
+    if not (manifest or {}).get("config_schema") and \
+            "output" not in ((manifest or {}).get("capabilities") or []):
+        return manifest                    # nothing to normalise, nothing to add
+    cs = _normalized_schema(manifest)
     caps = (manifest or {}).get("capabilities") or []
-    if "output" not in caps:
-        return manifest
-    cs = dict((manifest or {}).get("config_schema") or {})
-    if _has_output_group(cs):
-        return manifest
-    items = _output_schema_items(manifest)
-    if "groups" in cs:
+    if "output" in caps and not _has_output_group(cs):
         cs["groups"] = list(cs.get("groups") or []) + [
-            {"title": "Output", "key": "output", "items": items}]
-    else:
-        for it in items:
-            cs[it["key"]] = {k: v for k, v in it.items() if k != "key"}
+            {"title": "Output", "key": "output",
+             "items": _output_schema_items(manifest)}]
     m = dict(manifest)
     m["config_schema"] = cs
     return m
@@ -103,22 +128,16 @@ def effective_manifest(manifest: dict) -> dict:
 # schema flatten
 # --------------------------------------------------------------------------- #
 def schema_specs(manifest: dict) -> Dict[str, dict]:
-    """Return {key: item_spec} from a grouped OR flat config_schema.
+    """Return {key: item_spec} from the canonical grouped config_schema.
 
     The `output` capability group (OUTPUT_SINK_SPEC §3) is injected here so every
     consumer -- GET, POST validation, apply-mode -- sees the output keys."""
-    manifest = effective_manifest(manifest)
-    cs = (manifest or {}).get("config_schema") or {}
+    cs = _normalized_schema(effective_manifest(manifest))
     out: Dict[str, dict] = {}
-    if "groups" in cs:
-        for g in cs.get("groups", []):
-            for it in g.get("items", []):
-                if "key" in it:
-                    out[it["key"]] = it
-    else:
-        for k, v in cs.items():
-            if isinstance(v, dict):
-                out[k] = {"key": k, **v}
+    for g in cs.get("groups") or []:
+        for it in g.get("items") or []:
+            if "key" in it:
+                out[it["key"]] = it
     return out
 
 
