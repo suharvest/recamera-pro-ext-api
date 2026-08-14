@@ -2,20 +2,33 @@
 """
 voice-transcribe -- reCamera Pro voice app (wake word -> VAD -> ASR).
 
-This is the P3 packaging of the verified voice pipeline. Unlike the vision apps
-it does NOT use the FrameSource / RknnModel base loop -- it overrides `run()` to
-drive the audio pipeline instead:
+This is the P3 packaging of the verified voice pipeline. It is the SELF-PACED
+variant of the new app shape (internal/KIT_APP_SHAPE_SPEC.md §3, "接管"): the
+input is audio chunks, not camera frames, so `run()` drives the pipeline at its
+own rhythm instead of iterating `self.frames()`:
 
-    RtspAudioSource (mic via rkipc RTSP audio track, no /dev/snd takeover)
+    AiAsrAudioSource / RtspAudioSource (mic; no /dev/snd takeover)
         -> VoiceStateMachine (idle --wake--> listening --endpoint--> transcribing)
              WakeWord (sherpa KWS | ASR keyword)  +  VAD (silero)  +  Asr (SenseVoice)
-        -> ResultSink.emit(events) -> /appcenter WS panel  (+ optional MQTT/HA)
+        -> self.emit(events, t) -> the manifest `output` block (WS panel, MQTT/HA)
 
-It still subclasses `kit.app.App` so it plugs into the standard `run_app` CLI
-(config load, WsResultSink on the manifest port, MQTT fan-out) unchanged. Because
-`needs_model = False` the base loop never constructs an RknnModel, and the
+Two class flags declare that shape to kit:
+
+    owns_loop    = True   -- `def run(self):` takes over the rhythm
+    needs_frames = False  -- kit opens NO camera frame source; this app never
+                             touches /dev/video, the RTSP video stream or VPSS
+
+Owning the rhythm costs nothing else (spec §2 hard constraint: "an escape hatch
+must not strip the rest of the infrastructure"). kit still auto-binds every
+`config_schema` key onto `self`, still re-binds the apply:"live" ones on SIGHUP
+(`self.tick()` applies them at an event boundary and kit routes the same change
+into the output sink), and `self.emit()` still publishes through the sink
+assembled from the manifest `output` block. Consequently this file contains no
+sink lookup, no output plumbing and no MQTT code at all.
+
+Because `needs_model = False` kit never constructs an RknnModel, and the
 `RknnModel` import in kit.app is lazy, so this runs cleanly under the sherpa venv
-`/userdata/rknnenv/bin/python` (which has sherpa-onnx but no rknnlite/cv2).
+`/userdata/rknnenv/bin/python` (which has sherpa-onnx but no rknnlite).
 
 Models live in a SHARED directory, NOT inside the app package (they are hundreds
 of MB and shared across voice apps). Resolution order (first that exists wins):
@@ -60,108 +73,82 @@ SHARED_MODEL_DIR = "/userdata/local/models/asr"
 STAGING_MODEL_DIR = "/userdata/tmp/asr"
 
 
-def _find_configurable_sink(sink):
-    """Walk a (possibly nested MultiSink) sink tree and return the first
-    ConfigurableSink, or None. Lets the voice app route hot-reload of output
-    filters/templates through the unified sink even though it drives its own
-    audio loop instead of the base vision loop (OUTPUT_SINK_SPEC §7)."""
-    try:
-        from kit.adapters.output_sink import ConfigurableSink
-    except Exception:
-        return None
-    stack = [sink]
-    while stack:
-        s = stack.pop()
-        if s is None:
-            continue
-        if isinstance(s, ConfigurableSink):
-            return s
-        children = getattr(s, "sinks", None)
-        if isinstance(children, (list, tuple)):
-            stack.extend(children)
-    return None
-
-
 class VoiceTranscribeApp(App):
     id = "voice-transcribe"
     name = "Voice Transcribe"
     postproc = "voice"
-    needs_model = False          # no NPU model: base loop never builds RknnModel
+    owns_loop = True             # explicit new shape: run() owns the rhythm
+    needs_frames = False         # audio app: kit opens no camera frame source
+    needs_model = False          # no NPU model: kit never builds an RknnModel
 
     # -- config --------------------------------------------------------------- #
     def setup(self, config):
+        """Normalise the auto-bound `config_schema` params.
+
+        kit has already bound every schema key onto `self` before this runs
+        (App.start -> _bind_params), with the declared type applied. What is
+        left here is the app-specific normalisation the schema cannot express:
+        case-folding the enums and resolving `model_dir` against the shared
+        model locations. `getattr(self, k, ...)` keeps a hand-built config that
+        omits a key working (unit tests, `--sink stdout` by hand).
+        """
         super().setup(config or {})
         c = self.config
-        self.wake_backend = str(c.get("wake_backend", "kws")).lower()
+
+        def _s(key, default):
+            return str(getattr(self, key, None) or c.get(key, default))
+
+        def _f(key, default):
+            try:
+                return float(getattr(self, key, c.get(key, default)))
+            except (TypeError, ValueError):
+                return float(default)
+
+        self.wake_backend = _s("wake_backend", "kws").lower()
         # ASR backend selector (voxedge consumer): "rk" (NPU w4a16 via
         # kit.asr_rknn_backend, default -- the shared model dir ships the w4a16
         # .rknn, NOT a sherpa model.int8.onnx) or "sherpa" (CPU). Downstream is
-        # identical. Mirrored as config_schema default so appmgr injects it and a
-        # UI config-set never drops it.
-        self.asr_backend = str(c.get("asr_backend", "rk")).lower()
-        self.wakeword = str(c.get("wakeword", "hello camera"))
-        self.language = str(c.get("language", "auto"))
-        self.min_silence_sec = float(c.get("min_silence_sec", 0.6))
-        self.max_utterance_sec = float(c.get("max_utterance_sec", 15.0))
+        # identical.
+        self.asr_backend = _s("asr_backend", "rk").lower()
+        self.wakeword = _s("wakeword", "hello camera")
+        self.language = _s("language", "auto")
+        self.min_silence_sec = _f("min_silence_sec", 0.6)
+        self.max_utterance_sec = _f("max_utterance_sec", 15.0)
         # Pre-roll look-back: prepend this much audio from *before* the VAD's
         # confirmed speech-start so clipped utterance heads ("今天"->"天天") are
         # recovered. Too large and the wake-word tail ("...CAMERA") leaks in.
-        self.preroll_ms = float(c.get("preroll_ms", 300.0))
-        self.listen_timeout_sec = float(c.get("listen_timeout_sec", 8.0))
-        self.kws_threshold = float(c.get("kws_threshold", 0.25))
-        self.kws_score = float(c.get("kws_score", 1.5))
-        self.model_dir = self._resolve_model_dir(c.get("model_dir") or SHARED_MODEL_DIR)
+        self.preroll_ms = _f("preroll_ms", 300.0)
+        self.listen_timeout_sec = _f("listen_timeout_sec", 8.0)
+        self.kws_threshold = _f("kws_threshold", 0.25)
+        self.kws_score = _f("kws_score", 1.5)
+        self.model_dir = self._resolve_model_dir(
+            getattr(self, "model_dir", None) or c.get("model_dir")
+            or SHARED_MODEL_DIR)
         # runtime state broadcast to the panel / HA summary
         self._state = IDLE
         self._last_text = ""
-        self._sink = None
-        # The unified ConfigurableSink (if the manifest opted into output +
-        # configured an external channel). Located from the sink tree in run();
-        # on_config_reload forwards live filter/template changes to it.
-        self._out_sink = None
 
-    def on_config_reload(self, config):
-        """★S1 live hot-reload★ (config.json re-read).
+    def on_params_changed(self, changed):
+        """★S1 live hot-reload★ -- kit already re-bound the values; just log.
 
-        voice-transcribe's apply:"live" knobs are wakeword / min_silence_sec /
-        max_utterance_sec / preroll_ms / listen_timeout_sec / audio_filter.
-        Reapply by VALUE-REPLACE onto the app attributes (and refresh self.config
-        so audio_filter / audio_source re-read from it). NEVER rebuild the audio
-        source / VAD / wake-word / state machine -- those apply:"restart" knobs
-        (wake_backend, asr_backend, language, kws_*, model_dir, audio_source) are
-        not touched here.
+        The apply:"live" knobs are wakeword / min_silence_sec / max_utterance_sec
+        / preroll_ms / listen_timeout_sec / audio_filter. kit's SIGHUP path
+        re-binds each of them onto `self` (typed per the schema) and separately
+        re-applies the output filters/template on the sink, so nothing is done
+        by hand here. The apply:"restart" knobs (wake_backend, asr_backend,
+        language, kws_*, model_dir, audio_source) never reach this hook, so the
+        audio source / VAD / wake-word / state machine are never rebuilt.
 
-        NOTE: this app runs its own blocking audio loop (run() overrides the base
-        frame loop), so the currently-running VAD/wake/SM captured these values at
-        construction; a value replaced here takes effect on the next start/
-        restart, not mid-utterance. See TODO in the port notes re: wiring a live
-        SIGHUP path into VoiceStateMachine.
+        NOTE: this app runs its own blocking audio loop, so the currently-running
+        VAD/wake/SM captured these values at construction; a value replaced here
+        takes effect on the next start/restart, not mid-utterance. See TODO in
+        the port notes re: wiring a live SIGHUP path into VoiceStateMachine.
         """
-        params = self._reload_params(config)
-        self.config = config or {}
-        if "wakeword" in params:
-            self.wakeword = str(params["wakeword"])
-
-        self.min_silence_sec = self._reload_float(
-            params, "min_silence_sec", self.min_silence_sec)
-        self.max_utterance_sec = self._reload_float(
-            params, "max_utterance_sec", self.max_utterance_sec)
-        self.preroll_ms = self._reload_float(params, "preroll_ms", self.preroll_ms)
-        self.listen_timeout_sec = self._reload_float(
-            params, "listen_timeout_sec", self.listen_timeout_sec)
-        print(f"[voice-transcribe] hot-reload wakeword={self.wakeword!r} "
-              f"min_silence={self.min_silence_sec} max_utt={self.max_utterance_sec} "
-              f"preroll_ms={self.preroll_ms} listen_timeout={self.listen_timeout_sec} "
-              f"audio_filter={self.config.get('audio_filter')!r}", flush=True)
-        # Route the live change through the unified output sink so its filter /
-        # template (apply:"live") knobs re-apply without a restart. The base
-        # vision loop does this implicitly; this override must do it explicitly.
-        out = getattr(self, "_out_sink", None)
-        if out is not None:
-            try:
-                out.on_config_reload(config or {})
-            except Exception:
-                pass
+        print(f"[voice-transcribe] hot-reload changed={sorted(changed)} "
+              f"wakeword={self.wakeword!r} min_silence={self.min_silence_sec} "
+              f"max_utt={self.max_utterance_sec} preroll_ms={self.preroll_ms} "
+              f"listen_timeout={self.listen_timeout_sec} "
+              f"audio_filter={getattr(self, 'audio_filter', None)!r}", flush=True)
 
     def _resolve_model_dir(self, preferred):
         """First existing dir among (config, shared convention, staging)."""
@@ -172,20 +159,23 @@ class VoiceTranscribeApp(App):
         # points at the intended location.
         return preferred or SHARED_MODEL_DIR
 
-    # -- WS / MQTT event plumbing --------------------------------------------- #
+    # -- event plumbing -------------------------------------------------------- #
     def _on_voice_event(self, ev):
-        """VoiceStateMachine callback -> shape + publish one event to the sink.
+        """VoiceStateMachine callback -> shape + publish one event.
 
         The state machine emits {"type": state|wake|transcript|listen_timeout, ...}.
         We mirror `type` into `kind` (the field the /appcenter event log + MQTT
         summary key off), and attach a top-level `state` + `summary{state,text}`
         so the panel and Home Assistant always see the current state and the last
         transcript regardless of which event arrived.
+
+        This is this app's "loop body": the frame-driven apps tick + emit once
+        per frame, this one does it once per voice event.
         """
         # Apply any pending SIGHUP config hot-reload at an event boundary. The
-        # base vision loop calls this once per frame; this app has no frame loop,
-        # so we poll it on every voice event instead (best-effort, never raises).
-        self._maybe_reload()
+        # frame-driven shape gets this from self.frames(); a self-paced run()
+        # calls it itself (spec §2, `self.tick()`).
+        self.tick()
         kind = ev.get("type", "event")
         out = dict(ev)
         out["kind"] = kind
@@ -193,33 +183,21 @@ class VoiceTranscribeApp(App):
             self._state = ev.get("state", self._state)
         elif kind == "transcript":
             self._last_text = ev.get("text", "") or self._last_text
-        payload = {
-            "results": [],
-            "events": [out],
-            "state": self._state,
-            "summary": {"state": self._state, "text": self._last_text},
-        }
-        if self._sink is not None:
-            try:
-                self._sink.emit(payload, float(ev.get("t", 0.0)))
-            except Exception:
-                pass
+        # Same emit path as every other app: kit publishes through the sinks
+        # assembled from the manifest `output` block.
+        self.emit([out], float(ev.get("t", 0.0)),
+                  extra={"state": self._state,
+                         "summary": {"state": self._state,
+                                     "text": self._last_text}})
 
-    # -- main loop (overrides the vision base loop entirely) ------------------ #
-    def run(self, model_path=None, *, source="ffmpeg", url=None,
-            sink=None, n=0, every=1, verbose=True, **_kw):
+    # -- main loop (self-paced: audio chunks, not frames) ---------------------- #
+    def run(self):
         from kit.asr import Asr
         from kit.logic.vad import VadSegmenter
         from kit.logic.wakeword import SherpaKwsWakeWord, AsrKeywordWakeWord
         from kit.logic.voice_sm import VoiceStateMachine
 
-        self._sink = sink
-        # Enable SIGHUP config hot-reload for the lifetime of this loop (the base
-        # App.run() we override normally does this at kit/app.py:189-195), and
-        # locate the unified ConfigurableSink so on_config_reload can route
-        # filter/template changes through it (OUTPUT_SINK_SPEC §7).
-        self._install_reload_handler()
-        self._out_sink = _find_configurable_sink(sink)
+        verbose = self.verbose
         md = self.model_dir
         asr_model = os.path.join(md, "model.int8.onnx")
         asr_tokens = os.path.join(md, "tokens.txt")
@@ -229,8 +207,7 @@ class VoiceTranscribeApp(App):
         if verbose:
             print(f"[app:{self.id}] model_dir={md} backend={self.wake_backend} "
                   f"lang={self.language} min_silence={self.min_silence_sec} "
-                  f"max_utt={self.max_utterance_sec} preroll_ms={self.preroll_ms} "
-                  f"sink={type(sink).__name__}",
+                  f"max_utt={self.max_utterance_sec} preroll_ms={self.preroll_ms}",
                   flush=True)
 
         # audio source: WAV injection (tests) or live RTSP mic (default) ------- #
@@ -259,7 +236,9 @@ class VoiceTranscribeApp(App):
             audio_backend = str(self.config.get("audio_source", "ai_asr")).lower()
             if audio_backend == "rtsp":
                 from kit.adapters.audio_source import RtspAudioSource
-                rtsp = url or self.config.get("rtsp_url") \
+                # `self.source_url` is the CLI `--url` kit was started with (the
+                # same value the pre-migration run(url=...) parameter carried).
+                rtsp = self.source_url or self.config.get("rtsp_url") \
                     or "rtsp://admin:admin@127.0.0.1:5554/live/1"
                 if verbose:
                     print(f"[app:{self.id}] audio source = RtspAudioSource({rtsp}) "

@@ -80,6 +80,17 @@ class ResultSink(ABC):
         """
         pass
 
+    def on_config_reload(self, config: dict) -> None:
+        """Live-apply a config change (SIGHUP) to this sink.
+
+        `App._maybe_reload` calls this on the app's sink with the freshly
+        re-read effective config, so a sink whose behaviour is config-driven
+        (ConfigurableSink: output filters / formatter template) picks up
+        apply:"live" changes without a restart -- for EVERY app, whatever loop
+        shape it uses. Default: no-op; sinks with no config react to nothing.
+        """
+        pass
+
     def close(self) -> None:  # optional override
         pass
 
@@ -338,6 +349,16 @@ class MultiSink(ResultSink):
         for s in self.sinks:
             try:
                 s.set_frame_size(w, h)
+            except Exception:
+                pass
+
+    def on_config_reload(self, config: dict) -> None:
+        # Fan the hot-reload out so a wrapped ConfigurableSink re-applies its
+        # apply:"live" output filters / template. Isolated like every other
+        # fan-out here: one raising child never stops the rest.
+        for s in self.sinks:
+            try:
+                s.on_config_reload(config)
             except Exception:
                 pass
 

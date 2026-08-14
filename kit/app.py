@@ -309,6 +309,18 @@ class App:
                                       # False: the loop skips RknnModel + letterbox +
                                       # infer and calls process_frame(frame) instead.
 
+    # ★Frame appetite★. True (default) = this app consumes camera frames, so
+    # `start()` opens the frame source and `self.frames()` yields from it. Set it
+    # False on a loop-owning app whose input is NOT the camera (voice-transcribe
+    # reads audio chunks; a file/batch app reads its own input): kit then opens
+    # NO frame source at all -- no /dev/video, no RTSP client, no VPSS buffers --
+    # while `emit` / `tick` / `models` / config auto-binding all keep working
+    # exactly as they do for a frame-driven app (spec §2 hard constraint: an
+    # escape hatch must never cost you the rest of the infrastructure).
+    # `self.frames()` then raises with the reason instead of silently returning
+    # nothing. Ignored for legacy-shape apps (they always drive the base loop).
+    needs_frames: bool = True
+
     # Where the model-input letterbox is produced.  The Python resize costs
     # ~40 ms/frame at 1280x720 -> 640x640; moving it onto RGA measured +49% e2e
     # throughput.  Set it on your App subclass:
@@ -461,6 +473,18 @@ class App:
                   flush=True)
         except Exception as e:                 # app hook bug must not kill loop
             print(f"[app:{self.id}] config reload failed: {e}", flush=True)
+        # The sink is kit-owned infrastructure, so kit -- not the app -- routes
+        # the live change into it. A ConfigurableSink assembled from the manifest
+        # `output` block re-applies its apply:"live" filters/template here; every
+        # other sink no-ops. This is what makes `emit` fully kit-managed for a
+        # loop-owning app: it never has to go looking for its own sink.
+        rt = self._rt
+        if rt is not None:
+            try:
+                rt["sink"].on_config_reload(cfg)
+            except Exception as e:
+                print(f"[app:{self.id}] sink config reload failed: {e}",
+                      flush=True)
 
     # ------------------------------------------------------------------ #
     # New app shape: start / frames / pre / models / emit / tick
@@ -623,13 +647,18 @@ class App:
             raise ValueError(
                 "%s: model_frame must be 'cpu', 'hw' or 'hw-direct' (got %r)"
                 % (self.id, self.model_frame))
-        src = open_frame_source(
-            url=url,
-            prefer=source,
-            input_size=self._pre_size if mode != "cpu" else 0,
-            direct_preprocess=(mode == "hw-direct"),
-            hw_letterbox=(mode == "hw"),
-        )
+        if self.needs_frames:
+            src = open_frame_source(
+                url=url,
+                prefer=source,
+                input_size=self._pre_size if mode != "cpu" else 0,
+                direct_preprocess=(mode == "hw-direct"),
+                hw_letterbox=(mode == "hw"),
+            )
+        else:
+            # No camera at all (needs_frames = False). Everything else below --
+            # sink, SIGHUP handler, models, bound params -- is unchanged.
+            src = None
 
         if sink is None:
             sink = open_result_sink("stdout")
@@ -644,24 +673,52 @@ class App:
             "app_dir": app_dir, "source": source, "url": url,
             "grays_skipped": 0, "loop_start": None,
         }
-        self._warmed = False
+        # A frameless app has no warm-up frame to discard, so emit() must publish
+        # from its very first call (otherwise the first voice event -- the initial
+        # idle state -- would be silently dropped).
+        self._warmed = not self.needs_frames
         self._processed = 0
         self._install_reload_handler()
         if verbose:
             print(f"[app:{self.id}] models={[h.path for h in self.models]} "
-                  f"source={source} url={url} input={self._pre_size} "
+                  f"source={source if self.needs_frames else 'none'} "
+                  f"url={url if self.needs_frames else '-'} "
+                  f"input={self._pre_size} "
                   f"sink={type(sink).__name__}", flush=True)
         return self
+
+    # -- kit-owned runtime options a loop-owning run() may need ------------- #
+    @property
+    def verbose(self) -> bool:
+        """The `--quiet`-derived verbosity `start()` was given (True by default).
+
+        Available to any loop-owning `run()`; the legacy loop takes it as an
+        argument instead.
+        """
+        rt = self._rt
+        return True if rt is None else bool(rt.get("verbose", True))
+
+    @property
+    def source_url(self) -> Optional[str]:
+        """The `--url` value `start()` was given, or None before start().
+
+        Frame-driven apps never need it (kit already opened the source with it);
+        an app that owns its own input (voice-transcribe's RTSP audio-track
+        demux) reads the same CLI knob from here instead of re-parsing argv.
+        """
+        rt = self._rt
+        return None if rt is None else rt.get("url")
 
     def finish(self) -> None:
         """Release everything `start()` acquired and print the run summary."""
         rt, self._rt = self._rt, None
         if rt is None:
             return
-        try:
-            rt["src"].close()
-        except Exception:
-            pass
+        if rt["src"] is not None:
+            try:
+                rt["src"].close()
+            except Exception:
+                pass
         for h in self.models:
             h.release()
         if rt["own_sink"]:
@@ -676,7 +733,7 @@ class App:
                   f"(grey-skipped {rt['grays_skipped']}) ===", flush=True)
             print(f"[app:{self.id}] end-to-end {self._processed/wall:4.1f} fps",
                   flush=True)
-        elif rt["verbose"]:
+        elif rt["verbose"] and self.needs_frames:
             print(f"[app:{self.id}] no frames processed", file=sys.stderr)
 
     def frames(self) -> Iterator[Frame]:
@@ -704,6 +761,12 @@ class App:
             raise RuntimeError(
                 f"{type(self).__name__}.frames() called before start(); use "
                 f"run_app(app) (or app.start(...)) to drive a new-shape app")
+        if rt["src"] is None:
+            raise RuntimeError(
+                f"{type(self).__name__}.frames() called but the class declares "
+                f"`needs_frames = False`, so kit opened no camera frame source. "
+                f"Either drop that declaration, or drive your own input and use "
+                f"self.emit()/self.tick() (spec §3)")
         verbose = rt["verbose"]
         every = max(1, int(rt["every"] or 1))
         n = int(rt["n"] or 0)
@@ -876,7 +939,11 @@ class App:
                 "results": list(results) if results is not None else [],
                 "events": list(events) if events is not None else [],
                 "inference_time_ms": round(self._t_infer * 1000.0, 3),
-                "pipeline_ms": round((t0 - self._t_frame0) * 1000.0, 3),
+                # `_t_frame0` is set at each frame boundary by frames(); a
+                # frameless app (needs_frames=False) has no such boundary, so
+                # report 0 rather than "seconds since the monotonic epoch".
+                "pipeline_ms": (round((t0 - self._t_frame0) * 1000.0, 3)
+                                if self._t_frame0 else 0.0),
                 "stream_id": "camera-0",
             }
             if extra:

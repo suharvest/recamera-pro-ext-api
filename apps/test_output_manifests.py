@@ -16,8 +16,9 @@ Covered per §7's checklist:
   * the documented per-app pitfalls (ppocr label priority, retail cls==0,
     face demographics not scalar-flattened, fall multi-person aggregation,
     voice persistent summary).
-  * voice-transcribe's run()-override integration: SIGHUP reload install +
-    routing the reload through the ConfigurableSink.
+  * voice-transcribe's self-paced (owns_loop + needs_frames=False) integration:
+    SIGHUP re-binds the app knob AND kit routes the same reload down the sink
+    tree into the ConfigurableSink; one voice event publishes through it.
 
 Run:  python3 apps/test_output_manifests.py     (from repo root, or via pytest)
 """
@@ -401,43 +402,66 @@ def _load_voice_app():
     return mod
 
 
-def test_voice_finds_configurable_sink_in_nested_multisink():
+def _start_voice_app(sink, config=None):
+    """Start the (loop-owning, frameless) voice app on `sink` without running it."""
     mod = _load_voice_app()
+    app = mod.VoiceTranscribeApp()
+    app_dir = os.path.join(_ROOT, "apps", "voice-transcribe")
+    with open(os.path.join(app_dir, "manifest.json")) as f:
+        manifest = json.load(f)
+    app.start(None, sink=sink, verbose=False, app_dir=app_dir,
+              manifest=manifest, config=config or {})
+    return app
+
+
+def test_sink_reload_reaches_configurable_sink_through_nested_multisink():
+    """The generic replacement for the deleted `_find_configurable_sink`.
+
+    Hot-reload now travels DOWN the sink tree (ResultSink.on_config_reload ->
+    MultiSink fan-out), so no app has to walk it looking for its own sink.
+    """
     cs = ConfigurableSink(app_id="voice-transcribe", channels=[RecordChannel()],
                           formatter=RawJsonFormatter())
     nested = MultiSink([MultiSink([cs])])
-    assert mod._find_configurable_sink(nested) is cs
-    assert mod._find_configurable_sink(MultiSink([])) is None
-    print("PASS test_voice_finds_configurable_sink_in_nested_multisink")
+    nested.on_config_reload({"output_filters": {"only_on_detection": True}})
+    assert cs._only_on_detection is True, "filter not routed to ConfigurableSink"
+    MultiSink([]).on_config_reload({})          # empty tree must not raise
+    print("PASS test_sink_reload_reaches_configurable_sink_through_nested_multisink")
 
 
-def test_voice_reload_routes_through_configurable_sink():
-    mod = _load_voice_app()
-    app = mod.VoiceTranscribeApp()
-    app.setup({})
+def test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink():
+    """One SIGHUP: kit re-binds the app's live knob AND re-applies the sink's."""
     cs = ConfigurableSink(app_id="voice-transcribe", channels=[RecordChannel()],
                           formatter=RawJsonFormatter())
-    app._out_sink = cs
-    # a live change to both an app knob and an output filter
-    app.on_config_reload({"wakeword": "hey cam",
-                          "output_filters": {"only_on_detection": True}})
-    assert app.wakeword == "hey cam", "app knob not value-replaced"
+    app = _start_voice_app(cs)
+    assert app.wakeword == "hello camera", "manifest default not auto-bound"
+
+    from kit import config as _cfg
+    orig = _cfg.effective_config
+    _cfg.effective_config = lambda *a, **kw: {
+        "wakeword": "hey cam", "output_filters": {"only_on_detection": True}}
+    try:
+        app._reload_flag = True
+        app.tick()                              # what _on_voice_event calls
+    finally:
+        _cfg.effective_config = orig
+        app.finish()
+    assert app.wakeword == "hey cam", "app knob not re-bound by kit"
     assert cs._only_on_detection is True, "filter not routed to ConfigurableSink"
-    print("PASS test_voice_reload_routes_through_configurable_sink")
+    print("PASS test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink")
 
 
 def test_voice_event_polls_reload_and_emits_through_sink():
-    mod = _load_voice_app()
-    app = mod.VoiceTranscribeApp()
-    app.setup({})
     rec = RecordChannel()
     cs = ConfigurableSink(app_id="voice-transcribe", channels=[rec],
                           formatter=RawJsonFormatter())
-    app._sink = cs
-    app._out_sink = cs
-    # _maybe_reload must be safe to poll even with no pending SIGHUP.
-    app._reload_flag = False
-    app._on_voice_event({"type": "state", "state": "listening", "t": 1.0})
+    app = _start_voice_app(cs)
+    try:
+        # tick() must be safe to poll even with no pending SIGHUP.
+        app._reload_flag = False
+        app._on_voice_event({"type": "state", "state": "listening", "t": 1.0})
+    finally:
+        app.finish()
     assert rec.msgs, "voice event did not emit through the ConfigurableSink"
     body = json.loads(rec.msgs[-1].body.decode("utf-8"))
     # persistent top-level state is present in the raw envelope
@@ -461,8 +485,8 @@ _TESTS = [
     test_legacy_bypass_when_capability_absent,
     test_ws_only_optin_engages_no_external_channel,
     test_mqtt_channel_optin_builds_configurable_sink,
-    test_voice_finds_configurable_sink_in_nested_multisink,
-    test_voice_reload_routes_through_configurable_sink,
+    test_sink_reload_reaches_configurable_sink_through_nested_multisink,
+    test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink,
     test_voice_event_polls_reload_and_emits_through_sink,
 ]
 
