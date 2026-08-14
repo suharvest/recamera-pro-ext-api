@@ -62,9 +62,20 @@ provision_rknnlite() {
   "$RKNNENV/bin/pip" install --no-index --find-links "$WHEELS" \
       rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib jinja2 markupsafe \
     && echo "  wheels 离线安装完成 ($WHEELS)" || { echo "  WARN: 离线 pip install 失败"; return 1; }
+  # 3b) 让 venv 里能 import recamera_ext。SDK 的 python 包装在 $SDK_DST/python,
+  #     不在 venv 的 sys.path 上,否则走官方 FrameSource 的 app 会
+  #     ModuleNotFoundError: No module named 'recamera_ext'。
+  #     每次安装都重写,rknnenv 被删重建后依然生效。
+  SITEDIR=$("$RKNNENV/bin/python3" -c 'import site;print(site.getsitepackages()[0])' 2>/dev/null)
+  if [ -n "$SITEDIR" ] && [ -d "$SITEDIR" ]; then
+    echo "$SDK_DST/python" > "$SITEDIR/recamera_ext_sdk.pth"
+    echo "  wrote $SITEDIR/recamera_ext_sdk.pth -> $SDK_DST/python"
+  else
+    echo "  WARN: 找不到 venv site-packages -- recamera_ext .pth 未写入"
+  fi
   # 4) 自检
   if LD_LIBRARY_PATH=/oem/usr/lib "$RKNNENV/bin/python3" \
-       -c "from rknnlite.api import RKNNLite; RKNNLite(); print('rknnlite OK')"; then
+       -c "from rknnlite.api import RKNNLite; RKNNLite(); import recamera_ext; print('rknnlite + recamera_ext OK')"; then
     echo "  自检 PASSED"
   else
     echo "  WARN: rknnlite 自检失败 -- 上设备排查"

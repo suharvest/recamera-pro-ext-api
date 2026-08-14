@@ -20,6 +20,11 @@ import re
 APPS_DIR = os.environ.get("APPMGR_APPS_DIR", "/userdata/local/apps")
 KIT_PARENT = os.environ.get("APPMGR_KIT_PARENT", "/userdata/local/kit")
 APPMGR_DIR = os.environ.get("APPMGR_DIR", "/userdata/local/appmgr")
+# The extension SDK's python package (recamera_ext) is installed OUTSIDE the kit
+# tree by the firmware installer, and it is NOT inside /userdata/rknnenv's
+# site-packages -- so an app launched with the venv interpreter cannot import it
+# unless we put this on PYTHONPATH (or a .pth lands in site-packages).
+SDK_PYTHON = os.environ.get("APPMGR_SDK_PYTHON", "/userdata/sdk/python")
 # Per-app virtualenvs (future): apps that ship their own deps get an isolated
 # venv here, keyed by id. Not created yet for vision apps (they share the system
 # python) -- uninstall removes /userdata/local/venvs/<id> only if it exists.

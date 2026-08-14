@@ -163,8 +163,16 @@ def start(app_id: str) -> int:
 
     env = dict(os.environ)
     env["KIT_PARENT"] = paths.KIT_PARENT
-    env["PYTHONPATH"] = paths.KIT_PARENT + (
-        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    # Kit first, then the extension SDK python dir. recamera_ext lives in
+    # /userdata/sdk/python (dropped there by the firmware install.sh) and is NOT
+    # inside the rknnenv venv, so apps launched with the venv interpreter would
+    # otherwise die on `ModuleNotFoundError: No module named 'recamera_ext'` --
+    # which is exactly what a rollback.sh -> install.sh cycle exposes, since the
+    # rollback wipes /userdata/rknnenv and the rebuilt venv only gets wheels.
+    _pypath = [paths.KIT_PARENT, paths.SDK_PYTHON]
+    if env.get("PYTHONPATH"):
+        _pypath.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(_pypath)
     env["PYTHONUNBUFFERED"] = "1"
     # librecamera_ext.so.1 (the official extension API shared lib) ships in
     # /oem/usr/lib, which is NOT on the default musl loader search path, so an

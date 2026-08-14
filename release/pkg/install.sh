@@ -110,9 +110,21 @@ provision_rknnlite() {
   "$RKNNENV/bin/pip" install --no-index --find-links "$WHEELS" \
       rknn-toolkit-lite2 psutil ruamel.yaml ruamel.yaml.clib jinja2 markupsafe \
     && echo "  wheels installed offline from $WHEELS" || { echo "  WARN: offline pip install failed"; return 1; }
+  # 3b) make recamera_ext importable INSIDE the venv. It is copied to
+  #     /userdata/sdk/python (step [5/7]), which is not on the venv's sys.path,
+  #     so any app using the official FrameSource dies with
+  #     "ModuleNotFoundError: No module named 'recamera_ext'". A .pth survives
+  #     wipes of /userdata/rknnenv because we rewrite it on every install.
+  SITEDIR=$("$RKNNENV/bin/python3" -c 'import site;print(site.getsitepackages()[0])' 2>/dev/null)
+  if [ -n "$SITEDIR" ] && [ -d "$SITEDIR" ]; then
+    echo "/userdata/sdk/python" > "$SITEDIR/recamera_ext_sdk.pth"
+    echo "  wrote $SITEDIR/recamera_ext_sdk.pth -> /userdata/sdk/python"
+  else
+    echo "  WARN: cannot locate venv site-packages -- recamera_ext .pth not written"
+  fi
   # 4) self-check: import RKNNLite with the OEM runtime on LD path.
   if LD_LIBRARY_PATH=/oem/usr/lib "$RKNNENV/bin/python3" \
-       -c "from rknnlite.api import RKNNLite; RKNNLite(); print('rknnlite OK')"; then
+       -c "from rknnlite.api import RKNNLite; RKNNLite(); import recamera_ext; print('rknnlite + recamera_ext OK')"; then
     echo "  self-check PASSED"
   else
     echo "  WARN: rknnlite self-check FAILED (import/runtime issue) -- inspect on device"
