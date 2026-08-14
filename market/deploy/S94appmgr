@@ -61,16 +61,62 @@ reinject_nginx() {
     fi
 }
 
+# The pidfile is advisory, never authoritative. Two ways it goes stale:
+#   1. appmgr gets (re)started by something other than this script -- deploy-app.sh
+#      launches it under `setsid ... &`, and setsid FORKS when it is already a
+#      process-group leader (which a shell background job always is), so the `$!`
+#      that gets written is setsid's pid and it exits immediately. The pidfile is
+#      dead from the moment it is written.
+#   2. /var/run is tmpfs; after a reboot the file is gone while a pid could later
+#      be REUSED by an unrelated process.
+# `kill -0` cannot tell those apart, which made `restart` a silent no-op (stop
+# killed nothing, start hit appmgr's own flock and gave up, the original process
+# kept running) and, in the pid-reuse case, aimed a SIGKILL at a bystander.
+# So: verify identity through /proc/<pid>/cmdline, and fall back to scanning
+# /proc when the pidfile does not point at a real appmgr.
+MODULE_SIG="-m appmgr serve"
+
+is_appmgr_pid() {
+    [ -n "$1" ] || return 1
+    # Braces, not just `tr ... 2>/dev/null`: a failing `<` redirect is reported by
+    # the SHELL before tr ever runs, so the inner redirect misses it and every
+    # scan of a since-exited pid spams the console.
+    cmd=$({ tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null) || return 1
+    case "$cmd" in *"$MODULE_SIG"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Echo the pid of the running appmgr, or nothing. Never matches this script's own
+# shell: scanning by cmdline is what `pkill -f 'appmgr serve'` gets wrong -- that
+# pattern matches the very command performing the restart and kills its own shell.
+resolve_pid() {
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    if is_appmgr_pid "$pid"; then
+        echo "$pid"
+        return 0
+    fi
+    for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+        [ "$pid" = "$$" ] && continue
+        if is_appmgr_pid "$pid"; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
 is_running() {
-    [ -f "$PIDFILE" ] || return 1
-    kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+    [ -n "$(resolve_pid)" ]
 }
 
 start() {
     seed_s94_master
     reinject_nginx
-    if is_running; then
-        echo "$NAME already running (pid $(cat "$PIDFILE"))"
+    running=$(resolve_pid)
+    if [ -n "$running" ]; then
+        # Re-point the pidfile at the process we actually found, so a serve that
+        # was started out-of-band (deploy-app.sh) becomes manageable from here.
+        echo "$running" > "$PIDFILE"
+        echo "$NAME already running (pid $running)"
         return 0
     fi
     echo "Starting $NAME"
@@ -83,16 +129,37 @@ start() {
     "$PYTHON" -m appmgr serve >> "$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 1
-    is_running && echo "$NAME started (pid $(cat "$PIDFILE"))" || echo "$NAME failed to start (see $LOGFILE)"
+    started=$(resolve_pid)
+    if [ -n "$started" ]; then
+        echo "$started" > "$PIDFILE"
+        echo "$NAME started (pid $started)"
+    else
+        rm -f "$PIDFILE"
+        echo "$NAME failed to start (see $LOGFILE)"
+    fi
 }
 
 stop() {
     echo "Stopping $NAME"
-    if [ -f "$PIDFILE" ]; then
-        kill -TERM "$(cat "$PIDFILE")" 2>/dev/null
+    # Loop: there can be more than one serve alive (that is precisely the state a
+    # broken restart leaves behind), and `restart` must not return while any of
+    # them still holds :8130 -- the follow-on start would just lose the flock race.
+    while :; do
+        pid=$(resolve_pid) || break
+        [ -n "$pid" ] || break
+        kill -TERM "$pid" 2>/dev/null
+        # Wait for it to actually go, rather than assuming one fixed sleep was
+        # enough. Integer sleeps only -- fractional `sleep` is a BusyBox build
+        # option (FEATURE_FANCY_SLEEP) and this script must not depend on it.
+        i=0
+        while [ $i -lt 5 ] && is_appmgr_pid "$pid"; do
+            sleep 1
+            i=$((i + 1))
+        done
+        is_appmgr_pid "$pid" && kill -KILL "$pid" 2>/dev/null
         sleep 1
-        kill -KILL "$(cat "$PIDFILE")" 2>/dev/null
-    fi
+        is_appmgr_pid "$pid" && { echo "$NAME pid $pid will not die"; break; }
+    done
     rm -f "$PIDFILE"
 }
 
@@ -101,10 +168,12 @@ case "$1" in
     stop)    stop ;;
     restart) stop; sleep 1; start ;;
     status)
-        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-            echo "$NAME running (pid $(cat "$PIDFILE"))"
+        pid=$(resolve_pid)
+        if [ -n "$pid" ]; then
+            echo "$NAME running (pid $pid)"
         else
             echo "$NAME not running"
+            exit 3           # LSB: program is not running
         fi ;;
     *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
