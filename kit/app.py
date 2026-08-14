@@ -684,9 +684,13 @@ class App:
           * skips the camera's grey warm-up placeholder frames;
           * honours `--every N` frame skipping;
           * applies pending SIGHUP config hot-reloads at the frame boundary;
-          * runs the FIRST real frame as a model warm-up: your loop body executes
-            normally (so the NPU gets warm) but that frame's `emit()` is dropped,
-            exactly as the legacy loop did;
+          * consumes the FIRST real frame as a model warm-up: kit runs
+            `pre()` + one `infer()` on the primary model itself and does NOT
+            yield the frame, so your loop body -- and any cross-frame state it
+            carries -- starts on the SECOND real frame. This is exactly what the
+            legacy loop did (it warmed the NPU, then `continue`d before
+            `on_results`), which is what keeps a stateful app's tracker/dwell/
+            window identical across the migration;
           * measures the frame budget and flushes the periodic `metrics` meta
             event (pre/infer/emit measured by kit, the remainder is `app`);
           * stops after `--n` processed frames.
@@ -727,6 +731,15 @@ class App:
             if every > 1 and (fidx % every) != 0:
                 continue
 
+            if not self._warmed:
+                self._warmed = True
+                self._warm_up(frame)
+                rt["loop_start"] = time.monotonic()
+                if verbose:
+                    print(f"[app:{self.id}] warmup frame {frame.w}x{frame.h} "
+                          f"fmt={frame.fmt} (not handed to run())", flush=True)
+                continue
+
             # -- frame boundary: reset the per-frame timing buckets --------- #
             self._cur_frame = frame
             self._t_pre = self._t_infer = self._t_emit = 0.0
@@ -737,14 +750,6 @@ class App:
 
             total = time.monotonic() - self._t_frame0
             self._cur_frame = None
-
-            if not self._warmed:
-                self._warmed = True
-                rt["loop_start"] = time.monotonic()
-                if verbose:
-                    print(f"[app:{self.id}] warmup frame {frame.w}x{frame.h} "
-                          f"fmt={frame.fmt} (output dropped)", flush=True)
-                continue
 
             self._processed += 1
             app_ms = total - self._t_pre - self._t_infer - self._t_emit
@@ -801,6 +806,28 @@ class App:
 
             if n and self._processed >= n:
                 break
+
+    def _warm_up(self, frame: Frame) -> None:
+        """Kit-side NPU warm-up on the first real frame (see `frames()`).
+
+        Runs `pre()` + one `infer()` on the PRIMARY model, exactly what the
+        legacy loop did on the frame it then discarded. The app's `run()` body
+        never sees this frame, so cross-frame state (trackers, dwell timers,
+        rolling windows) starts on the same frame it did before the migration.
+
+        Best-effort: a warm-up failure is logged, never raised -- it costs
+        latency on the first real frame, nothing else. Cascade stages beyond the
+        primary model are not warmed (their input geometry is app-specific).
+        """
+        if not self.needs_model or not len(self.models):
+            return
+        try:
+            x = self.pre(frame)
+            self.models[0].infer(x.data)
+        except Exception as e:                 # warm-up is an optimisation only
+            print(f"[app:{self.id}] warm-up inference skipped ({e})", flush=True)
+        finally:
+            self._t_pre = self._t_infer = 0.0
 
     def pre(self, frame: Frame) -> PreparedInput:
         """Produce the model input for `frame` (letterbox to the manifest size).
