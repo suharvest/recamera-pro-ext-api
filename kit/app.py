@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
 import signal
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
@@ -289,6 +290,122 @@ def _is_new_shape(app: "App") -> bool:
     return False
 
 
+# --------------------------------------------------------------------------- #
+# manifest `models[].classes` -> class_names  (RENDER_DECLARATION_SPEC §5 P0-3)
+# --------------------------------------------------------------------------- #
+# Built-in label tables addressable by name from a manifest. Keep the keys
+# lowercase; lookup lowercases + strips the declared string.
+BUILTIN_CLASS_TABLES: Dict[str, List[str]] = {
+    "coco80": list(COCO80),
+    "coco": list(COCO80),
+}
+
+# A `classes` string is treated as a FILE reference (rather than a built-in
+# table name) when it carries one of these suffixes.
+_CLASS_FILE_SUFFIXES = (".txt", ".names", ".labels", ".json")
+
+
+def resolve_class_names(spec: Any, app_dir: Optional[str] = None,
+                        *, who: str = "app") -> Optional[List[str]]:
+    """Resolve a manifest `models[].classes` declaration into a label list.
+
+    Three accepted shapes (RENDER_DECLARATION_SPEC §5 P0-3):
+
+      1. built-in table name -- ``"coco80"``
+      2. literal array       -- ``["cat", "dog"]``
+      3. in-package file     -- ``"models/labels.txt"`` (one label per line,
+                                ``#`` comments and blank lines ignored) or a
+                                ``.json`` file holding an array of strings.
+
+    Returns ``None`` when there is nothing to resolve (``spec`` absent) or when
+    resolution FAILS -- failures are logged and the caller keeps its previous
+    value, so a typo in a manifest can never stop an app from starting.
+    """
+    if spec is None:
+        return None
+
+    # (2) literal array
+    if isinstance(spec, (list, tuple)):
+        names = [str(x) for x in spec]
+        if not names:
+            print(f"[app:{who}] manifest classes: empty array, ignored", flush=True)
+            return None
+        return names
+
+    if not isinstance(spec, str):
+        print(f"[app:{who}] manifest classes: unsupported type "
+              f"{type(spec).__name__}, ignored", flush=True)
+        return None
+
+    s = spec.strip()
+    if not s:
+        return None
+
+    # (3) in-package file -- only when it looks like a path/file name.
+    if s.lower().endswith(_CLASS_FILE_SUFFIXES) or "/" in s:
+        path = _class_file_path(s, app_dir, who)
+        if path is None:
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except OSError as e:
+            print(f"[app:{who}] manifest classes: cannot read {s!r} ({e}); "
+                  f"keeping default labels", flush=True)
+            return None
+        if s.lower().endswith(".json"):
+            try:
+                data = json.loads(raw)
+            except ValueError as e:
+                print(f"[app:{who}] manifest classes: {s!r} is not valid JSON "
+                      f"({e}); keeping default labels", flush=True)
+                return None
+            if not isinstance(data, list) or not data:
+                print(f"[app:{who}] manifest classes: {s!r} must hold a non-empty "
+                      f"JSON array; keeping default labels", flush=True)
+                return None
+            return [str(x) for x in data]
+        names = [ln.strip() for ln in raw.splitlines()]
+        names = [n for n in names if n and not n.startswith("#")]
+        if not names:
+            print(f"[app:{who}] manifest classes: {s!r} has no labels; "
+                  f"keeping default labels", flush=True)
+            return None
+        return names
+
+    # (1) built-in table name
+    table = BUILTIN_CLASS_TABLES.get(s.lower())
+    if table is None:
+        print(f"[app:{who}] manifest classes: unknown built-in table {s!r} "
+              f"(known: {sorted(BUILTIN_CLASS_TABLES)}); keeping default labels",
+              flush=True)
+        return None
+    return list(table)
+
+
+def _class_file_path(rel: str, app_dir: Optional[str], who: str) -> Optional[str]:
+    """Resolve an in-package labels file, refusing anything outside app_dir."""
+    if os.path.isabs(rel):
+        print(f"[app:{who}] manifest classes: absolute path {rel!r} refused",
+              flush=True)
+        return None
+    if not app_dir:
+        print(f"[app:{who}] manifest classes: {rel!r} needs an app dir to "
+              f"resolve against; keeping default labels", flush=True)
+        return None
+    root = os.path.realpath(app_dir)
+    path = os.path.realpath(os.path.join(root, rel))
+    if path != root and not path.startswith(root + os.sep):
+        print(f"[app:{who}] manifest classes: {rel!r} escapes the app dir; refused",
+              flush=True)
+        return None
+    if not os.path.isfile(path):
+        print(f"[app:{who}] manifest classes: {rel!r} not found in package; "
+              f"keeping default labels", flush=True)
+        return None
+    return path
+
+
 class App:
     """Base application. Subclass and override `setup` / `on_results`."""
 
@@ -298,6 +415,11 @@ class App:
     postproc: str = "detect"          # which post-processor the base loop runs
     input_size: int = 640             # stage-1 model input side (letterbox target);
                                       # ppocr-reader overrides to 480 for the DB detector
+    # ★Detector label table★. Kit default = COCO80. A subclass that DECLARES its
+    # own `class_names` (class attribute, or an instance assignment before
+    # start()) wins over the manifest -- the manifest's `models[].classes` only
+    # fills in when the app left this at the kit default. See start().
+    class_names: Sequence[str] = COCO80
     # ★Loop shape★ (KIT_APP_SHAPE_SPEC §1/§3). False = legacy shape: the base
     # `run(model_path, ...)` loop drives the app through run_postproc/on_results/
     # process_frame. True = the app owns the loop: it defines `def run(self):`
@@ -350,7 +472,10 @@ class App:
         # config_schema-backed knobs (defaults; overridden in setup())
         self.conf: float = 0.25
         self.iou: float = 0.45
-        self.class_names = COCO80
+        # NOTE: `class_names` is deliberately NOT assigned here. Writing it as an
+        # instance attribute would shadow a subclass's class-attribute
+        # declaration and make "did the app declare its own labels?" impossible
+        # to answer in start(). The class attribute above supplies the default.
         self.config: Dict[str, Any] = {}
         # Hot-reload (SIGHUP) flag. appmgr set_config sends SIGHUP after writing
         # config.json when ALL changed items are apply:"live" (see DESIGN
@@ -536,6 +661,30 @@ class App:
         self._params_bound = True
         return changed
 
+    def _bind_class_names(self, decls: List[dict], app_dir: Optional[str]) -> None:
+        """Fill `self.class_names` from the primary model's `classes` decl.
+
+        Precedence:  app declaration  >  manifest `models[0].classes`  >  COCO80.
+
+        "App declaration" = the subclass overrode the `class_names` class
+        attribute, or assigned `self.class_names` before start() ran. In that
+        case the manifest is not consulted at all (the app knows better than the
+        packaging metadata). Otherwise the manifest value is resolved via
+        `resolve_class_names`; anything unresolvable logs and leaves COCO80 in
+        place so the app still starts.
+        """
+        declared = ("class_names" in self.__dict__ or
+                    type(self).class_names is not App.class_names)
+        spec = decls[0].get("classes") if decls else None
+        if declared:
+            if spec is not None:
+                print(f"[app:{self.id}] class_names: app declaration wins over "
+                      f"manifest models[0].classes", flush=True)
+            return
+        names = resolve_class_names(spec, app_dir, who=self.id)
+        if names is not None:
+            self.class_names = names
+
     def start(
         self,
         model_path: Optional[str] = None,
@@ -631,6 +780,13 @@ class App:
                 except (TypeError, ValueError):
                     size = None
         self._pre_size = size or self.input_size
+
+        # -- detector labels: manifest `models[].classes`, app declaration wins #
+        # Same precedence shape as `input` above, with one addition: an app that
+        # DECLARED its own `class_names` (subclass attribute or a pre-start()
+        # instance assignment) is authoritative -- the manifest only fills the
+        # kit default (COCO80). Unresolvable declarations log and fall back.
+        self._bind_class_names(decls, app_dir)
 
         # setup() runs AFTER the auto-bind AND after the models are registered,
         # so an app that still needs one (to build derived objects: trackers,
