@@ -152,6 +152,11 @@ ok "appmgr code deployed (keys/ preserved from package)"
 # so the S94appmgr init script stays consistent. Stop the old serve by scanning
 # /proc for its cmdline (NOT `pkill -f`, which would match this very restart
 # command and kill our own shell); exclude this shell's own pid ($$).
+# The pid is recovered from /proc AFTER the process is up, not from `$!`: setsid
+# forks when it is already a process-group leader -- which a shell background job
+# always is -- so `$!` is setsid's own pid and it exits immediately. Writing that
+# left /var/run/appmgr.pid dead from birth, which is what made `S94appmgr
+# restart` a silent no-op afterwards.
 ash 'MOD="-m appmgr serve"; MY=$$; \
      [ -x /etc/init.d/S94appmgr ] && /etc/init.d/S94appmgr stop >/dev/null 2>&1; \
      [ -f /var/run/appmgr.pid ] && kill "$(cat /var/run/appmgr.pid)" 2>/dev/null; \
@@ -161,7 +166,13 @@ ash 'MOD="-m appmgr serve"; MY=$$; \
        case "$cmd" in *"$MOD"*) kill "$pid" 2>/dev/null;; esac; \
      done; sleep 3; \
      cd /userdata/local && setsid /usr/bin/python3 -m appmgr serve >> /var/log/appmgr.log 2>&1 < /dev/null & \
-     echo $! > /var/run/appmgr.pid; sleep 4' >/dev/null
+     sleep 4; \
+     rm -f /var/run/appmgr.pid; \
+     for pid in $(ls /proc 2>/dev/null | grep -E "^[0-9]+$"); do \
+       [ "$pid" = "$MY" ] && continue; \
+       cmd=$(tr "\0" " " < /proc/$pid/cmdline 2>/dev/null); \
+       case "$cmd" in *"$MOD"*) echo "$pid" > /var/run/appmgr.pid; break;; esac; \
+     done' >/dev/null
 if ash_rc "curl -s -m 8 http://127.0.0.1:8130/api/appMgr/list >/dev/null"; then
   ok "appmgr serve up on 127.0.0.1:8130"
 else
