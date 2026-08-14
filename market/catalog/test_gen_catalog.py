@@ -40,6 +40,53 @@ def _sha_size(path):
     return h.hexdigest(), n
 
 
+class CapabilitiesForwardingTests(unittest.TestCase):
+    """`capabilities` must survive manifest -> catalog.
+
+    The store decides BEFORE install whether an app needs something the device
+    may not have (`"audio"` -> the ~18 MB voice runtime, INSTALL_ASSETS_SPEC
+    §3.1). It can only see the catalog. voice-transcribe's manifest has carried
+    `["audio", "output"]` all along, but build_catalog listed a fixed set of keys
+    and this was not among them, so the front end's check could never fire.
+    """
+    DIST = os.path.normpath(os.path.join(_HERE, "..", "packaging", "dist"))
+
+    def _catalog(self):
+        return gen_catalog.build_catalog(self.DIST, "https://cdn.example/pkgs/")
+
+    def test_voice_transcribe_keeps_audio_capability(self):
+        apps = {a["id"]: a for a in self._catalog()["apps"]}
+        self.assertIn("voice-transcribe", apps, "voice-transcribe not in dist/")
+        self.assertEqual(apps["voice-transcribe"].get("capabilities"),
+                         ["audio", "output"])
+
+    def test_catalog_never_invents_capabilities(self):
+        """Only apps whose manifest declares them get the key at all."""
+        for app in self._catalog()["apps"]:
+            pkg = os.path.join(self.DIST, app["package"]["filename"])
+            declared = gen_catalog._read_manifest(pkg).get("capabilities")
+            if isinstance(declared, list):
+                self.assertEqual(app.get("capabilities"), declared, app["id"])
+            else:
+                self.assertNotIn("capabilities", app, app["id"])
+
+    def test_non_list_capabilities_is_dropped_not_forwarded(self):
+        """A malformed manifest must not put a string where the UI expects a list."""
+        with tempfile.TemporaryDirectory() as d:
+            man = {"id": "bogus-app", "name": "Bogus", "version": "0.0.1",
+                   "capabilities": "audio"}          # string, not a list
+            pkg = os.path.join(d, "bogus-app-0.0.1-arm64.tar.gz")
+            import io
+            import tarfile as _tf
+            blob = json.dumps(man).encode()
+            with _tf.open(pkg, "w:gz") as tar:
+                ti = _tf.TarInfo("manifest.json")
+                ti.size = len(blob)
+                tar.addfile(ti, io.BytesIO(blob))
+            app = gen_catalog.build_catalog(d, "https://cdn.example/pkgs/")["apps"][0]
+            self.assertNotIn("capabilities", app)
+
+
 class BuildModelsTests(unittest.TestCase):
     def setUp(self):
         with open(os.path.join(_HERE, "models.json")) as f:

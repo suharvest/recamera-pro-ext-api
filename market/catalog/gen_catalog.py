@@ -276,6 +276,14 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             **{k: man[k] for k in ("image", "scene", "author",
                                    "name_zh", "description_zh", "scene_zh")
                if man.get(k) is not None},
+            # Declared capabilities, forwarded verbatim. The browser needs these
+            # BEFORE install to know an app pulls in something the device may not
+            # have yet -- `"audio"` means the ~18 MB voice runtime has to be
+            # provisioned first (INSTALL_ASSETS_SPEC §3.1). Dropping them here is
+            # why that check could never fire: the manifest carries them, the
+            # catalog did not, and the catalog is all the store can see.
+            **({"capabilities": man["capabilities"]}
+               if isinstance(man.get("capabilities"), list) else {}),
             "arch": "arm64",
             "package": package,
             # Shared models the browser drops into target_path before install.
