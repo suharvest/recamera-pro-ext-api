@@ -1,5 +1,5 @@
 recamera-ext-api  v1.3.0
-Built: 2026-08-13   Target: reCamera Pro (RV1126B / recamera_v2)
+Built: 2026-08-14   Target: reCamera Pro (RV1126B / recamera_v2)
 
 ARTIFACTS (md5)
   rkipc                             9826e9ecf8ed543a6dc78e3731102e0f   15502408 B  -> /oem/usr/bin/rkipc
