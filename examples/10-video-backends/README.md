@@ -32,11 +32,22 @@ python3 video_backends.py --backend kit --hw-direct --model yolo11n.rknn --n 60
 | sub | `rtsp://admin:admin@127.0.0.1:5554/live/1` | 640×480 H.265（kit 默认） |
 | main | `rtsp://admin:admin@127.0.0.1:5554/live/0` | 4K H.265 |
 
-> 端口是 go2rtc 的 **5554**（本机回环），不是对外的 554。用户名/口令取自
+> 端口是 **5554**（本机回环），不是对外的 554。用户名/口令取自
 > `kit/adapters/frame_source.py:52` 的默认常量。**回环上不校验凭据**（2026-08-15 实测）：
 > `rtsp://wrong:wrong@127.0.0.1:5554/live/1` 与不带凭据的 `rtsp://127.0.0.1:5554/live/1`
 > 都能 `Sent PLAY request` 并收到 RTP 包，与正确凭据无差别。写 `admin:admin` 是沿用约定，
 > 不是访问条件。
+>
+> **归属订正 + 对外端口同样不校验**（2026-08-15，`ss -ltnp` 实测）：5554 的持有者是
+> **rkipc 自带的 `rtsp_demo` 服务器**（`users:(("rkipc",pid=970))`），不是 go2rtc；
+> go2rtc（pid 1007）持有的是对外的 **554**，它把 5554 当上游拉进来（`/tmp/go2rtc/go2rtc.yaml`
+> 的 `streams.main/sub` 指向 `rtsp://127.0.0.1:5554/live/{0,1}`）。两个端口都不校验凭据：
+> - 5554（rkipc rtsp_demo）**根本没有鉴权**，且 **bind `0.0.0.0` 而非仅回环** —— 只要网络可达
+>   就能裸拉，属于需要注意的暴露面。
+> - 554（go2rtc）运行时配置里**明确写了** `rtsp: {listen: ":554", username: "admin",
+>   password: "admin"}`，但 `rtsp://wrong:wrong@127.0.0.1:554/sub` 照样出
+>   `Input #0, rtsp` + `Stream #0:0: Video: hevc (Main) 640x480` —— **播放路径不强制该凭据**。
+>   注意 go2rtc 的流名是 `main`/`sub`，不是 `/live/N`（`rtsp://…@127.0.0.1:554/live/1` 返回 404）。
 
 **不要**在你的进程里另开 `/dev/videoN`、另建 VI/VPSS 通道去"自己采一路"。两路采集同时
 跑会撞出 `CSIBDG fifo overflow` → VPSS 错误 → 内核 Oops，只能重启设备。第三方框架在这里
