@@ -46,6 +46,7 @@ from kit import events as E                                          # noqa: E40
 class YoloDetectorApp(App):
     id = "yolo-detector"
     name = "YOLO Detector"
+    owns_loop = True          # explicit new shape: run() drives self.frames()
     # Only boxes are consumed -- never frame.data pixels -- so the frame source
     # can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"

@@ -220,23 +220,73 @@ def _coerce(spec_type: Optional[str], value):
     return value
 
 
-def _is_new_shape(app: "App") -> bool:
-    """True when the subclass overrides `run()` with the new no-argument form.
+_POSITIONAL_KINDS = (inspect.Parameter.POSITIONAL_ONLY,
+                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                     inspect.Parameter.VAR_POSITIONAL)
 
-    The new shape is exactly `def run(self):` -- no parameters. Deliberately
-    strict: voice-transcribe already overrides the LEGACY signature
-    (`run(self, model_path=None, *, source=..., ...)`) to take over the loop, and
-    a looser test would misroute it through the new `start()` path (which opens a
-    camera frame source it does not want).
+
+def _run_takes_positional(fn) -> bool:
+    """True when `fn` (an unbound `run`) accepts any positional arg besides self.
+
+    That is the shape of the LEGACY loop entry point
+    (`run(self, model_path, *, source=..., ...)`); the new shape takes none.
+    Unintrospectable callables are treated as legacy (the safer default: the old
+    path is what every not-yet-migrated app uses).
     """
-    fn = getattr(type(app), "run", None)
-    if fn is None or fn is App.run:
-        return False
     try:
         sig = inspect.signature(fn)
     except (TypeError, ValueError):     # pragma: no cover - exotic callables
-        return False
-    return [n for n in sig.parameters if n != "self"] == []
+        return True
+    params = [p for n, p in sig.parameters.items() if n != "self"]
+    return any(p.kind in _POSITIONAL_KINDS for p in params)
+
+
+def _is_new_shape(app: "App") -> bool:
+    """Which loop shape this app uses -- decided by the EXPLICIT `owns_loop` flag.
+
+    `owns_loop = True` on the subclass means "I drive the loop myself"
+    (KIT_APP_SHAPE_SPEC §1/§3): kit calls `start()` + `run()` + `finish()`.
+    Everything else goes down the legacy `run(model_path, ...)` path.
+
+    Signature sniffing was removed on purpose. It made `def run(self, *,
+    debug=False)` -- a perfectly reasonable new-shape signature -- silently fall
+    through to the legacy path, which opens a camera frame source the app never
+    asked for. Instead the two ways of getting it wrong are now hard startup
+    errors:
+
+      * a `run()` that LOOKS new-shape (takes no positional arg) but has no
+        `owns_loop = True`;
+      * `owns_loop = True` on a `run()` that still takes positional args
+        (i.e. the legacy signature, or `run()` not overridden at all).
+    """
+    cls = type(app)
+    fn = getattr(cls, "run", None)
+    overridden = fn is not None and fn is not App.run
+    owns = bool(getattr(cls, "owns_loop", False))
+
+    if owns:
+        if not overridden:
+            raise RuntimeError(
+                f"{cls.__name__}: owns_loop = True but run() is not overridden; "
+                f"a loop-owning app must define `def run(self): "
+                f"for frame in self.frames(): ...` (spec §1)")
+        if _run_takes_positional(fn):
+            raise RuntimeError(
+                f"{cls.__name__}: owns_loop = True but run{inspect.signature(fn)} "
+                f"takes positional arguments; a loop-owning run() takes no "
+                f"arguments (kit supplies frames via self.frames()) (spec §1)")
+        return True
+
+    if overridden and not _run_takes_positional(fn):
+        raise RuntimeError(
+            f"{cls.__name__}: run{inspect.signature(fn)} takes no positional "
+            f"arguments, which is the NEW app shape, but the class does not set "
+            f"`owns_loop = True`. Add `owns_loop = True` to {cls.__name__} (kit "
+            f"will then call start()/run()/finish() and hand you frames via "
+            f"self.frames()); if you really meant the legacy callback shape, "
+            f"keep the legacy run(self, model_path, ...) signature instead "
+            f"(spec §1/§3).")
+    return False
 
 
 class App:
@@ -248,6 +298,13 @@ class App:
     postproc: str = "detect"          # which post-processor the base loop runs
     input_size: int = 640             # stage-1 model input side (letterbox target);
                                       # ppocr-reader overrides to 480 for the DB detector
+    # ★Loop shape★ (KIT_APP_SHAPE_SPEC §1/§3). False = legacy shape: the base
+    # `run(model_path, ...)` loop drives the app through run_postproc/on_results/
+    # process_frame. True = the app owns the loop: it defines `def run(self):`
+    # and iterates `self.frames()`; kit calls start()/run()/finish() around it.
+    # This is an EXPLICIT declaration -- kit never guesses from the signature.
+    owns_loop: bool = False
+
     needs_model: bool = True          # CPU-only apps (e.g. qrcode-reader) set this
                                       # False: the loop skips RknnModel + letterbox +
                                       # infer and calls process_frame(frame) instead.
@@ -485,6 +542,14 @@ class App:
             manifest = _cfg.load_manifest(app_dir)
         self._manifest = manifest or {}
 
+        # Shape guard: start() is the loop-owning entry point, so the class must
+        # actually declare `owns_loop = True` with a no-argument run(). Raises
+        # with the fix spelled out when the two disagree (see _is_new_shape).
+        if not _is_new_shape(self):
+            raise RuntimeError(
+                f"{type(self).__name__}: start() is the loop-owning entry point "
+                f"but the class does not declare `owns_loop = True`")
+
         # Migration guard (spec §6): the new shape and the old callback shape
         # must never both be present -- a silent precedence rule would be worse
         # than a startup failure.
@@ -496,7 +561,14 @@ class App:
                 f"{cls.__name__}: new-shape run() cannot be combined with legacy "
                 f"hook(s) {legacy}; move that logic into run() (spec §6)")
 
-        self._bind_params(config if config is not None else (self.config or {}))
+        cfg = config if config is not None else (self.config or {})
+        self._bind_params(cfg)
+        # setup() runs AFTER the auto-bind so an app that still needs one (to
+        # build derived objects: trackers, zone geometry, state machines) can
+        # read the already-bound `self.<param>` attributes instead of digging
+        # through the raw config dict. `run_app` therefore does NOT call setup()
+        # for a loop-owning app -- start() owns that call.
+        self.setup(cfg)
 
         # -- models: preload + absolutise paths --------------------------- #
         self.models = ModelRegistry()
@@ -1086,7 +1158,12 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
         eff["conf"] = args.conf
     if args.iou is not None:
         eff["iou"] = args.iou
-    app.setup(eff)
+    # Decide the loop shape FIRST: a mis-declared shape must fail before we open
+    # sinks or a camera. Loop-owning apps get their setup() from start(), after
+    # the config_schema auto-bind (see App.start).
+    new_shape = _is_new_shape(app)
+    if not new_shape:
+        app.setup(eff)
 
     if args.sink == "stdout":
         primary: ResultSink = open_result_sink("stdout")
@@ -1116,7 +1193,7 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
             sinks.append(mqtt)
     sink: ResultSink = MultiSink(sinks) if len(sinks) > 1 else sinks[0]
     try:
-        if _is_new_shape(app):
+        if new_shape:
             # New shape (KIT_APP_SHAPE_SPEC §1): the app owns the loop; kit
             # supplies frames/pre/models/emit/tick via start().
             app.start(args.model, source=args.source, url=args.url, sink=sink,

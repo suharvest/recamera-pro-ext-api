@@ -342,6 +342,7 @@ class NewShapeApiTests(unittest.TestCase):
 
         class _G(kit_app.App):
             id = "grouped-app"
+            owns_loop = True
             needs_model = False
 
             def run(self):
@@ -370,6 +371,7 @@ class NewShapeApiTests(unittest.TestCase):
     def test_new_shape_rejects_legacy_hooks(self):
         class _Mixed(kit_app.App):
             id = "mixed"
+            owns_loop = True
             needs_model = False
 
             def run(self):
@@ -412,6 +414,126 @@ class NewShapeApiTests(unittest.TestCase):
         app = _load_new_app_class()()
         with self.assertRaises(RuntimeError):
             next(iter(app.frames()))
+
+
+class LoopShapeDeclarationTests(unittest.TestCase):
+    """`owns_loop` is the ONLY shape switch -- and a mismatch is a hard error.
+
+    The 2x2 matrix of (owns_loop declared?) x (run() looks new-shape?):
+
+        owns_loop | run() signature          | expected
+        ----------+--------------------------+--------------------------------
+        True      | no positional args       | new shape
+        False     | legacy positional args   | legacy shape
+        False     | no positional args       | RuntimeError (the trap: this
+                  |                          | used to be silently misrouted
+                  |                          | to the legacy camera loop)
+        True      | legacy positional args   | RuntimeError
+    """
+
+    # 1. declared + new-shape signature -> new shape
+    def test_declared_and_no_positional_is_new_shape(self):
+        class _Ok(kit_app.App):
+            id = "ok"
+            owns_loop = True
+
+            def run(self):
+                pass
+
+        self.assertTrue(kit_app._is_new_shape(_Ok()))
+
+    def test_declared_with_keyword_only_args_is_new_shape(self):
+        """`def run(self, *, debug=False)` is a legitimate new shape -- the old
+        signature sniffing rejected it and silently opened a camera."""
+
+        class _Kw(kit_app.App):
+            id = "kw"
+            owns_loop = True
+
+            def run(self, *, debug=False):
+                pass
+
+        self.assertTrue(kit_app._is_new_shape(_Kw()))
+
+    # 2. not declared + legacy signature -> legacy shape, no error
+    def test_undeclared_legacy_signature_is_legacy_shape(self):
+        """voice-transcribe's take-over run() keeps working, silently."""
+
+        class _TakeOver(kit_app.App):
+            id = "voice-like"
+
+            def run(self, model_path=None, *, source="ffmpeg", url=None,
+                    sink=None, n=0, every=1, verbose=True, **kw):
+                pass
+
+        self.assertFalse(kit_app._is_new_shape(_TakeOver()))
+
+    def test_no_run_override_is_legacy_shape(self):
+        class _Plain(kit_app.App):
+            id = "plain"
+
+        self.assertFalse(kit_app._is_new_shape(_Plain()))
+
+    # 3. THE TRAP: looks new-shape but never declared -> hard error
+    def test_undeclared_new_signature_raises(self):
+        class _Trap(kit_app.App):
+            id = "trap"
+
+            def run(self):
+                pass
+
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._is_new_shape(_Trap())
+        msg = str(cm.exception)
+        self.assertIn("owns_loop = True", msg)
+        self.assertIn("_Trap", msg)
+
+    def test_undeclared_keyword_only_run_raises(self):
+        class _Trap2(kit_app.App):
+            id = "trap2"
+
+            def run(self, *, debug=False):
+                pass
+
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._is_new_shape(_Trap2())
+        self.assertIn("owns_loop = True", str(cm.exception))
+
+    def test_undeclared_new_signature_raises_from_start(self):
+        """The trap must also fire on a direct start() call, not just run_app."""
+
+        class _Trap3(kit_app.App):
+            id = "trap3"
+            needs_model = False
+
+            def run(self):
+                pass
+
+        with self.assertRaises(RuntimeError):
+            _Trap3().start(None, sink=_RecordingSink(), verbose=False,
+                           app_dir=APP_DIR, manifest={"id": "trap3"}, config={})
+
+    # 4. declared but run() still takes positional args -> hard error
+    def test_declared_with_positional_run_raises(self):
+        class _Bad(kit_app.App):
+            id = "bad"
+            owns_loop = True
+
+            def run(self, model_path=None, **kw):
+                pass
+
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._is_new_shape(_Bad())
+        self.assertIn("positional", str(cm.exception))
+
+    def test_declared_without_run_override_raises(self):
+        class _Bad2(kit_app.App):
+            id = "bad2"
+            owns_loop = True
+
+        with self.assertRaises(RuntimeError) as cm:
+            kit_app._is_new_shape(_Bad2())
+        self.assertIn("not overridden", str(cm.exception))
 
 
 if __name__ == "__main__":
