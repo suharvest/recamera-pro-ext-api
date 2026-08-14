@@ -29,6 +29,11 @@ API (loopback 127.0.0.1:8130; nginx /_jwt_verify guards the public edge):
                                 §1; the 133 MB voice model cannot beat nginx's
                                 proxy_read_timeout). Digests are memoized on
                                 (size, mtime_ns, inode) -- see assets.py.
+  GET  /api/appMgr/runtime?name=voice
+                             -> is the on-demand audio runtime importable in
+                                /userdata/rknnenv (INSTALL_ASSETS_SPEC §3)
+  POST /api/appMgr/runtime   {name?, path?} -> offline pip-install the runtime
+                                bundle previously staged via /upload; idempotent
   POST /api/appMgr/install   {path: "/userdata/.../x.tar.gz"}
   POST /api/appMgr/uninstall {id}   (stop if running, clear active, rm app dir;
                                      shared /userdata/local/models untouched)
@@ -62,7 +67,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
 from . import (assets, builtin, config as appconfig, installer, modelstore,
-               mqtt as mqttcfg, paths, state, supervisor)
+               mqtt as mqttcfg, paths, state, supervisor, voiceruntime)
 
 
 # --------------------------------------------------------------------------- #
@@ -250,6 +255,30 @@ def do_assets(paths_param: str) -> dict:
     if not any(p.strip() for p in parts):
         raise ValueError("missing 'paths'")
     return assets.query(parts)
+
+
+def do_runtime_status(name: str = "voice") -> dict:
+    """GET /api/appMgr/runtime?name=voice -> is the on-demand runtime importable?
+
+    The front end calls this before installing an app whose manifest declares
+    capabilities:["audio"], so it can ask the user about the extra ~18 MB instead
+    of silently downloading it (INSTALL_ASSETS_SPEC §3.4).
+    """
+    return voiceruntime.status(name)
+
+
+def do_runtime_install(name: str, pkg_path: str = None) -> dict:
+    """POST /api/appMgr/runtime {name, path} -> install the runtime bundle.
+
+    `path` is what /api/appMgr/upload returned for voice-runtime-<ver>.tar.gz.
+    Idempotent: an already-importable runtime returns already_present without
+    running pip, so a repeat install of an audio app costs nothing.
+    """
+    with busy_gate():
+        res = voiceruntime.install(name, pkg_path)
+        _audit("runtime", name=name, installed=res.get("installed"),
+               already_present=res.get("already_present"))
+        return res
 
 
 def do_list() -> dict:
@@ -886,6 +915,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             except OSError as e:
                 return self._send(500, {"error": repr(e)})
+        if path == "/api/appMgr/runtime":
+            name = (parse_qs(parsed.query).get("name") or ["voice"])[0]
+            try:
+                return self._send(200, do_runtime_status(name))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/appMgr/mqtt":
             return self._send(200, do_get_mqtt())
         if path == "/api/appMgr/metrics":
@@ -970,6 +1005,10 @@ class _Handler(BaseHTTPRequestHandler):
                 if "config" not in body or not isinstance(body["config"], dict):
                     return self._send(400, {"error": "missing/invalid 'config'"})
                 return self._send(200, do_set_config(i, body["config"]))
+            if path == "/api/appMgr/runtime":
+                # {name?: "voice", path?: "/userdata/appstage/voice-runtime-*.tar.gz"}
+                return self._send(200, do_runtime_install(
+                    body.get("name") or "voice", body.get("path")))
             if path == "/api/appMgr/mqtt":
                 cfg = body.get("mqtt", body)
                 if not isinstance(cfg, dict):

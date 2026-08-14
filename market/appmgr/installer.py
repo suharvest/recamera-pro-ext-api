@@ -104,6 +104,53 @@ def _vet_icon_member(m: tarfile.TarInfo, name: str) -> None:
             f"icon too large: {m.size} > {paths.MAX_ICON_BYTES} ({name!r})")
 
 
+def validate_pkg_path(pkg_path: str) -> str:
+    """Public form of the package-path check (root whitelist, suffix, size cap).
+
+    Exposed because the on-demand runtime installer (voiceruntime.py) receives a
+    device path from the same browser-relayed /upload flow and must apply the
+    same gate; re-deriving it there is how the two would drift.
+    """
+    return _validate_pkg_path(pkg_path)
+
+
+def extract_vetted(pkg_path: str, dest_dir: str) -> list:
+    """Unpack a .tar.gz into `dest_dir` with the app-install member vetting.
+
+    Same anti-zip-slip/tar-bomb rules as install() -- no absolute paths, no `..`,
+    no links or device nodes, no setuid bits, member count and unpacked-size caps
+    -- but it drops the payload into a caller-chosen directory instead of
+    /userdata/local/apps/<id>/ and does not look for a manifest. Used for
+    non-app payloads (the voice runtime's wheel bundle). Returns the extracted
+    member names.
+    """
+    real = _validate_pkg_path(pkg_path)
+    names = []
+    total = 0
+    with tarfile.open(real, "r:gz") as tar:
+        members = tar.getmembers()
+        if len(members) > paths.MAX_MEMBERS:
+            raise InstallError(f"too many members: {len(members)} > {paths.MAX_MEMBERS}")
+        for m in members:
+            _vet_member(m, dest_dir)
+            total += max(0, m.size)
+            if total > paths.MAX_UNPACKED_BYTES:
+                raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
+            outp = os.path.join(dest_dir, m.name)
+            if m.isdir():
+                os.makedirs(outp, exist_ok=True)
+                continue
+            f = tar.extractfile(m)
+            if f is None:
+                raise InstallError(f"cannot extract member {m.name!r}")
+            os.makedirs(os.path.dirname(outp) or dest_dir, exist_ok=True)
+            with open(outp, "wb") as w:
+                shutil.copyfileobj(f, w)
+            os.chmod(outp, 0o644)
+            names.append(m.name)
+    return names
+
+
 def _read_manifest_from_tar(tar: tarfile.TarFile) -> dict:
     try:
         member = tar.getmember("manifest.json")
