@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy-firmware.sh -- reCamera Pro v1.3.0 MASKING FIRMWARE deploy (HIGH RISK).
+# deploy-firmware.sh -- reCamera Pro v1.4.0 MASKING FIRMWARE deploy (HIGH RISK).
 #
 #   #############################################################################
 #   ##  DANGER -- READ BEFORE RUNNING                                          ##
@@ -45,7 +45,7 @@ done
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SERIAL="${HOST}:5555"
 STAGE=/userdata/ext-pkg
-VER=1.3.0
+VER=1.4.0
 PKG="$HERE/recamera-ext-api-v${VER}.tar"
 
 red()  { printf '\033[1;31m%s\033[0m\n' "$*"; }

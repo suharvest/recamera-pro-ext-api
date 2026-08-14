@@ -28,7 +28,7 @@ import os
 import sys
 import tarfile
 
-DEFAULT_VERSION = "1.3.0"
+DEFAULT_VERSION = "1.4.0"
 
 # The 9 shipped apps.
 APPS = [
