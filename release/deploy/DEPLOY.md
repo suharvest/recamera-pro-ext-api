@@ -88,16 +88,26 @@ cd release/deploy
 | 脚本 | 解决什么 | 谁需要 |
 |---|---|---|
 | `market/deploy/provision-runtime.sh` | 让 `recamera_ext` 在 rknn venv 里可导入 | **所有 app** |
-| `market/deploy/provision-voice.sh` | 音频依赖(`voxedge`/`sherpa_onnx`/…)+ ASR 模型 | 只有 `voice-transcribe` |
 | `market/deploy/appmgr-restore.sh` | OTA 会冲掉 `/etc/init.d/S94appmgr`,靠它恢复 | **OTA 之后** |
 
-> ⚠️ **`provision-voice.sh` 目前无法开箱使用**:脚本在,但它要的 payload(离线 wheel + ~133 MB ASR 模型)既不在仓里、也不在发布包里、也不在 CDN 上,且 `deploy-app.sh` 不调用它。**因此没有手工 provision 过的设备,装上 `voice-transcribe` 也起不来**(表现为运行时 `ModuleNotFoundError: No module named 'voxedge'`,而不是安装失败)。其余 8 个视觉 app 不受影响。
+装一个 app 的顺序:
+```
+provision-runtime.sh  →  装 app 包(应用中心或 deploy-app.sh)  →  激活
+```
 
-装一个"带 venv + 共享模型"的 app 的完整顺序:
+**音频运行时不再需要手工 provision。** `voice-transcribe` 这类声明 `capabilities: ["audio"]` 的 app,应用中心会在安装时检测运行时缺不缺,缺则从 CDN 取 `voice-runtime-<ver>.tar.gz`(约 18 MB,5 个 aarch64/cp311 wheel)装进 `/userdata/rknnenv`。它**不进 kit 包** —— 8 个视觉 app 永远用不到,而 kit 包每次更新都要重传。
+手工触发:
+
+```bash
+curl -X POST http://127.0.0.1:8130/api/appMgr/runtime \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"audio","path":"/userdata/appstage/voice-runtime-<ver>.tar.gz"}'
+curl 'http://127.0.0.1:8130/api/appMgr/runtime?name=audio'   # present:true 才算装好
 ```
-provision-runtime.sh  →  provision-voice.sh(仅语音)  →  装 app 包  →  激活
-```
-视觉 app 只需第 1、3、4 步。
+
+> ⚠️ **不要为了装它去升级 numpy。** `/userdata/rknnenv` 是**共享** venv,9 个视觉 app 全靠里面的 `rknn-toolkit-lite2 2.3.2`,设备上 numpy 是 **1.23.5**(正是该工具链配套版本)。`voxedge` 的 metadata 写 `numpy>=1.24`,但它实际用到的接口没有一个是 1.24 之后新增的 —— 那是作者随手写的下限。所以离线安装走 `--no-deps`,判定成败的是安装后在目标解释器里 `import voxedge, sherpa_onnx` 是否通过,而不是 pip 的元数据断言。真机已验证:装完 numpy 仍 1.23.5、`rknnlite` 仍能 import、语音 app 能加载 SenseVoice 并进入 listening。
+
+> `market/deploy/provision-voice.sh` 仍然保留,用于**完全离线**(设备连不上 CDN)时从本地 payload 落音频依赖 + ASR 模型。它比上面这条路多落一个 `silero_vad.onnx`,细节见 `docs/guide/deploy-ops.md` §4.4。两条路二选一,不要都跑。
 
 ---
 

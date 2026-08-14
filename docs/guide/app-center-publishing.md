@@ -223,8 +223,12 @@ app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方
 > 及对应解释器/venv。默认用 appmgr 自己的 `sys.executable`；manifest 用 `interpreter`
 > 指定 per-app 解释器（如 voice-transcribe 的 `/userdata/rknnenv/bin/python`，
 > `supervisor.py:93-113`，缺失则 switch 硬报错）。这些依赖由**运行时侧 provision**
-> （视觉基础环境 `market/deploy/provision-runtime.sh`；voice 音频运行时 `market/deploy/provision-voice.sh`），
-> 打包/上架链路不负责，部署前提详见 [deploy-ops.md](./deploy-ops.md) §4.4。
+> （视觉基础环境 `market/deploy/provision-runtime.sh`），部署前提详见 [deploy-ops.md](./deploy-ops.md) §4.4。
+>
+> **音频运行时是例外,上架链路要管**:app 在 manifest 声明 `capabilities: ["audio"]`,
+> `gen_catalog` 会把它连同 `runtimes.audio` 描述符写进 catalog,应用中心据此在安装时
+> 按需补齐 `voice-runtime-<ver>.tar.gz`(约 18 MB)。**发布时忘了把这个包传上 CDN,
+> catalog 里就不会有 `runtimes` 段**(生成器缺包时不写占位),语音类 app 装上跑不了。
 >
 > **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类**大而通用**的依赖走**平台共享基础环境**
 > `/userdata/rknnenv`（provision 一次，8 个视觉 app 复用）；大而共享的**模型**走 catalog

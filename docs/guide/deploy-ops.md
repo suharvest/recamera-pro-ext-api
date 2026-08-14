@@ -222,7 +222,13 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 > **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类大而通用的依赖走**共享基础环境** `/userdata/rknnenv`（`provision-runtime.sh`，8 视觉 app 复用）；大而共享的**模型**走 catalog `models[]`+`putModel`。app **独有**的增量 Python 依赖（PyAV、特定框架…）不应塞进共享基础环境——见 [per-app-dependencies.md](./per-app-dependencies.md)（**设计文档，尚未实现**：安装时建 per-app venv 从离线 wheel 装入；`installer.uninstall()` 已会一并删 `/userdata/local/venvs/<id>`）。
 
-> 小结：部署一个"带 venv + 共享模型"的 app（如 voice-transcribe）＝ ①`provision-runtime.sh`（venv + recamera_ext 可导入）→ ②`provision-voice.sh`（音频依赖 + `putModel`/copy 共享模型到 `/userdata/local/models/asr`）→ ③装 app 包 → ④switch。视觉 app 只需 ①③④。缺 provision 的那一步会在 switch/运行时失败，而非安装时。
+**★按需运行时（现在的默认路径，2026-08-15 起）**：音频依赖已进分发链路，不必再手工 provision。app 在 manifest 声明 `capabilities: ["audio"]`，`gen_catalog` 把它连同 `runtimes.audio` 描述符写进 catalog，应用中心装它之前先问设备 `GET /api/appMgr/runtime?name=audio`，缺则取 `voice-runtime-<ver>.tar.gz`（约 18 MB，5 个 aarch64/cp311 wheel）经 `POST /api/appMgr/runtime` 离线装进 `/userdata/rknnenv`。幂等：已就位直接跳过，不跑 pip。
+
+> ⚠️ **离线安装用 `--no-deps`，别去满足 `voxedge` 的 `numpy>=1.24`。** 共享 venv 里 numpy 是 **1.23.5**——那是 `rknn-toolkit-lite2 2.3.2` 配套的版本，9 个视觉 app 都靠它。升 numpy 是拿 9 个能跑的换 1 个。那个下限也不是真的：voxedge 实际用到的 numpy 接口没有一个是 1.24 之后新增的。判定成败的是安装后在目标解释器里 `import voxedge, sherpa_onnx`，而不是 pip 的元数据断言。真机已验证共存：装完 numpy 仍 1.23.5、`rknnlite` 仍可导入、语音 app 能加载 SenseVoice 并进入 listening。
+
+> **安装时跳过已有模型**：装之前先 `GET /api/appMgr/assets?paths=…` 问设备哪些模型已在、大小与 sha256 是否一致，命中的**连 CDN 都不下**。voice-transcribe 那个 133 MB 的 ASR 模型因此不再重传（原先必然撞 nginx `proxy_read_timeout 200s` 而失败）。设备侧 sha256 按 `(size, mtime_ns, inode)` 缓存，实测 133 MB 首次 0.825s、第二次 0.0066s。
+
+> 小结：部署一个"带 venv + 共享模型"的 app（如 voice-transcribe）＝ ①`provision-runtime.sh`（venv + recamera_ext 可导入）→ ②装 app 包（应用中心会自动补音频运行时、跳过已有模型；**完全离线**时改跑 `provision-voice.sh`）→ ③switch。视觉 app 只需 ①②③。缺 provision 的那一步会在 switch/运行时失败，而非安装时。
 
 > **卸载**：`POST /api/appMgr/uninstall {id}`（CLI `python3 -m appmgr uninstall <id>`）停→清 active→删 `/userdata/local/apps/<id>/` + per-app venv `/userdata/local/venvs/<id>`（若有），**共享模型 `/userdata/local/models` 不动**（跨 app 资产）。详见 publishing §6/§7。
 
@@ -279,7 +285,8 @@ reboot / 部署后依次核对：
   ```
 - [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/etc/init.d/S94appmgr status`）
 - [ ] **运行时 provision**（装任何 app 前）：`sh /userdata/local/appcenter/provision-runtime.sh` 打印 `RESULT: PASS`——venv python 在、`recamera_sdk.pth` 已写、`librecamera_ext.so.1` 在、venv 下 `import recamera_ext` 自检通过
-- [ ] **共享模型 app**（若装 voice-transcribe 类）：先 `sh provision-voice.sh` 打印 `PASS`；`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 必需 5 文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）、音频依赖可导入（`python -c "import voxedge, sherpa_onnx"`）
+- [ ] **共享模型 app**（若装 voice-transcribe 类）：`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 必需 5 文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）、音频依赖可导入（`python -c "import voxedge, sherpa_onnx"`）。音频运行时正常由应用中心按需补齐，查 `curl 'http://127.0.0.1:8130/api/appMgr/runtime?name=audio'` 应为 `present: true`；**完全离线**时才需要 `sh provision-voice.sh` 打印 `PASS`
+- [ ] **装完 numpy 没被动过**（装过音频运行时后必查）：`/userdata/rknnenv/bin/python3 -c "import numpy; print(numpy.__version__)"` 应仍是 **1.23.5**，且 `import rknnlite` 仍通过——numpy 被顶上去会连累 9 个视觉 app
 - [ ] **dmesg 无 VPSS 崩溃**：`dmesg | grep -iE 'vpss|fifo|Oops|paging request'` 空
 
 ---
