@@ -13,14 +13,14 @@ an event is produced.
 
 This module is deliberately grown one converter at a time, as each app is
 migrated to the new shape. Today: ``detection`` (yolo-detector), ``track`` and
-``metrics`` (retail-vision).
+``metrics`` (retail-vision), ``text`` (ppocr-reader).
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any, Dict
 
-__all__ = ["detection", "track", "metrics"]
+__all__ = ["detection", "text", "track", "metrics"]
 
 
 def detection(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,6 +41,41 @@ def detection(d: Dict[str, Any]) -> Dict[str, Any]:
         "cls": d["cls"],
         "score": d["score"],
         "box": d["box"],
+    }
+
+
+def text(box: Dict[str, Any], *, text: str, rec_conf: float) -> Dict[str, Any]:
+    """One recognized text box -> one flat, overlay-friendly ``text`` event.
+
+    Field-for-field identical to the hand-written mapping ppocr-reader carried
+    in ``on_results()`` before the migration:
+
+        {"kind": "text", "box": ..., "quad": ..., "text": ...,
+         "score": <detection score>, "rec_conf": <round(conf, 4)>}
+
+    What this function does -- all mechanical (spec §5.3):
+
+      * copies ``box`` / ``quad`` / ``score`` off the stage-1 result dict
+        (already un-letterboxed into ORIGINAL-frame pixels by db_ocr.decode),
+      * rounds the recognition confidence to 4 dp,
+      * fills in ``kind``.
+
+    What it does NOT do -- the caller passes these in, because they are the
+    app's business decisions:
+
+      * the perspective crop and which recognizer ran,
+      * the reading order the boxes arrive in,
+      * ``text`` itself -- in particular, whether a low-confidence reading is
+        blanked out. This helper never compares ``rec_conf`` against anything;
+        the app decides that and hands over the string it wants published.
+    """
+    return {
+        "kind": "text",
+        "box": box["box"],
+        "quad": box["quad"],
+        "text": text,
+        "score": box["score"],
+        "rec_conf": round(float(rec_conf), 4),
     }
 
 
