@@ -40,36 +40,16 @@ on_config_reload; `on_params_changed` only mirrors the live values into the two
 derived objects (`self.cascade`, `self.logic`) BY IN-PLACE MUTATION.
 
 Run on device (inference requires root):
-    KIT=/userdata/local/kit
-    PYTHONPATH=$KIT python3 app.py \
+    python3 -m kit.run /userdata/local/apps/facemesh-reader \
         --model models/yolov8n_face_rawhead_fp16.rknn --sink ws --port 8124
 """
-import os
-import sys
 
-_here = os.path.dirname(os.path.abspath(__file__))
-_kit_parent_env = os.environ.get("KIT_PARENT")
-_kit_dir_env = os.environ.get("KIT_DIR")
-for _cand in (
-    _kit_parent_env,
-    os.path.dirname(_kit_dir_env) if _kit_dir_env else None,
-    "/userdata/local",                               # device: kit at /userdata/local/kit
-    os.path.join(_here, ".."),                       # device: /userdata/local/apps
-    os.path.join(_here, "..", ".."),                 # repo: recamera_pro/
-    "/userdata/local/apps",
-):
-    if _cand and os.path.isdir(os.path.join(_cand, "kit")):
-        _cand = os.path.abspath(_cand)
-        if _cand not in sys.path:
-            sys.path.insert(0, _cand)
-        break
-
-from kit.app import App, run_app                                       # noqa: E402
-from kit import events as E                                            # noqa: E402
-from kit.pipeline import CascadePipeline                               # noqa: E402
-from kit.runtime.postprocess import face_detect as face_post           # noqa: E402
-from kit.runtime.postprocess import landmark as landmark_post          # noqa: E402
-from kit.logic.drowsiness import DrowsinessLogic, DrowsinessConfig     # noqa: E402
+from kit.app import App, run_app
+from kit import events as E
+from kit.pipeline import CascadePipeline
+from kit.runtime.postprocess import face_detect as face_post
+from kit.runtime.postprocess import landmark as landmark_post
+from kit.logic.drowsiness import DrowsinessLogic, DrowsinessConfig
 
 LMK_INPUT = 192          # stage-2 landmark input side (manifest models[1].input)
 

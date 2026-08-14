@@ -42,27 +42,8 @@ the live RTSP mic -- the whole state machine runs identically. `RECAMERA_VOICE_M
 stops after N completed transcripts (used by the on-device e2e test).
 """
 import os
-import sys
 
-# Make the shared Kit package importable whether launched by appmgr or by hand.
-_here = os.path.dirname(os.path.abspath(__file__))
-_kit_parent_env = os.environ.get("KIT_PARENT")
-_kit_dir_env = os.environ.get("KIT_DIR")
-for _cand in (
-    _kit_parent_env,
-    os.path.dirname(_kit_dir_env) if _kit_dir_env else None,
-    os.path.join(_here, ".."),                       # device: /userdata/local/apps
-    os.path.join(_here, "..", ".."),                 # repo: recamera_pro/
-    "/userdata/local/kit",                           # device shared kit
-    "/userdata/local/apps",                          # device fallback
-):
-    if _cand and os.path.isdir(os.path.join(_cand, "kit")):
-        _cand = os.path.abspath(_cand)
-        if _cand not in sys.path:
-            sys.path.insert(0, _cand)
-        break
-
-from kit.app import App, run_app          # noqa: E402
+from kit.app import App, run_app
 
 
 # States mirrored from kit.logic.voice_sm (kept local to avoid importing sherpa

@@ -25,32 +25,16 @@ all still come from `self.frames()`, exactly as for the model-backed apps.
 
 Run on device (no root / no NPU needed):
 
-    KIT=/userdata/local/apps            # dir that CONTAINS kit/
-    PYTHONPATH=$KIT python3 app.py --sink stdout
+    python3 -m kit.run /userdata/local/apps/qrcode-reader --sink stdout
 """
 import os
-import sys
 
-# Make the shared Kit package importable whether launched by appmgr or by hand.
-# Add the directory that CONTAINS `kit/` to sys.path, then `import kit.*`.
+from kit.app import App, run_app
+from kit.logic.qrcode import QrDecoder
+
+# Bundled data files (the WeChat QR model dir) are resolved against the app's
+# own install dir, not the cwd.
 _here = os.path.dirname(os.path.abspath(__file__))
-_kit_parent_env = os.environ.get("KIT_PARENT")
-_kit_dir_env = os.environ.get("KIT_DIR")
-for _cand in (
-    _kit_parent_env,
-    os.path.dirname(_kit_dir_env) if _kit_dir_env else None,
-    os.path.join(_here, ".."),                       # device: /userdata/local/apps
-    os.path.join(_here, "..", ".."),                 # repo: recamera_pro/
-    "/userdata/local/apps",                          # device fallback
-):
-    if _cand and os.path.isdir(os.path.join(_cand, "kit")):
-        _cand = os.path.abspath(_cand)
-        if _cand not in sys.path:
-            sys.path.insert(0, _cand)
-        break
-
-from kit.app import App, run_app          # noqa: E402
-from kit.logic.qrcode import QrDecoder    # noqa: E402
 
 
 class QrcodeReaderApp(App):

@@ -31,47 +31,27 @@ for the apply:"live" ones, so there is no setup() param-copying and no
 on_config_reload.
 
 Run on device (inference requires root):
-    KIT=/userdata/local/kit
-    PYTHONPATH=$KIT python3 app.py \
+    python3 -m kit.run /userdata/local/apps/fall-detection \
         --model models/yolo11n_pose_rawhead_int8.rknn --sink ws --port 8124
 """
 import json
 import gzip
 import math
 import os
-import sys
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
-_here = os.path.dirname(os.path.abspath(__file__))
-if _here not in sys.path:
-    # The app is launched as a standalone ``app.py`` (the directory name has
-    # a hyphen, so it is not an importable Python package).  Keep the tracker
-    # local to this app without making it a shared-kit dependency.
-    sys.path.insert(0, _here)
-_kit_parent_env = os.environ.get("KIT_PARENT")
-_kit_dir_env = os.environ.get("KIT_DIR")
-for _cand in (
-    _kit_parent_env,
-    os.path.dirname(_kit_dir_env) if _kit_dir_env else None,
-    "/userdata/local",                               # device: kit at /userdata/local/kit
-    os.path.join(_here, ".."),                       # device: /userdata/local/apps
-    os.path.join(_here, "..", ".."),                 # repo: recamera_pro/
-    "/userdata/local/apps",
-):
-    if _cand and os.path.isdir(os.path.join(_cand, "kit")):
-        _cand = os.path.abspath(_cand)
-        if _cand not in sys.path:
-            sys.path.insert(0, _cand)
-        break
+from kit.app import App, run_app
+from kit.runtime.postprocess import pose as pose_post
+from kit.logic.geometry import make_observation, N_KPT
+from kit.logic.temporal import FallDetector, FallConfig, FALLEN, RECOVERING
 
-from kit.app import App, run_app                                  # noqa: E402
-from kit.runtime.postprocess import pose as pose_post             # noqa: E402
-from kit.logic.geometry import make_observation, N_KPT            # noqa: E402
-from kit.logic.temporal import FallDetector, FallConfig, FALLEN, RECOVERING  # noqa: E402
+# Bundled data files (the temporal-classifier profile) are resolved against the
+# app's own install dir, not the cwd.
+_here = os.path.dirname(os.path.abspath(__file__))
 
 
 class _TemporalProfile:

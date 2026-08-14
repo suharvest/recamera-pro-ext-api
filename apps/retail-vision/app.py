@@ -21,35 +21,15 @@ normalised [0,1]. With no line configured, entry/exit fall back to
 appearance/disappearance counting (new track = entry, aged-out track = exit).
 
 Run on device (inference requires root):
-    KIT=/userdata/local/kit
-    PYTHONPATH=$KIT python3 app.py \
+    python3 -m kit.run /userdata/local/apps/retail-vision \
         --model models/yolo8n_rawhead_int8.rknn --sink ws --port 8124
 """
-import os
-import sys
 
-_here = os.path.dirname(os.path.abspath(__file__))
-_kit_parent_env = os.environ.get("KIT_PARENT")
-_kit_dir_env = os.environ.get("KIT_DIR")
-for _cand in (
-    _kit_parent_env,
-    os.path.dirname(_kit_dir_env) if _kit_dir_env else None,
-    "/userdata/local",                               # device: kit at /userdata/local/kit
-    os.path.join(_here, ".."),                       # device: /userdata/local/apps
-    os.path.join(_here, "..", ".."),                 # repo: recamera_pro/
-    "/userdata/local/apps",
-):
-    if _cand and os.path.isdir(os.path.join(_cand, "kit")):
-        _cand = os.path.abspath(_cand)
-        if _cand not in sys.path:
-            sys.path.insert(0, _cand)
-        break
-
-from kit.app import App, run_app                                    # noqa: E402
-from kit.runtime.postprocess.detect import postprocess              # noqa: E402
-from kit import events as E                                        # noqa: E402
-from kit.logic.tracker import Tracker, TrackerConfig                # noqa: E402
-from kit.logic.zones import (                                       # noqa: E402
+from kit.app import App, run_app
+from kit.runtime.postprocess.detect import postprocess
+from kit import events as E
+from kit.logic.tracker import Tracker, TrackerConfig
+from kit.logic.zones import (
     ZoneCounter, LineCounter, Dwell, DwellConfig, RollingWindow,
     StateCount, ENGAGED, ASSISTANCE,
 )
