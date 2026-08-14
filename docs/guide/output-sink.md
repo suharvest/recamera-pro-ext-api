@@ -81,10 +81,25 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 |---|---|---|
 | **MQTT** | `dMqtt`（`sURL` broker、`iPort` 默认 1883、`sClientId`、`sUsername`/`sPassword`、`sTopic` base/state topic） | 支持 HA 上下线（§5）。手写最小 MQTT，无 paho 依赖 |
 | **HTTP** | `dHttp`（`sUrl` POST 目标、`sToken` bearer） | stdlib `urllib` POST，有界队列，永不阻塞推理 |
-| **UART** | `dUart`（`sPort` 逻辑选择、`sPortDev` 如 `/dev/ttyS1`） | 换行分隔，路径白名单限 `/dev/ttyS*`。波特率/权限**待核实**，生产前 feature-gate |
+| **UART** | `dUart`（`sPort` 逻辑选择、`sPortDev` 如 `/dev/ttyS2`） | 换行分隔，路径白名单限 `/dev/ttyS*`。波特率/权限已核实，见 §3.1。仍默认 feature-gate（`RECAMERA_UART_ENABLE`） |
 | **WS** | :8124 `/appcenter/ws/results` | 复用现有 `WsResultSink`，与 /preview 叠加同一路 |
 
 多个通道可同时激活；一个通道失败被隔离 + 限速日志，不拖累其余通道和推理（复用 `MultiSink` 的扇出失败隔离）。
+
+### 3.1 UART 实测结论（2026-08-15 真机，kernel 6.1.157）
+
+**设备上只有两个串口**，`/dev/ttyS1` 不存在，示例配置应写 `/dev/ttyS2`：
+
+| 节点 | 权限 | 当前波特率 | 占用 | 可用性 |
+|---|---|---|---|---|
+| `/dev/ttyS2` (4,66) | `crw-rw---- root:dialout` | 9600 | 空闲（`fuser` 无输出） | ✅ **可用** |
+| `/dev/ttyS4` (4,68) | `crw-rw---- root:dialout` | 115200 | 被 pid 575 `/oem/usr/bin/tmir` 占用 | ❌ 官方串口服务在用，勿抢 |
+
+- **不是控制台**。内核 `console=ttyFIQ0`，`/proc/consoles` 只有 `ttyFIQ0`（fiq-debugger，`/dev/ttyFIQ0`）。两个 `ttyS*` 都没有 getty/控制台占用。
+- **权限**：节点属 `root:dialout` 0660。appmgr 拉起的 app 进程实测 `Uid: 0`（`/proc/<pid>/status`），**以 root 运行，能直接打开**。SSH 登录用户 `admin`（uid 1000，仅 `admin` 组，不在 `dialout`）手动跑同样代码会 `Permission denied` —— 调试时要注意这个差别。
+- **波特率：代码不设置，沿用内核/前一使用者留下的线路设置**。`kit/adapters/output_sink.py:644` 的 `UartChannel._open_device()` 只做 `os.open(port_dev, O_WRONLY|O_NONBLOCK)`，全文无 `termios`/`tcsetattr`/`pyserial`。实测 `stty -F /dev/ttyS2` 当前是 **9600 8N1**，`/dev/ttyS4` 是 115200。硬件 `base_baud=1500000`（dmesg：`21170000.serial: ttyS2 ... is a 16550A`）。
+  → 需要指定波特率的方案商，当前只能在 app 外部先 `stty -F /dev/ttyS2 <baud>`，或等 `UartChannel` 增加 termios 配置（未实现）。
+- `serial@21170000`（ttyS2）无 DMA 通道，走中断模式（dmesg：`failed to request DMA, use interrupt mode`），高波特率大吞吐场景需自行验证丢帧。
 
 ## 4. 格式模式：raw / custom / ha
 
