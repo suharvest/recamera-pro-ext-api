@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | `rkipc`（含扩展端点：帧代理 / 结果回注 / probe）| `/oem/usr/bin/rkipc` | `9826e9ecf8ed543a6dc78e3731102e0f` | 15.5 MB | **核心必需**——扩展端点全在这个二进制里 |
 | `entry.cgi`（M4 控制面）| `/oem/usr/www/cgi-bin/entry.cgi` | `75a693c87c317a49c37c4dddb6b9ac7a` | 1.05 MB | 可选（M4 控制面接口）|
-| `librecamera_ext.so.1.0.0`（+ `.so.1` `.so` 软链）| `/oem/usr/lib/` | `137251d7e93cb098c5328ec21e2ef61e` | 86 KB | 给方案商 SDK 运行时；仅当有扩展应用用到才需要 |
+| `librecamera_ext.so.1.0.0`（+ `.so.1` `.so` 软链）| `/oem/usr/lib/` | `5cebfb9e4d9c001c45b58c75daafe934` | 87 KB | 给方案商 SDK 运行时；仅当有扩展应用用到才需要 |
 | `recamera_ext/`（Python ctypes 绑定）| `/userdata/sdk/python/` | — | — | 给方案商，可选（`/userdata` 不受 OTA 影响）|
 | `recamera_ext.h`（C 头）| `/userdata/sdk/` | — | — | 给方案商，可选 |
 
@@ -92,15 +92,16 @@ cd release/deploy
 4. **apps** — 备份 `state.json`，merge-extract 9 个 app 的 `manifest.json`+`app.py`，**保留设备上已有的大模型文件**（模型走 catalog `putModel`，不在 apps 包内）。
 5. **激活 + 校验** — `POST /api/appMgr/switch` 激活一个 app（默认 `retail-vision`），`ws_probe.py` 确认 `:8124` 结果流出帧，dmesg 无 vpss。
 
-**CDN 下载**（前缀 `https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/release/v1.3.0/`）与 md5：
+**CDN 下载**：前缀 `https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/release/v1.3.0/`，五个包同名可取（`recamera-ext-kit` / `recamera-ext-api` / `appmgr` / `frontend` / `apps`）。
 
-| 包 | size (bytes) | md5 | CDN URL |
-|----|-------------:|-----|---------|
-| `recamera-ext-kit-v1.3.0.tar.gz` | 2089022 | `e7eafcc56024073eedd200b578e285ce` | `…/release/v1.3.0/recamera-ext-kit-v1.3.0.tar.gz` |
-| `recamera-ext-api-v1.3.0.tar` | 18698240 | `475112c11c87b694d012c14d0b9a51fa` | `…/release/v1.3.0/recamera-ext-api-v1.3.0.tar` |
-| `appmgr-v1.3.0.tar.gz` | 30551 | `3e1f4578e051d2a08cf13e5002e3eaba` | `…/release/v1.3.0/appmgr-v1.3.0.tar.gz` |
-| `frontend-v1.3.0.tar.gz` | 36751043 | `613aea306ec35a0a75ef0350e9ce4ed2` | `…/release/v1.3.0/frontend-v1.3.0.tar.gz` |
-| `apps-v1.3.0.tar.gz` | 984781 | `8a3059e10648bff5ef0df10ce09751af` | `…/release/v1.3.0/apps-v1.3.0.tar.gz` |
+> **校验值以随包发布的 `README.md` 为准**：`…/release/v1.3.0/README.md` 文末「校验」表列出五个包的 size/md5，它与包**同批上传**，不会漂移。
+>
+> 本文**不再复制**这张表 —— 曾经复制过一份，包重发了两次而这里没跟着改，五行 md5 全部过期（照它核验会误判为下载损坏）。同一份数据两处维护必然漂移，改为单一来源。
+
+```bash
+BASE=https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/release/v1.3.0
+curl -fsSL "$BASE/README.md" | sed -n '/^## 校验/,$p'    # 查当前权威 md5
+```
 
 `deploy-app.sh` / `deploy-firmware.sh` / `README.md` 三个脚本/文档同前缀下同名可取。
 
