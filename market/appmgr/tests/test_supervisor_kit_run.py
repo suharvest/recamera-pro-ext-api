@@ -8,7 +8,7 @@ _build_cmd() used to exec the entry file directly:
 
 and now goes through the kit entry point with an ABSOLUTE entry path:
 
-    python3 -m kit.run /userdata/local/apps/<id>/app.py --model models/x.rknn
+    python3 /userdata/local/kit/run.py /userdata/local/apps/<id>/app.py --model models/x.rknn
 
 Two independent pid inspectors read that command line, and both must survive:
 
@@ -71,23 +71,23 @@ class TestBuildCmd(unittest.TestCase):
     def test_launches_through_kit_run_with_an_absolute_entry(self):
         cmd = supervisor._build_cmd(APP, MANIFEST)
         self.assertEqual(cmd[0], sys.executable)
-        self.assertEqual(cmd[1:3], ["-m", "kit.run"])
-        self.assertEqual(cmd[3], os.path.join(paths.app_dir(APP), "app.py"))
-        self.assertTrue(os.path.isabs(cmd[3]))
+        self.assertEqual(cmd[1], os.path.join(paths.KIT_DIR, "run.py"))
+        self.assertEqual(cmd[2], os.path.join(paths.app_dir(APP), "app.py"))
+        self.assertTrue(os.path.isabs(cmd[2]))
 
     def test_model_and_ws_port_args_are_unchanged(self):
         cmd = supervisor._build_cmd(APP, MANIFEST)
-        self.assertEqual(cmd[4:], ["--model", "models/x.rknn",
+        self.assertEqual(cmd[3:], ["--model", "models/x.rknn",
                                    "--sink", "ws", "--port", "8124"])
 
     def test_cpu_only_app_gets_no_model_flag(self):
         cmd = supervisor._build_cmd("qrcode-reader", {"id": "qrcode-reader"})
         self.assertNotIn("--model", cmd)
-        self.assertEqual(cmd[1:3], ["-m", "kit.run"])
+        self.assertEqual(cmd[1], os.path.join(paths.KIT_DIR, "run.py"))
 
     def test_custom_manifest_entry_is_honoured(self):
         cmd = supervisor._build_cmd(APP, {"entry": "main.py"})
-        self.assertEqual(cmd[3], os.path.join(paths.app_dir(APP), "main.py"))
+        self.assertEqual(cmd[2], os.path.join(paths.app_dir(APP), "main.py"))
 
     def test_unsafe_entry_is_still_rejected(self):
         for bad in ("../../etc/passwd", "/etc/passwd"):

@@ -343,13 +343,21 @@ def _resolve_interpreter(manifest: dict) -> str:
 
 
 def _build_cmd(app_id: str, manifest: dict) -> List[str]:
-    """`<interp> -m kit.run <app_dir>/<entry> [--model ...] [--sink ws --port N]`
+    """`<interp> <KIT_PARENT>/kit/run.py <app_dir>/<entry> [--model ...] [--sink ws --port N]`
 
     We launch through the kit's own entry point (kit/run.py) rather than exec'ing
     the entry file directly. kit.run derives KIT_PARENT from its OWN location and
     puts the app dir on sys.path, which is what let every app.py drop its ~40-line
-    sys.path bootstrap (internal/KIT_APP_SHAPE_SPEC.md §5.1). `-m` resolves via
-    the PYTHONPATH start() exports below, which already points at KIT_PARENT.
+    sys.path bootstrap (internal/KIT_APP_SHAPE_SPEC.md §5.1).
+
+    run.py is invoked by ABSOLUTE PATH, not `-m kit.run`. `-m` has to resolve the
+    `kit` package through PYTHONPATH first, so a wrong KIT_PARENT takes down every
+    app at once with `ModuleNotFoundError: No module named 'kit'` -- which is
+    exactly what happened on device when the bootstrap was removed while
+    KIT_PARENT still pointed one level too deep. Running the file directly makes
+    the launch self-locating: run.py recovers KIT_PARENT from `__file__`, so the
+    apps come up even if PYTHONPATH is misconfigured (device-verified: works with
+    PYTHONPATH unset entirely). PYTHONPATH is still exported below for the SDK.
 
     The entry is passed as an ABSOLUTE path on purpose: it embeds the app id, so
     `/proc/<pid>/cmdline` now names the app outright and _is_ours()'s cmdline
@@ -360,7 +368,8 @@ def _build_cmd(app_id: str, manifest: dict) -> List[str]:
     if ".." in entry.split("/") or entry.startswith("/"):
         raise SupervisorError(f"unsafe entry path {entry!r}")
     models = manifest.get("models") or []
-    cmd = [_resolve_interpreter(manifest), "-m", "kit.run",
+    cmd = [_resolve_interpreter(manifest),
+           os.path.join(paths.KIT_DIR, "run.py"),
            os.path.join(paths.app_dir(app_id), entry)]
     # CPU-only apps (e.g. qrcode-reader) declare no models[]; launch without
     # --model. Model-backed apps must still name a real file.

@@ -18,7 +18,17 @@ import os
 import re
 
 APPS_DIR = os.environ.get("APPMGR_APPS_DIR", "/userdata/local/apps")
-KIT_PARENT = os.environ.get("APPMGR_KIT_PARENT", "/userdata/local/kit")
+# The directory that CONTAINS the `kit` package -- NOT the package itself.
+# The kit installer puts the package at /userdata/local/kit and tells you to
+# `export PYTHONPATH=/userdata/local` (release/kit-extra/INSTALL.sh:4,95), so the
+# parent is /userdata/local. This defaulted to /userdata/local/kit for a long
+# time; it was harmless only because every app.py carried a ~40-line sys.path
+# bootstrap that probed for the real location. Once that bootstrap was removed
+# (KIT_APP_SHAPE_SPEC §5.1) the wrong value killed all 9 apps with
+# `ModuleNotFoundError: No module named 'kit'`. test_kit_parent_layout.py pins
+# this against the installer so the two cannot drift again.
+KIT_PARENT = os.environ.get("APPMGR_KIT_PARENT", "/userdata/local")
+KIT_DIR = os.path.join(KIT_PARENT, "kit")     # the package itself
 APPMGR_DIR = os.environ.get("APPMGR_DIR", "/userdata/local/appmgr")
 # The extension SDK's python package (recamera_ext) is installed OUTSIDE the kit
 # tree by the firmware installer, and it is NOT inside /userdata/rknnenv's
