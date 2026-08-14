@@ -225,5 +225,81 @@ class BundleShapeTests(unittest.TestCase):
         self.assertIn("--find-links", src)
 
 
+class PipArgvTests(FakeVenvTestBase):
+    """What pip is actually CALLED with -- asserted from argv, not from source.
+
+    The flags here encode a deliberate trade, so they are worth pinning:
+    voxedge's metadata floor is `numpy>=1.24` while the device venv has 1.23.5,
+    and /userdata/rknnenv is SHARED with rknn-toolkit-lite2 (which is why it is
+    1.23.5 in the first place). Letting pip enforce that floor would either abort
+    the install or upgrade numpy under the nine vision apps. --no-deps declines
+    both; the import probe in status() is what actually decides success, so a
+    genuinely missing dependency still fails loudly and by name.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.calls = os.path.join(self.venv, "pip.argv")
+        pip = os.path.join(self.venv, "bin", "pip")
+        with open(pip, "w") as f:
+            f.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + self.calls + '\nexit 0\n')
+        os.chmod(pip, os.stat(pip).st_mode | stat.S_IXUSR | stat.S_IXGRP)
+        self._make_python()
+        # The bundle lives under the redirected appstage, so the installer's root
+        # gate has to be told about that root too -- otherwise install() refuses
+        # the package before pip is ever reached and these tests pass vacuously.
+        # realpath: on macOS the temp dir is /var/... which is a symlink to
+        # /private/var/..., and the gate resolves the package path before
+        # comparing -- an unresolved root here would never match.
+        prev = paths.ALLOWED_PKG_ROOTS
+        paths.ALLOWED_PKG_ROOTS = tuple(
+            set(prev) | {os.path.realpath(paths.APPSTAGE_DIR)})
+        self.addCleanup(setattr, paths, "ALLOWED_PKG_ROOTS", prev)
+
+    def _bundle(self):
+        """A minimal, well-formed voice-runtime tarball under an allowed root."""
+        import tarfile
+        d = tempfile.mkdtemp(prefix="bundle.", dir=paths.ensure_appstage())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        wheels = os.path.join(d, "voice-runtime", "wheels")
+        os.makedirs(wheels)
+        open(os.path.join(wheels, "voxedge-0.0.9a0-py3-none-any.whl"), "wb").close()
+        tgz = os.path.join(d, "voice-runtime-9.9.9.tar.gz")
+        with tarfile.open(tgz, "w:gz") as tar:
+            tar.add(os.path.join(d, "voice-runtime"), arcname="voice-runtime")
+        return tgz
+
+    def _argv(self):
+        # The install fails at the post-install import probe (the stub modules are
+        # not provided); we only care that pip was reached and with what.
+        try:
+            voiceruntime.install("voice", self._bundle())
+        except Exception as e:
+            self._why = f"{type(e).__name__}: {e}"
+        self.assertTrue(os.path.isfile(self.calls),
+                        "pip was never invoked; install() died first with "
+                        + getattr(self, "_why", "<no exception>"))
+        with open(self.calls) as f:
+            return [ln.rstrip("\n") for ln in f]
+
+    def test_pip_runs_offline_and_without_dependency_resolution(self):
+        argv = self._argv()
+        self.assertIn("--no-index", argv)
+        self.assertIn("--find-links", argv)
+        self.assertIn("--no-deps", argv,
+                      "without --no-deps pip enforces voxedge's numpy>=1.24 "
+                      "against the shared venv's 1.23.5 and the install dies")
+
+    def test_pip_is_never_asked_to_touch_numpy(self):
+        """Upgrading numpy would put rknn-toolkit-lite2 (all 9 vision apps) at risk."""
+        argv = self._argv()
+        self.assertEqual([a for a in argv if "numpy" in a.lower()], [])
+
+    def test_all_five_bundled_packages_are_requested(self):
+        argv = self._argv()
+        for pkg in voiceruntime.RUNTIMES["voice"]["packages"]:
+            self.assertIn(pkg, argv)
+
+
 if __name__ == "__main__":
     unittest.main()

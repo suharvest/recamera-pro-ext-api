@@ -212,7 +212,25 @@ def install(name: str = "voice", pkg_path: str = None) -> dict:
     try:
         installer.extract_vetted(pkg_path, work)
         wheels = _find_wheel_dir(work)
-        cmd = [pip, "install", "--no-index", "--find-links", wheels] + spec["packages"]
+        # --no-deps is deliberate, and it is NOT "skip the checks".
+        #
+        # The bundle already ships the whole closure, so there is nothing for pip
+        # to resolve. What pip WOULD do is enforce voxedge's `numpy>=1.24` floor
+        # against the venv's numpy 1.23.5 and abort -- and satisfying that floor
+        # is the wrong move: /userdata/rknnenv is SHARED, every vision app runs
+        # rknn-toolkit-lite2 out of it, and 1.23.5 is the version that toolchain
+        # ships with. Upgrading numpy to enable one optional voice app risks the
+        # nine that already work. (The floor is also not real: voxedge touches
+        # only long-standing numpy APIs -- array/float32/hanning/fft/linalg -- and
+        # nothing introduced after 1.23.)
+        #
+        # The check that replaces pip's is stronger anyway: status() below
+        # actually imports voxedge and sherpa_onnx in the target interpreter, so
+        # a genuinely missing dependency surfaces as a named ImportError instead
+        # of a metadata assertion. Install is only reported successful if that
+        # import passes.
+        cmd = [pip, "install", "--no-index", "--no-deps",
+               "--find-links", wheels] + spec["packages"]
         try:
             proc = subprocess.run(cmd, capture_output=True,
                                   timeout=INSTALL_TIMEOUT, env=_probe_env())
