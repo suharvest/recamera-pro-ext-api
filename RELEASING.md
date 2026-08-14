@@ -23,10 +23,14 @@
 该段是 **best-effort**：失败仅告警，不阻塞主 `rkipc`/kit 安装。设备运行 vision app：
 
 ```sh
-PYTHONPATH=/userdata/local:/userdata/sdk/python \
+PYTHONPATH=/userdata/sdk/python \
 LD_LIBRARY_PATH=/oem/usr/lib \
-/userdata/rknnenv/bin/python3 <app>.py
+/userdata/rknnenv/bin/python3 /userdata/local/kit/kit/run.py /userdata/local/apps/<id>
 ```
+
+`kit/run.py` 自己从所在位置推出共享 kit 的父目录，所以 `PYTHONPATH` 里不必再写
+`/userdata/local`（仍需要 `/userdata/sdk/python` —— 那是扩展 SDK 的 `recamera_ext`，
+与 kit 无关）。appmgr 拉起 app 走的是等价的 `-m kit.run` 形式。
 
 换 rknnlite 版本 → 替换 `release/pkg/wheels/` 下 wheel + 更新 `MANIFEST.txt` 的 md5/size，重打两个包即可。
 

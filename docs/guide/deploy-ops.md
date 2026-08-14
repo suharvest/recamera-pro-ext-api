@@ -212,7 +212,7 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 1. **`rknnlite` / venv site-packages 可达**：app 在 NPU 上推理走的是 `rknnlite`（Python 层），**固件不自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`，两者不是一回事。`rknnlite` 装在 `/userdata/rknnenv` venv 里，系统 python 看不到它；**由 manifest `interpreter=/userdata/rknnenv/bin/python` 保证**在该 venv 下启动（缺省则用 appmgr 自己的 `sys.executable`，`supervisor.py:106-113`；`interpreter` 路径设备上不存在时 `switch` 硬报错 `manifest interpreter not found on device`）。
 2. **`import recamera_ext` 成立**：官方扩展 API 的 Python 绑定在 SDK 树 `/userdata/sdk/python/recamera_ext`，**不在 venv 默认 sys.path 上**。`provision-runtime.sh` 往 venv site-packages 写一个 `recamera_sdk.pth` 指向 `/userdata/sdk/python`，使该 venv 起的每个进程都能 `import recamera_ext`（取代 per-session `PYTHONPATH export` 的持久做法）。
-3. **native lib `librecamera_ext.so.1` 能加载**：`recamera_ext` 会 dlopen 它，而它在 `/oem/usr/lib`——不在 musl loader 默认搜索路径上。`supervisor.start()` 给**它拉起的每个 app** 注入 `LD_LIBRARY_PATH=/oem/usr/lib:/oem/lib`（`supervisor.py:177-179`），同时注入 `KIT_PARENT` + `PYTHONPATH`（指向共享 kit，`supervisor.py:165-167`），所以 UI / HTTP API / boot-restore 启动的 app 一律继承，无需手敲 `export`。
+3. **native lib `librecamera_ext.so.1` 能加载**：`recamera_ext` 会 dlopen 它，而它在 `/oem/usr/lib`——不在 musl loader 默认搜索路径上。`supervisor.start()` 给**它拉起的每个 app** 注入 `LD_LIBRARY_PATH=/oem/usr/lib:/oem/lib`，同时注入 `KIT_PARENT` + `PYTHONPATH`（指向共享 kit），并以 `<interp> -m kit.run <app_dir>/<entry>` 启动，所以 UI / HTTP API / boot-restore 启动的 app 一律继承，无需手敲 `export`。
 
 **基础环境 provision 脚本 `market/deploy/provision-runtime.sh`**（幂等，设备上 `sh provision-runtime.sh`）：校验 (1) venv python 在、(2) SDK 绑定在 + 写 `.pth`、(3) `.so` 在，最后**在 venv 下实跑 `import recamera_ext` 自检**，PASS/FAIL 汇总，硬前提缺失即非零退出。注意 (3) 的 `.so` 与 SDK 绑定树都由**扩展 API 固件**提供（随 `/oem` OTA），本脚本只校验、不安装。
 

@@ -100,17 +100,17 @@ apps/<id>/
 | `scene` / `scene_zh` | | UI | 场景分类，如 `"Retail & Audience"`。 |
 | `description` / `description_zh` | | list/UI/catalog | 描述文案。`gen_catalog.py` 从包内 manifest 取 `description` 写进目录。 |
 | `author` | | list/UI | 作者，样本为 `"Seeed reCamera Pro"`。 |
-| `entry` | | supervisor | 入口文件，默认 `"app.py"`。禁止绝对路径或含 `..`（`supervisor.py:118`）。 |
+| `entry` | | supervisor | 入口文件（相对 app 目录），默认 `"app.py"`。禁止绝对路径或含 `..`。supervisor 把它拼成绝对路径交给 kit 入口：`<interp> -m kit.run <app_dir>/<entry>`（`supervisor._build_cmd`）。 |
 | `kit` | | 声明式 | 依赖的 kit 版本约束串，如 `">=0.1.0"`（当前仅声明，appmgr 未强校验）。 |
 | `interpreter`（别名 `python`） | | supervisor | 可选：指定解释器绝对路径，如 voice-transcribe 的 `/userdata/rknnenv/bin/python`。缺省用 appmgr 自己的 `sys.executable`。必须是设备上存在的绝对路径，否则 switch 时硬报错（`supervisor.py:93-113`）。 |
 | `capabilities` | | 声明式 | 能力声明数组，如 `["audio"]`。 |
 | `needs_model` | | 声明式 | 是否需要模型，如 voice-transcribe 为 `false`。 |
-| `models[]` | | supervisor/kit | 模型列表。**supervisor 只用 `models[0].file` 作为 `--model` 传入**（`supervisor.py:120-128`）；`models[]` 为空则不传 `--model`（CPU-only app，如 qrcode-reader）。每个元素常见键：`id`、`file`（相对路径，如 `models/x.rknn`）、`task`（detect/pose/classify/recognize…）、`input`（NHWC 形状）、`quant`（int8/fp16）、`classes`/`keypoints`/`heads`、`norm`、`output`、`role`、`dict`。除 `file` 外均由 kit 运行时/前端消费，appmgr 不解析。 |
+| `models[]` | | supervisor/kit | 模型列表。**supervisor 只用 `models[0].file` 作为 `--model` 传入**（`supervisor._build_cmd`）；`models[]` 为空则不传 `--model`（CPU-only app，如 qrcode-reader）。每个元素常见键：`id`、`file`（相对路径，如 `models/x.rknn`）、`task`（detect/pose/classify/recognize…）、`input`（NHWC 形状）、`quant`（int8/fp16）、`classes`/`keypoints`/`heads`、`norm`、`output`、`role`、`dict`。除 `file` 外均由 kit 运行时/前端消费，appmgr 不解析。 |
 | `default_model` | | kit | 默认模型 id（多模型级联时）。 |
 | `postproc` | | kit | 后处理器名，如 `detect`/`pose`/`db_ocr`/`voice`。 |
 | `pipeline[]` | | kit | 多级流水线声明（模型 + 后处理 + stage）。 |
 | `tags[]` | | UI | 标签数组。 |
-| `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor.py:133-135`）。 |
+| `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor._build_cmd`）。 |
 | `config_schema` | | config API | 可配置项 schema，**扁平** 或 **分组**（`groups[]`）两种写法（`config.py:27-40`）。控件类型：`number`（带 min/max/step）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
 | `ha_entities[]` | | MQTT/HA | Home Assistant 实体声明（component/object_id/name/value_template/device_class…），app 开启 MQTT 后据此上报。 |
 | `privacy_blur` | | app 逻辑 | 隐私开关声明（face-analysis 用）。 |
@@ -163,24 +163,31 @@ app 逻辑基于**扩展 SDK + 共享 kit 运行时**。SDK 的帧代理/结果�
 
 ### app.py 的典型结构
 
-现有样本几乎都是"薄壳"：拿帧 → 推理 → 后处理这套通用循环在共享 `kit.app.App` 基类里，
-app 只声明用哪个模型/后处理，并重写 `on_results()` 把原始检测整形成应用级事件。
-核实自 `apps/yolo-detector/app.py`：
+现有样本都是"薄壳"：取帧 / letterbox / 模型加载 / 配置热更 / 输出扇出全在共享
+`kit.app.App` 基类里，app 只写自己的 `run()` 循环和业务逻辑
+（`owns_loop = True`，见 `internal/KIT_APP_SHAPE_SPEC.md`）。顶部**没有** sys.path
+自举代码。核实自 `apps/yolo-detector/app.py`（全文 45 行）：
 
 ```python
 from kit.app import App, run_app
+from kit.runtime.postprocess.detect import postprocess
+from kit import events as E
+
 
 class YoloDetectorApp(App):
     id = "yolo-detector"
     name = "YOLO Detector"
-    postproc = "detect"
+    owns_loop = True
+    model_frame = "hw-direct"
 
-    def on_results(self, results, frame):
-        return [
-            {"kind": "detection", "label": d["cls_name"],
-             "cls": d["cls"], "score": d["score"], "box": d["box"]}
-            for d in results
-        ]
+    def run(self):
+        for frame in self.frames():
+            x = self.pre(frame)
+            outs = self.models.det.infer(x.data)
+            dets = postprocess(outs, x.info,
+                               conf_thres=self.conf, iou_thres=self.iou)
+            self.emit([E.detection(d) for d in dets], frame.pts, results=dets)
+
 
 if __name__ == "__main__":
     run_app(YoloDetectorApp())
@@ -192,9 +199,25 @@ if __name__ == "__main__":
 ### kit 运行时从哪来
 
 kit 是**一份共享副本**，部署在 `/userdata/local/kit/kit/`（`paths.py:10`，`KIT_PARENT=/userdata/local/kit`）。
-supervisor 启动 app 时注入 `KIT_PARENT` 和 `PYTHONPATH`（`supervisor.py:164-167`），
-所以 app 里 `import kit.app` 能找到。**kit 不打进 app 包**，app 包只有几百 KB～几十 MB
-（模型占大头）。
+**kit 不打进 app 包**，app 包只有几百 KB～几十 MB（模型占大头）。
+
+app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方式保证：
+
+- appmgr 起 app：`<interp> -m kit.run <app_dir>/<entry>`，同时注入 `KIT_PARENT` +
+  `PYTHONPATH`（`supervisor.start()`）。
+- 设备上手工跑：
+
+  ```sh
+  python3 -m kit.run /userdata/local/apps/<id> --sink stdout        # 需 PYTHONPATH 含 /userdata/local/kit
+  python3 /userdata/local/kit/kit/run.py /userdata/local/apps/<id>  # 不需要任何 PYTHONPATH
+  ```
+
+  第二种形式里 `kit/run.py` 从自己所在位置推出 `KIT_PARENT`，所以什么环境变量都不用设。
+- `python3 app.py`（app.py 末尾的 `if __name__ == "__main__": run_app(...)`）仍然可用，
+  前提是 `kit` 已经在 `PYTHONPATH` 上。
+
+`kit.run` 还会把 app 目录放上 `sys.path` 并 `chdir` 进去，所以 app 可以 `import` 自己
+目录下的同级模块，`--model models/x.rknn` 这类相对路径也照旧。
 
 > **运行时前提（rknnlite / interpreter）**：app 要真正跑起来，设备上需有 **`rknnlite`
 > Python 绑定**（NPU 推理的 Python 层，**非固件自带**——固件里 rkipc 用的是 C 层 `librknnrt.so`）
@@ -215,7 +238,7 @@ supervisor 启动 app 时注入 `KIT_PARENT` 和 `PYTHONPATH`（`supervisor.py:1
 - 开发时放 `apps/<id>/models/`，manifest `models[].file` 用相对路径 `models/xxx.rknn`。
 - 打包时 `models/` 整个进包（`build.py:28`）。
 - 运行时 supervisor 以 app 安装目录为 cwd，把 `models[0].file` 作为 `--model` 传给
-  `app.py`（`supervisor.py:120-128`、`_build_cmd`）。多模型级联由 kit 依 `pipeline[]` 自行加载。
+  `app.py`（`supervisor._build_cmd`）。多模型级联由 kit 依 `pipeline[]` 自行加载。
 
 ### 两种模型分发形态：随包 bundle vs 共享 `models[]`+`target_path`
 
