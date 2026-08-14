@@ -58,7 +58,11 @@ RKNNENV=/userdata/rknnenv
 VENV_PY="$RKNNENV/bin/python"
 MODELS_DST=/userdata/local/models/asr
 APP_DIR=/userdata/local/apps/voice-transcribe
-CONFIG_JSON="$APP_DIR/config.json"
+# User config lives OUTSIDE the install dir (appmgr paths.APPDATA_DIR): an app
+# upgrade swaps $APP_DIR wholesale, which used to delete it.
+APPDATA_DIR=${APPMGR_APPDATA_DIR:-/userdata/local/appdata}/voice-transcribe
+CONFIG_JSON="$APPDATA_DIR/config.json"
+LEGACY_CONFIG_JSON="$APP_DIR/config.json"
 
 rc=0
 ok()   { echo "[voice-prov] OK   $*"; }
@@ -169,14 +173,27 @@ fi
 # Merge {"asr_backend":"rk"} into config.json without clobbering other keys.
 export WAKE_BACKEND="${WAKE_BACKEND:-asr}"
 if [ -d "$APP_DIR" ]; then
-    if "$VENV_PY" - "$CONFIG_JSON" <<'PY'
+    mkdir -p "$APPDATA_DIR"
+    if "$VENV_PY" - "$CONFIG_JSON" "$LEGACY_CONFIG_JSON" <<'PY'
 import json, os, sys
-p = sys.argv[1]
-try:
-    with open(p) as f: cfg = json.load(f)
-    if not isinstance(cfg, dict): cfg = {}
-except Exception:
-    cfg = {}
+p, legacy = sys.argv[1], sys.argv[2]
+
+def _read(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+cfg = _read(p)
+if not cfg:                       # not migrated yet: adopt the in-app-dir file
+    cfg = _read(legacy)
+if os.path.isfile(legacy):        # retire it either way (appmgr does the same)
+    try:
+        os.replace(legacy, legacy + ".migrated")
+    except OSError:
+        pass
 cfg["asr_backend"] = "rk"
 cfg["wake_backend"] = os.environ.get("WAKE_BACKEND", "asr")
 tmp = p + ".tmp"

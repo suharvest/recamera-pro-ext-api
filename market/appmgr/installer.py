@@ -25,7 +25,7 @@ import tarfile
 import tempfile
 from typing import Optional, Tuple
 
-from . import paths, signing
+from . import config as appconfig, paths, signing
 
 
 class InstallError(Exception):
@@ -160,26 +160,46 @@ def install(pkg_path: str, signature: Optional[str] = None) -> Tuple[str, dict]:
                     with open(outp, "wb") as w:
                         shutil.copyfileobj(f, w)
                     os.chmod(outp, 0o755 if m.name == "run" or outp.endswith(".py") else 0o644)
-        # atomic-ish swap
+        # ★Rescue the user's config BEFORE the dir swap★. On a device upgraded
+        # from an older appmgr the settings still sit in <app_dir>/config.json,
+        # which the swap below throws away. Move them to the appdata tree first.
+        # Best-effort: a corrupt/unreadable legacy file must not block install.
+        try:
+            appconfig.migrate_legacy_config(app_id)
+        except OSError:
+            pass
+        # atomic-ish swap. The previous install is KEPT as <app_dir>.prev (one
+        # generation) so a bad upgrade can be rolled back by hand; the next
+        # upgrade replaces it. `.prev`/`.old` contain a dot -> never a valid app
+        # id, so do_list() skips them.
         backup = None
         if os.path.exists(dest):
-            backup = dest + ".old"
+            backup = dest + ".prev"
             if os.path.exists(backup):
                 shutil.rmtree(backup, ignore_errors=True)
             os.rename(dest, backup)
         os.rename(staging, dest)
         staging = None
-        if backup:
-            shutil.rmtree(backup, ignore_errors=True)
+        # retire the pre-.prev naming if an older appmgr left one behind
+        stale = dest + ".old"
+        if os.path.isdir(stale):
+            shutil.rmtree(stale, ignore_errors=True)
     finally:
         if staging and os.path.isdir(staging):
             shutil.rmtree(staging, ignore_errors=True)
     return app_id, manifest
 
 
-def uninstall(app_id: str) -> None:
-    """Remove an app's on-disk artifacts: its install dir and (if present) its
-    per-app venv.
+def uninstall(app_id: str, purge_config: bool = False) -> None:
+    """Remove an app's on-disk artifacts: its install dir, the retained
+    `<app_dir>.prev` rollback copy and (if present) its per-app venv.
+
+    ★User config is KEPT by default★ (/userdata/local/appdata/<id>/config.json).
+    Uninstall is routinely used as "reinstall/upgrade by hand", and the settings
+    it holds -- thresholds, ROI/counting lines, output channel + field mapping --
+    are minutes of manual work that no package can regenerate. Reinstalling the
+    same id therefore restores the previous behaviour. Callers that really want a
+    clean slate pass purge_config=True (nothing in the HTTP API does today).
 
     We deliberately touch ONLY the app's own dirs. Models under
     /userdata/local/models are SHARED across apps (one-gen models[]+target_path),
@@ -194,6 +214,11 @@ def uninstall(app_id: str) -> None:
     dest = paths.app_dir(app_id)
     if os.path.isdir(dest):
         shutil.rmtree(dest, ignore_errors=True)
+    for leftover in (dest + ".prev", dest + ".old"):
+        if os.path.isdir(leftover):
+            shutil.rmtree(leftover, ignore_errors=True)
+    if purge_config:
+        shutil.rmtree(paths.appdata_dir(app_id), ignore_errors=True)
     # Future per-app venv hook: remove /userdata/local/venvs/<id> if it exists.
     venv = paths.venv_dir(app_id)
     if os.path.isdir(venv):

@@ -4,7 +4,8 @@ config.py -- unified app configuration loading for the reCamera Pro Kit.
 Single source of truth for an app's *effective* configuration:
 
     effective config = manifest.config_schema defaults
-                       overlaid by  <app_dir>/config.json  (user settings)
+                       overlaid by  <appdata>/<id>/config.json  (user settings,
+                                    legacy fallback: <app_dir>/config.json)
                        overlaid by  explicit CLI overrides (manual --conf/--iou)
 
 Before this module each app duplicated a `_flatten_schema()` helper and re-read
@@ -55,10 +56,46 @@ def load_manifest(app_dir: str) -> dict:
         return {}
 
 
-def load_user_config(app_dir: str) -> Dict[str, Any]:
-    """Read <app_dir>/config.json (user overrides), or {} if absent/corrupt."""
+def appdata_root() -> str:
+    """Root of the user-data tree that survives app upgrades.
+
+    Mirrors appmgr's paths.APPDATA_DIR (same env var, same default). Read at
+    call time so a test / a manually launched app can redirect it.
+    """
+    return os.environ.get("APPMGR_APPDATA_DIR", "/userdata/local/appdata")
+
+
+def app_id_of_dir(app_dir: str, manifest: Optional[dict] = None) -> str:
+    """The app id owning `app_dir`: manifest `id` if sane, else the dir name."""
+    if manifest is None:
+        manifest = load_manifest(app_dir)
+    mid = (manifest or {}).get("id")
+    if isinstance(mid, str) and mid and "/" not in mid and mid not in (".", ".."):
+        return mid
+    return os.path.basename(os.path.abspath(app_dir).rstrip("/"))
+
+
+def user_config_path(app_dir: str, manifest: Optional[dict] = None) -> str:
+    """Where this app's user config lives.
+
+    Canonical: <appdata_root>/<id>/config.json -- OUTSIDE the install dir, so an
+    app upgrade (which swaps /userdata/local/apps/<id>/ wholesale) can no longer
+    delete the user's settings. Falls back to the legacy in-app path while that
+    file still exists (appmgr migrates it on the next read/write/install; the kit
+    side only ever READS, it never moves files from the app process).
+    """
+    canonical = os.path.join(appdata_root(), app_id_of_dir(app_dir, manifest),
+                             "config.json")
+    if os.path.isfile(canonical):
+        return canonical
+    legacy = os.path.join(app_dir, "config.json")
+    return legacy if os.path.isfile(legacy) else canonical
+
+
+def load_user_config(app_dir: str, manifest: Optional[dict] = None) -> Dict[str, Any]:
+    """Read the user's config.json overrides, or {} if absent/corrupt."""
     try:
-        with open(os.path.join(app_dir, "config.json")) as f:
+        with open(user_config_path(app_dir, manifest)) as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -70,7 +107,7 @@ def effective_config(app_dir: str, manifest: Optional[dict] = None) -> Dict[str,
     if manifest is None:
         manifest = load_manifest(app_dir)
     eff = flatten_schema(manifest)
-    for k, v in load_user_config(app_dir).items():
+    for k, v in load_user_config(app_dir, manifest).items():
         eff[k] = v
     return eff
 

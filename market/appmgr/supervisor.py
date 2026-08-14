@@ -163,6 +163,9 @@ def start(app_id: str) -> int:
 
     env = dict(os.environ)
     env["KIT_PARENT"] = paths.KIT_PARENT
+    # kit.config resolves the user config under this root; export appmgr's own
+    # value so the writer (appmgr) and the reader (the app) can never disagree.
+    env["APPMGR_APPDATA_DIR"] = paths.APPDATA_DIR
     # Kit first, then the extension SDK python dir. recamera_ext lives in
     # /userdata/sdk/python (dropped there by the firmware install.sh) and is NOT
     # inside the rknnenv venv, so apps launched with the venv interpreter would

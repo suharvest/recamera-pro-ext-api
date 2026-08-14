@@ -72,7 +72,17 @@ apps/<id>/
 ### 安装后（设备上）
 
 装到 `/userdata/local/apps/<id>/`（`paths.py:20`），运行期还会多出：
-`config.json`（用户配置覆盖层）、`run.pid`、`logs/app.log`。
+`run.pid`、`logs/app.log`。
+
+用户配置覆盖层 `config.json` **不在安装目录内**，它落在
+`/userdata/local/appdata/<id>/config.json`（`paths.APPDATA_DIR`）。升级会整目录替换
+`/userdata/local/apps/<id>/`，配置放在里面会被一并删掉，所以与包生命周期解耦：
+安装、升级、卸载都不动这棵树。设备上遗留在旧位置的 `config.json` 会在首次
+读/写/安装时自动搬过去，旧文件改名为 `config.json.migrated` 留痕
+（`market/appmgr/config.py: migrate_legacy_config`）。
+
+升级时上一版安装目录保留为 `/userdata/local/apps/<id>.prev`（只留一代，下次升级覆盖），
+可手工回滚；带点的名字不是合法 app id，因此不会出现在 `/api/appMgr/list`。
 
 ### manifest.json 逐字段说明
 

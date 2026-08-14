@@ -31,6 +31,18 @@ SDK_PYTHON = os.environ.get("APPMGR_SDK_PYTHON", "/userdata/sdk/python")
 # NOTE: /userdata/local/models is NOT owned here -- models are SHARED across apps
 # (one-gen models[]+target_path), so uninstalling a single app must never touch it.
 VENVS_DIR = os.environ.get("APPMGR_VENVS_DIR", "/userdata/local/venvs")
+# ★User data (config.json) lives OUTSIDE the install dir★. An upgrade replaces
+# /userdata/local/apps/<id>/ wholesale (dir swap), so anything the user tuned
+# inside it -- thresholds, ROI/lines, output channels + field mapping -- used to
+# be wiped on every reinstall. Keeping it here decouples user settings from the
+# package lifecycle: install/upgrade/uninstall never touch this tree.
+# Legacy configs still sitting in <app_dir>/config.json are migrated here on
+# first read/write/install (see config.migrate_legacy_config).
+# Default derives from APPS_DIR's parent (/userdata/local/apps -> /userdata/local
+# /appdata), so a test tree that only redirects APPMGR_APPS_DIR stays fully
+# self-contained instead of writing into the real /userdata.
+APPDATA_DIR = os.environ.get(
+    "APPMGR_APPDATA_DIR", os.path.join(os.path.dirname(APPS_DIR.rstrip("/")), "appdata"))
 # Browser-relayed cloud installs land here first (POST /api/appMgr/upload), then
 # do_install() unpacks from this path. It sits under /userdata so it is already
 # inside ALLOWED_PKG_ROOTS (the installer refuses packages outside those roots).
@@ -84,6 +96,11 @@ def app_dir(app_id: str) -> str:
 
 def venv_dir(app_id: str) -> str:
     return os.path.join(VENVS_DIR, app_id)
+
+
+def appdata_dir(app_id: str) -> str:
+    """Per-app user-data dir (survives install/upgrade/uninstall)."""
+    return os.path.join(APPDATA_DIR, app_id)
 
 
 def pidfile(app_id: str) -> str:

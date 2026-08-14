@@ -100,7 +100,9 @@ def do_list() -> dict:
     if os.path.isdir(paths.APPS_DIR):
         for name in sorted(os.listdir(paths.APPS_DIR)):
             d = os.path.join(paths.APPS_DIR, name)
-            if not os.path.isdir(d) or name.startswith("."):
+            # `<id>.prev` (kept rollback copy) and `.<id>.stage.*` (in-flight
+            # extraction) contain a dot -> never a valid app id -> not listed.
+            if not os.path.isdir(d) or not paths.valid_app_id(name):
                 continue
             if name == "kit":       # shared runtime, not an app
                 continue

@@ -215,7 +215,7 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 **基础环境 provision 脚本 `market/deploy/provision-runtime.sh`**（幂等，设备上 `sh provision-runtime.sh`）：校验 (1) venv python 在、(2) SDK 绑定在 + 写 `.pth`、(3) `.so` 在，最后**在 venv 下实跑 `import recamera_ext` 自检**，PASS/FAIL 汇总，硬前提缺失即非零退出。注意 (3) 的 `.so` 与 SDK 绑定树都由**扩展 API 固件**提供（随 `/oem` OTA），本脚本只校验、不安装。
 
-**voice 音频运行时 `market/deploy/provision-voice.sh`**（voice-transcribe 专用，视觉 app 不需要）：在 rknn venv 里从**离线 wheelhouse** 补装音频依赖（`voxedge` / `sherpa_onnx` / `kaldi_native_fbank` / `sentencepiece`，`numpy`+`rknnlite` 复用）→ 把 ASR 模型集 copy 进共享目录 `/userdata/local/models/asr/`（`sensevoice_rv1126b_w4a16.rknn` + `am.mvn` + `embedding.npy` + BPE + `silero_vad.onnx`，KWS 唤醒模型可选）→ 往 `config.json` 写 `asr_backend=rk`、`wake_backend=kws|asr`（`asr_backend` 是内部键、不在 config_schema，故直接落 `config.json`；UI 改配置会丢它，需重跑本脚本）。同样幂等 + 自检。
+**voice 音频运行时 `market/deploy/provision-voice.sh`**（voice-transcribe 专用，视觉 app 不需要）：在 rknn venv 里从**离线 wheelhouse** 补装音频依赖（`voxedge` / `sherpa_onnx` / `kaldi_native_fbank` / `sentencepiece`，`numpy`+`rknnlite` 复用）→ 把 ASR 模型集 copy 进共享目录 `/userdata/local/models/asr/`（`sensevoice_rv1126b_w4a16.rknn` + `am.mvn` + `embedding.npy` + BPE + `silero_vad.onnx`，KWS 唤醒模型可选）→ 往 `/userdata/local/appdata/voice-transcribe/config.json` 写 `asr_backend=rk`、`wake_backend=kws|asr`（`asr_backend` 是内部键、不在 config_schema，故直接落 `config.json`；UI 改配置会丢它，需重跑本脚本；旧位置 `<app_dir>/config.json` 若存在会被脚本一并搬过去并改名 `.migrated`）。同样幂等 + 自检。
 
 - **共享模型落位**：voice-transcribe 的模型**不在包里**，生产装机由浏览器 `putModel` 落到 `/userdata/local/models/asr`（catalog `models[]` = **4 个文件**：rknn + am.mvn + embedding.npy + BPE，核实自 `market/catalog/models.json`，见 publishing §3/§6）。`provision-voice.sh` 是设备侧从本地 payload 落模型的等价路径，且**额外**带 `silero_vad.onnx`（VAD 端点检测，必需）与可选的 KWS 唤醒模型集——即 provision 的必需集是 **5 文件**，比 catalog 的浏览器代取集多一个 `silero_vad.onnx`。设备侧确认：`ls -lh /userdata/local/models/asr/`。
 
@@ -240,7 +240,7 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 | POST | `/api/appMgr/config` | `{id, config:{...}}` | merge 写 `config.json` + 按 `apply` 分流：全 `live`→`kill -HUP`，任一 `restart`→stop+start | `do_set_config:288` |
 
 - `activate` 是把 builtin 纳入后的统一单活入口（旧 `switch` 是自建-only）。完整端点表见 [app-center-publishing.md](./app-center-publishing.md) §7。
-- 配置热更纪律：`live` 项经 SIGHUP 热重读（`kit/app.py` `on_config_reload`，不重启不抢相机），`restart` 项才重启进程。`asr_backend` 这类内部键不在 `config_schema`，UI 改配置会丢它，须直接落 `config.json`（见 §4.4 provision-voice）。
+- 配置热更纪律：`live` 项经 SIGHUP 热重读（`kit/app.py` `on_config_reload`，不重启不抢相机），`restart` 项才重启进程。用户配置存放在 `/userdata/local/appdata/<id>/config.json`（**不在**安装目录内，升级不会清掉；旧位置的文件首次读/写/安装时自动迁移）。`asr_backend` 这类内部键不在 `config_schema`，UI 改配置会丢它，须直接落 `config.json`（见 §4.4 provision-voice）。
 
 **结果软件叠加落位**：自建 app 结果广播到本机 WS `:8124`（`WsResultSink` 默认），nginx `/appcenter/ws/results` 反代（JWT 门），官方 React `/preview` 页的 `AiResultOverlay` 订阅并 canvas 画框。烧进码流（OSD）是 opt-in（`RECAMERA_RESULT_OSD=1`/`kind=osd`/`PREFER=official`），默认不启用。
 

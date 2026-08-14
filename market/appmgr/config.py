@@ -131,16 +131,75 @@ def schema_defaults(manifest: dict) -> Dict[str, Any]:
 # config.json read / write
 # --------------------------------------------------------------------------- #
 def config_path(app_id: str) -> str:
+    """Canonical user-config path: /userdata/local/appdata/<id>/config.json.
+
+    ★Deliberately OUTSIDE the install dir★ -- installer.install() swaps the whole
+    /userdata/local/apps/<id>/ directory, so a config living in there was deleted
+    by every upgrade (silent loss of thresholds / ROI / output mapping)."""
+    return os.path.join(paths.appdata_dir(app_id), "config.json")
+
+
+def legacy_config_path(app_id: str) -> str:
+    """Pre-migration location: inside the install dir (wiped by upgrades)."""
     return os.path.join(paths.app_dir(app_id), "config.json")
+
+
+def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".config.", dir=d)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def migrate_legacy_config(app_id: str) -> bool:
+    """One-shot, idempotent move of <app_dir>/config.json -> appdata.
+
+    Devices upgraded from an older appmgr still carry the user's settings inside
+    the install dir. Copy them to the new location (only if nothing is there
+    yet -- the new location always wins), then rename the old file to
+    `config.json.migrated` so it is not re-read and the trace stays on disk.
+
+    Returns True when a legacy file was consumed/retired. Best-effort: an
+    unreadable/corrupt legacy file is left untouched and reported as False.
+    """
+    old = legacy_config_path(app_id)
+    if not os.path.isfile(old):
+        return False
+    try:
+        with open(old) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False                       # corrupt: leave it, don't destroy
+    if not isinstance(data, dict):
+        return False
+    new = config_path(app_id)
+    if not os.path.isfile(new):
+        _atomic_write_json(new, data)
+    os.replace(old, old + ".migrated")     # keep a trace, stop re-reading it
+    return True
 
 
 def load_user_config(app_id: str) -> Dict[str, Any]:
     try:
-        with open(config_path(app_id)) as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+        migrate_legacy_config(app_id)
+    except OSError:
+        pass                               # read-only fs etc: fall through
+    for p in (config_path(app_id), legacy_config_path(app_id)):
+        try:
+            with open(p) as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def effective_values(manifest: dict, app_id: str) -> Dict[str, Any]:
@@ -164,24 +223,13 @@ def write_user_config(app_id: str, config: Dict[str, Any]) -> None:
     key to its manifest default) -- e.g. clearing a `zone`. Write is atomic
     (temp file + fsync + rename), as before.
     """
-    merged = load_user_config(app_id)   # {} if missing/corrupt
+    merged = load_user_config(app_id)   # {} if missing/corrupt; also migrates
     for k, v in (config or {}).items():
         if v is None:
             merged.pop(k, None)
         else:
             merged[k] = v
-    d = paths.app_dir(app_id)
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".config.", dir=d)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(merged, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, config_path(app_id))
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    _atomic_write_json(config_path(app_id), merged)
 
 
 # --------------------------------------------------------------------------- #
