@@ -14,10 +14,19 @@ import tempfile
 import unittest
 
 # Whitelist a throwaway root, then import the module fresh against it.
+# Imported as `appmgr.modelstore` (not bare `modelstore`): the module now takes
+# its default root from appmgr.paths, so it needs its package context.
 _ROOT = tempfile.mkdtemp(prefix="modelroots.")
 os.environ["APPMGR_MODEL_ROOTS"] = _ROOT
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import modelstore  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+from appmgr import modelstore  # noqa: E402
+
+# MODEL_ROOTS is read from the env at import time, and another test module may
+# already have imported appmgr.modelstore (via appmgr.server) with the real root
+# baked in -- so pin the whitelist explicitly rather than relying on this file
+# winning the import race.
+modelstore.MODEL_ROOTS = (_ROOT,)
 
 
 class WriteModelTests(unittest.TestCase):

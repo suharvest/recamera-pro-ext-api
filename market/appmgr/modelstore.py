@@ -38,11 +38,15 @@ import os
 import re
 import tempfile
 
+from . import paths
+
 # Destination whitelist. A single root already covers its subdirs (…/models/asr
 # is inside …/models), so the default root is enough for voice-transcribe.
+# The default comes from paths.MODELS_DIR so the write path (/putModel) and the
+# read path (GET /assets) can never disagree about where models live.
 MODEL_ROOTS = tuple(
     os.path.normpath(p)
-    for p in os.environ.get("APPMGR_MODEL_ROOTS", "/userdata/local/models").split(":")
+    for p in os.environ.get("APPMGR_MODEL_ROOTS", paths.MODELS_DIR).split(":")
     if p
 )
 # nginx caps the request body at 256m (ext_appmgr.conf client_max_body_size), so
@@ -60,7 +64,7 @@ class ModelStoreError(Exception):
 
 def _within(path: str, root: str) -> bool:
     """True iff `path` is `root` itself or lives under it (both normalized)."""
-    return path == root or path.startswith(root.rstrip("/") + os.sep)
+    return paths.is_within(path, root)
 
 
 def _validate_filename(filename: str) -> str:

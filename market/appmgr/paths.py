@@ -57,6 +57,19 @@ APPDATA_DIR = os.environ.get(
 # do_install() unpacks from this path. It sits under /userdata so it is already
 # inside ALLOWED_PKG_ROOTS (the installer refuses packages outside those roots).
 APPSTAGE_DIR = os.environ.get("APPMGR_APPSTAGE_DIR", "/userdata/appstage")
+# ★Shared model root★ (INSTALL_ASSETS_SPEC §1). Models are NOT owned by any one
+# app: several apps reference the same file through manifest `models[]` +
+# `target_path`, so they live in one flat tree that install/uninstall never
+# touches. This is the `root` reported by GET /api/appMgr/assets, and it is also
+# the default destination whitelist for /putModel (modelstore.MODEL_ROOTS derives
+# from it, so the "where do models live" answer exists exactly once).
+# Env-overridable so the assets unit test can point at a temp tree.
+MODELS_DIR = os.environ.get("APPMGR_MODELS_DIR", "/userdata/local/models")
+# The Python venv that runs NPU/audio apps, created by release/kit-extra/INSTALL.sh
+# (RKNNENV there). On-demand runtimes (INSTALL_ASSETS_SPEC §3) are pip-installed
+# into it offline, and "is the runtime present" is answered by importing inside
+# it -- never by looking for files.
+RKNNENV_DIR = os.environ.get("APPMGR_RKNNENV", "/userdata/rknnenv")
 
 STATE_FILE = os.path.join(APPS_DIR, "state.json")
 LOCK_FILE = os.path.join(APPMGR_DIR, "appmgr.lock")   # single-instance (server)
@@ -113,6 +126,22 @@ MAX_ICON_BYTES = int(os.environ.get("APPMGR_MAX_ICON_BYTES", str(1024 * 1024))) 
 APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 HTTP_HOST = os.environ.get("APPMGR_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("APPMGR_HTTP_PORT", "8130"))
+
+
+def is_within(path: str, root: str) -> bool:
+    """True iff `path` is `root` itself or lives under it.
+
+    The single containment predicate behind every "did this escape?" check in
+    appmgr -- installer's zip-slip member vetting, modelstore's /putModel root
+    whitelist and assets.py's model-path resolution. Both arguments must already
+    be normalized/realpath'd by the caller: this function is purely lexical, it
+    does not touch the filesystem, so it cannot see through symlinks on its own.
+    Kept in one place because three copies of `startswith(root)` is exactly how a
+    trailing-slash bug (`/userdata/local/models-evil` passing as inside
+    `/userdata/local/models`) gets fixed in two of them.
+    """
+    root = root.rstrip("/") or "/"
+    return path == root or path.startswith(root + os.sep)
 
 
 def valid_app_id(app_id: str) -> bool:

@@ -21,6 +21,14 @@ API (loopback 127.0.0.1:8130; nginx /_jwt_verify guards the public edge):
                                 have a card image without shipping it inside the
                                 front-end bundle. `icon_url` in /list points here
                                 (null when the package ships no icon).
+  GET  /api/appMgr/assets?paths=a/b.rknn,c.mvn
+                             -> per-path {present,size?,sha256?} under the shared
+                                model root + free_bytes, so the front end can skip
+                                a model that is already on the device instead of
+                                re-fetching and re-uploading it (INSTALL_ASSETS_SPEC
+                                §1; the 133 MB voice model cannot beat nginx's
+                                proxy_read_timeout). Digests are memoized on
+                                (size, mtime_ns, inode) -- see assets.py.
   POST /api/appMgr/install   {path: "/userdata/.../x.tar.gz"}
   POST /api/appMgr/uninstall {id}   (stop if running, clear active, rm app dir;
                                      shared /userdata/local/models untouched)
@@ -53,7 +61,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
-from . import (builtin, config as appconfig, installer, modelstore,
+from . import (assets, builtin, config as appconfig, installer, modelstore,
                mqtt as mqttcfg, paths, state, supervisor)
 
 
@@ -224,6 +232,24 @@ def do_icon(app_id: str):
         # dropped in by hand must not turn the endpoint into a memory hog.
         raise ValueError(f"icon too large: > {paths.MAX_ICON_BYTES}")
     return data, ctype
+
+
+def do_assets(paths_param: str) -> dict:
+    """GET /api/appMgr/assets?paths=a,b,c -> INSTALL_ASSETS_SPEC §1 payload.
+
+    Comma-separated relative paths under the shared model root. The front end
+    calls this BEFORE downloading an app's models from the CDN so an asset that
+    is already on the device is never fetched, let alone re-uploaded (a 133 MB
+    upload cannot beat nginx's proxy_read_timeout -- see assets.py).
+
+    Raises ValueError (AssetPathError is one) -> HTTP 400 when any path is
+    unsafe; an unsafe path is never quietly dropped, because "dropped" reads as
+    "absent" and triggers exactly the re-upload this endpoint exists to avoid.
+    """
+    parts = (paths_param or "").split(",")
+    if not any(p.strip() for p in parts):
+        raise ValueError("missing 'paths'")
+    return assets.query(parts)
 
 
 def do_list() -> dict:
@@ -852,6 +878,14 @@ class _Handler(BaseHTTPRequestHandler):
             # long max-age is safe and an upgrade busts it by changing the URL.
             return self._send_bytes(200, data, ctype,
                                     cache="public, max-age=86400")
+        if path == "/api/appMgr/assets":
+            q = (parse_qs(parsed.query).get("paths") or [""])[0]
+            try:
+                return self._send(200, do_assets(q))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except OSError as e:
+                return self._send(500, {"error": repr(e)})
         if path == "/api/appMgr/mqtt":
             return self._send(200, do_get_mqtt())
         if path == "/api/appMgr/metrics":

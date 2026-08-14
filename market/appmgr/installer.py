@@ -68,8 +68,7 @@ def _vet_member(m: tarfile.TarInfo, dest_root: str) -> None:
         raise InstallError(f"unsafe member mode {oct(m.mode)}: {name!r}")
     # resolved path must stay inside dest_root
     target = os.path.realpath(os.path.join(dest_root, name))
-    root = os.path.realpath(dest_root)
-    if target != root and not target.startswith(root + os.sep):
+    if not paths.is_within(target, os.path.realpath(dest_root)):
         raise InstallError(f"zip-slip: member escapes target dir: {name!r}")
     _vet_icon_member(m, name)
 
