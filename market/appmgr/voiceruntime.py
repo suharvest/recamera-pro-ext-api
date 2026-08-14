@@ -44,6 +44,9 @@ from . import installer, paths
 # worth probing, and sentencepiece/kaldi_native_fbank are pulled in by sherpa_onnx.
 RUNTIMES = {
     "voice": {
+        # Canonical name, echoed back regardless of whether the caller asked by
+        # runtime name ("voice") or by capability ("audio") -- see _spec().
+        "name": "voice",
         "modules": ["voxedge", "sherpa_onnx"],
         "packages": ["voxedge", "sherpa-onnx", "sherpa-onnx-core",
                      "sentencepiece", "kaldi-native-fbank"],
@@ -64,9 +67,25 @@ class RuntimeError_(Exception):
 
 
 def _spec(name: str) -> dict:
-    spec = RUNTIMES.get((name or "").strip().lower())
+    """Resolve a runtime by its own name OR by the capability it provides.
+
+    The store reaches this endpoint from the other end: it sees an app declaring
+    `capabilities: ["audio"]` and asks whether that is covered. Requiring it to
+    know that "audio" is served by the runtime called "voice" would put a
+    capability->runtime table in the browser, where it would silently rot the
+    next time a runtime is added here. Accepting both spellings keeps that
+    mapping in one place -- this registry, which already declares it.
+    """
+    key = (name or "").strip().lower()
+    spec = RUNTIMES.get(key)
     if spec is None:
-        raise ValueError(f"unknown runtime {name!r}: known {sorted(RUNTIMES)}")
+        for cand in RUNTIMES.values():
+            if cand.get("capability") == key:
+                return cand
+    if spec is None:
+        known = sorted(set(RUNTIMES) |
+                       {c["capability"] for c in RUNTIMES.values() if c.get("capability")})
+        raise ValueError(f"unknown runtime {name!r}: known {known}")
     return spec
 
 
@@ -106,7 +125,8 @@ def status(name: str = "voice") -> dict:
     """
     spec = _spec(name)
     out = {
-        "name": name,
+        "name": spec["name"],
+        "capability": spec.get("capability"),
         "about": spec["about"],
         "venv": paths.RKNNENV_DIR,
         "modules": list(spec["modules"]),

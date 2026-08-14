@@ -127,6 +127,33 @@ class StatusTests(FakeVenvTestBase):
         with self.assertRaises(ValueError):
             voiceruntime.status("nope")
 
+    def test_capability_name_resolves_to_the_runtime(self):
+        """The store asks by CAPABILITY ("audio"), not by runtime name ("voice").
+
+        It reads `capabilities: ["audio"]` off the catalog entry; making it
+        translate that to "voice" would put a capability->runtime table in the
+        browser, to rot the next time a runtime is added. Both spellings must
+        land on the same registry entry.
+        """
+        by_name = voiceruntime.status("voice")
+        by_cap = voiceruntime.status("audio")
+        self.assertEqual(by_cap["modules"], by_name["modules"])
+        # ...and the answer names the runtime canonically either way, so the
+        # caller never has to guess which spelling it will get back.
+        self.assertEqual(by_cap["name"], "voice")
+        self.assertEqual(by_name["name"], "voice")
+        self.assertEqual(by_cap["capability"], "audio")
+
+    def test_capability_lookup_is_case_and_space_tolerant(self):
+        self.assertEqual(voiceruntime.status("  AUDIO ")["name"], "voice")
+
+    def test_unknown_name_error_lists_both_spellings(self):
+        with self.assertRaises(ValueError) as cm:
+            voiceruntime.status("nope")
+        msg = str(cm.exception)
+        self.assertIn("voice", msg)
+        self.assertIn("audio", msg)
+
 
 class InstallIdempotenceTests(FakeVenvTestBase):
 
