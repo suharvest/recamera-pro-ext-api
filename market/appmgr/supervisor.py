@@ -3,7 +3,8 @@ supervisor.py -- start / stop an app process. appmgr IS the process supervisor
 (no /etc/init.d, no dentry drop -- APP_CENTER_PORT_DESIGN §4.4).
 
 start(id):
-  * builds the launch command from manifest (entry + first model + config default),
+  * builds the launch command from manifest (entry + first model + config default)
+    and launches it through the kit entry point: `<python> -m kit.run <app_dir>/<entry>`,
   * launches under a NEW session/process group via os.setsid (start_new_session),
   * PYTHONPATH + KIT_PARENT point at the ONE shared kit copy,
   * writes the child pid to <app>/run.pid, redirects stdout/stderr to <app>/logs/app.log.
@@ -89,9 +90,10 @@ def _is_ours(pid: int, app_id: str) -> bool:
     """PID-reuse guard: the process must belong to THIS app.
 
     Strong check: its working dir is the app's install dir (we launch with
-    cwd=app_dir). The app_id is NOT in argv (`python3 app.py --model models/..`),
-    so cwd is the reliable discriminator. Fallback to a cmdline heuristic only
-    if cwd is unreadable.
+    cwd=app_dir). Fallback to a cmdline heuristic only if cwd is unreadable --
+    since _build_cmd() switched to `python3 -m kit.run <abs app_dir>/app.py`,
+    the cmdline DOES contain the app id (it used to be a bare `python3 app.py
+    --model models/..`, which named nothing, so the fallback was near-useless).
 
     An UNREADABLE cwd must not fall through to the realpath comparison: for a
     zombie (and for any pid we cannot introspect) _proc_cwd() returns "", and
@@ -341,11 +343,25 @@ def _resolve_interpreter(manifest: dict) -> str:
 
 
 def _build_cmd(app_id: str, manifest: dict) -> List[str]:
+    """`<interp> -m kit.run <app_dir>/<entry> [--model ...] [--sink ws --port N]`
+
+    We launch through the kit's own entry point (kit/run.py) rather than exec'ing
+    the entry file directly. kit.run derives KIT_PARENT from its OWN location and
+    puts the app dir on sys.path, which is what let every app.py drop its ~40-line
+    sys.path bootstrap (internal/KIT_APP_SHAPE_SPEC.md §5.1). `-m` resolves via
+    the PYTHONPATH start() exports below, which already points at KIT_PARENT.
+
+    The entry is passed as an ABSOLUTE path on purpose: it embeds the app id, so
+    `/proc/<pid>/cmdline` now names the app outright and _is_ours()'s cmdline
+    fallback works even when /proc/<pid>/cwd is unreadable (it used to see only
+    `python3 app.py --model models/x.rknn`, which identifies nothing).
+    """
     entry = manifest.get("entry", "app.py")
     if ".." in entry.split("/") or entry.startswith("/"):
         raise SupervisorError(f"unsafe entry path {entry!r}")
     models = manifest.get("models") or []
-    cmd = [_resolve_interpreter(manifest), entry]
+    cmd = [_resolve_interpreter(manifest), "-m", "kit.run",
+           os.path.join(paths.app_dir(app_id), entry)]
     # CPU-only apps (e.g. qrcode-reader) declare no models[]; launch without
     # --model. Model-backed apps must still name a real file.
     if models:
