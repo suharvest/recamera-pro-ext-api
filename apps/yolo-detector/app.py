@@ -2,12 +2,10 @@
 """
 yolo-detector -- the first reCamera Pro self-hosted app (kit-design §6).
 
-Deliberately thin: all of frame grab / preprocess / RKNN infer / detect
-post-process / result publishing lives in the Kit base loop (`kit.app.App`).
-This app only:
-  * declares which model + post-processor it uses (mirrors manifest.json), and
-  * overrides on_results() to shape raw detections into app-level "detection"
-    events (no tracking yet -- that is a later, still-generic, logic-lib add).
+First app migrated to the new kit shape (internal/KIT_APP_SHAPE_SPEC.md §1):
+the whole pipeline is an explicit `run()` loop -- pre / infer / post / emit are
+four readable lines of ordinary Python. Frame grab, release, warm-up skipping,
+config hot-reload, model loading and output fan-out stay with the kit.
 
 Run on device (inference requires root):
 
@@ -40,38 +38,28 @@ for _cand in (
             sys.path.insert(0, _cand)
         break
 
-from kit.app import App, run_app  # noqa: E402
+from kit.app import App, run_app                                    # noqa: E402
+from kit.runtime.postprocess.detect import postprocess               # noqa: E402
+from kit import events as E                                          # noqa: E402
 
 
 class YoloDetectorApp(App):
     id = "yolo-detector"
     name = "YOLO Detector"
-    postproc = "detect"
     # Only boxes are consumed -- never frame.data pixels -- so the frame source
     # can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"
 
-    # on_config_reload is intentionally NOT overridden: yolo-detector's only
-    # apply:"live" knobs are `conf`/`iou`, which the base App.on_config_reload
-    # already value-replaces (never rebuilding the model).
+    # `conf` / `iou` are auto-bound from manifest config_schema (and re-bound on
+    # SIGHUP, since both are apply:"live") -- no setup/on_config_reload needed.
 
-    def on_results(self, results, frame):
-        """Format each detection into a flat, overlay-friendly event.
-
-        Kept intentionally minimal for v1 (no tracking / counting). Downstream
-        panels get stable fields: class, confidence, and a pixel box in the
-        ORIGINAL frame coordinate space (post-process already un-letterboxed).
-        """
-        return [
-            {
-                "kind": "detection",
-                "label": d["cls_name"],
-                "cls": d["cls"],
-                "score": d["score"],
-                "box": d["box"],   # [x1,y1,x2,y2] in original-frame pixels
-            }
-            for d in results
-        ]
+    def run(self):
+        for frame in self.frames():
+            x = self.pre(frame)
+            outs = self.models.det.infer(x.data)
+            dets = postprocess(outs, x.info,
+                               conf_thres=self.conf, iou_thres=self.iou)
+            self.emit([E.detection(d) for d in dets], frame.pts, results=dets)
 
 
 if __name__ == "__main__":
