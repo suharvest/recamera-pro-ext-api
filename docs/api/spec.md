@@ -532,21 +532,51 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 - ❌ 待做:整帧回注编码入口(②)、GStreamer src/sink element、v4l2loopback 通用层、ffmpeg helper
 - 设备已确认:GStreamer 运行时 + 插件在(buildroot `GSTREAMER1=y`)、RK 硬件加速库在(`librockchip_mpp.so`/`librga.so`)
 
-## 待核实(决定各路落地)
-1. `gst-inspect-1.0` 里有没有 rockchip 硬件编解码 plugin(`mpph265enc`/`mppvideodec`)、`appsrc`/`appsink`、`kmssink`/DRM sink、`v4l2src`
-2. 设备装没装 ffmpeg + rkmpp 的 ffmpeg 支持(DRM_PRIME 硬件编码)
-3. v4l2loopback 内核模块能否 modprobe(RV1126B kernel 配置)
-4. 整帧回注 VENC 能否复用现有 go2rtc/RTSP 编码入口,还是要新开 MPI VENC 通道
+## 已核实(2026-08-15 真机复测,固件 kernel 6.1.157)
+
+### 1. GStreamer 插件清单 —— 无任何 RK 硬件编解码 plugin,无 kmssink
+`gst-inspect-1.0 | grep -iE 'mpp|rockchip|rga'` 唯一命中是 `typefindfunctions: audio/x-musepack: mpc, mpp, mp+`(字符串巧合,与 Rockchip MPP 无关)。逐个查:
+
+| element | 结果 |
+|---|---|
+| `mpph265enc` / `mpph264enc` / `mppvideodec` | ❌ `No such element or plugin` |
+| `appsrc` / `appsink` | ✅ 在(rank none) |
+| `v4l2src` | ✅ 在(rank primary 256) |
+| `kmssink` | ❌ `No such element or plugin` |
+
+`kmssink` 缺失有第二重原因:**设备上根本没有 `/dev/dri/`**(`ls /dev/dri/*` → No such file or directory),即 DRM/KMS 用户态节点未暴露,DSI 上屏走不了标准 DRM sink。
+`v4l2src` 虽在,但设备上 28 个 `/dev/video*` 全部是 ISP/CIF/VPSS 采集与统计节点(`rkisp_mainpath`、`rkvpss_scale0..5`、`stream_cif_mipi_id0..3` 等),**没有一个是通用 UVC 或 M2M 编解码节点**,且权限 `root:video 0660`。
+
+### 2. ffmpeg 4.4.4 —— 未编 rkmpp;v4l2m2m wrapper 编进来了但无设备可绑
+`ffmpeg -version` 的 configure 串里**没有 `--enable-rkmpp`**,有 `--enable-libdrm`、`--enable-libv4l2`;`-hwaccels` 只列 `drm`。
+`-encoders` / `-decoders` **确实列出** `h264_v4l2m2m` / `hevc_v4l2m2m` / `vp8_v4l2m2m` 等 —— 但这只是 FFmpeg 内建的 V4L2 M2M wrapper 被编进来,**内核侧没有对应的 M2M 编解码设备节点**:RV1126B 的硬件编码器挂在 `/dev/mpp_service`(`crw------- root:root 243,0`,私有 MPP 接口,非标准 V4L2),`/sys/class/video4linux/*/name` 里无任何 codec 节点。
+结论订正:**"`h264_v4l2m2m` 不可用"成立,但原因不是"没编进来",而是"编了却没有设备节点可绑"**。方案商看 `-encoders` 输出会误以为有硬编,必须说明这一点。
+
+### 3. v4l2loopback —— 内核未提供,且设备侧无法自行补
+- `find / -iname '*v4l2loopback*'` → 空;`/oem/usr/ko/` 下 40+ 个 `.ko` 无一相关(`ls /oem/usr/ko/ | grep -i loop` 空)
+- 设备**没有 `/lib/modules/` 目录**、没有 `modinfo`/`depmod`,`modprobe` 二进制虽在(`/sbin/modprobe`)但无模块数据库可查;`.ko` 全部集中在 `/oem/usr/ko/` 靠启动脚本 `insmod` 显式加载
+- 没有内核头文件/build 树,**设备上无法编译 out-of-tree 模块**
+
+**结论:v4l2loopback 路线在当前固件上不可用。** 要启用需 Seeed 侧重编内核(打开 `CONFIG_V4L2_LOOPBACK` 或随固件附带 `.ko`)并整包 OTA;方案商自己解决不了。
+(未执行 `modprobe` —— 模块文件不存在,无对象可加载。dmesg 前后无新增异常。)
+
+### 4. 整帧回注 VENC 能否复用 go2rtc/RTSP 编码入口 —— 未核实
+本轮未涉及。仍需判断走 ①rkipc 官方 VENC 新入口 还是 ②新开 MPI VENC 通道。
 
 ## DoD(M6,分框架)
 - OpenCV:cv2 拿帧处理 + 结果经 result-in 上 OSD(端到端,已具备零件)
 - GStreamer:`recameraframesrc ! ... ! recamerah265sink` 一条 pipeline 拿帧→处理→推回 RTSP
 - (可选)v4l2loopback:`gst v4l2src` / `ffmpeg -f v4l2` 标准接口读到帧
 
-## M6 实测结论(2026-08-11 真机)
+## M6 实测结论(2026-08-11 真机;2026-08-15 复测核对)
 - **GStreamer 1.22.6**:`appsrc`+`GstDmaBufAllocator`+`GstVideoMeta` 齐全(C 和 Python gi)。**dma-buf 零拷贝拿帧实测 PASS**:`appsrc!videoconvert!pngenc!filesink` 出 1280×720 正确 PNG;`!fakesink` 吞吐 29.8fps 满帧。示例 `../guide/gstreamer-integration.md`。**但无 RK 硬件编码 plugin(mpph264enc/rockchipmpp)、无 kmssink**。
 - **FFmpeg 4.4.4**:有 `drm_prime`(DRM_PRIME import 编入)。rawvideo→mjpeg 实测 PASS。**但未编 rkmpp**,`h264_v4l2m2m` 不可用(RK 编码器走 `/dev/mpp_service` MPP,非标准 V4L2 M2M)。示例 `../guide/ffmpeg-integration.md`。
 - **含义**:方案商**拿帧+软件处理**用标准 gst/ffmpeg 零改源码即可(实测通)。**硬件编码回推**(闭环的"出")标准框架里缺——要走 ①rkipc 官方 VENC(整帧回注入口,待补)②或方案商自带 rkmpp-enabled ffmpeg / gstreamer1-rockchip plugin。OpenCV 直接 `frame.to_bgr()`→cv2 无需桥接。
+
+### 2026-08-15 复测核对结果:结论整体成立,两处需订正
+1. **成立**:GStreamer 1.22.6、无 RK 硬编 plugin、无 kmssink、ffmpeg 4.4.4 未编 rkmpp、`drm` hwaccel 在。
+2. **订正 A**:"`h264_v4l2m2m` 不可用"的**表述容易误读**。`ffmpeg -encoders` **会列出** `h264_v4l2m2m`/`hevc_v4l2m2m`,wrapper 是编进来的;不可用的原因是内核侧无 V4L2 M2M codec 设备节点(28 个 `/dev/video*` 全是 ISP/CIF/VPSS 采集节点)。方案商照 `-encoders` 输出选编码器会踩空。
+3. **订正 B**:`drm` 虽列在 `-hwaccels`、`--enable-libdrm` 也在 configure 串里,但设备上**没有 `/dev/dri/`**,DRM 相关路径(含 kmssink 上屏)在当前固件上无节点可用,不只是"缺 plugin"。
 
 ---
 
