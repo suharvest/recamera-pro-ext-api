@@ -493,5 +493,75 @@ class RetailNewShapeTests(_Base):
             app.finish()
 
 
+class _MixedClassModel(_FakeModel):
+    """One person + one chair, both above threshold, in every frame.
+
+    The equivalence fixture is person-only, so it cannot see how non-person
+    detections get tagged -- that blind spot is exactly why the old
+    `setdefault("kind", "person")` bug survived review. This model exercises it.
+    """
+
+    CHAIR_CLS = 56          # COCO-80 'chair'
+
+    def infer(self, x):
+        head = np.zeros((1, 84, N_ANCHORS), dtype=np.float32)
+        head[0, 4:, :] = 0.02
+        head[0, 0:4, 0] = (300.0, 340.0, 60.0, 100.0)       # a person
+        head[0, 4, 0] = 0.90
+        head[0, 0:4, 1] = (150.0, 300.0, 50.0, 80.0)        # a chair
+        head[0, 4 + self.CHAIR_CLS, 1] = 0.85
+        self.calls += 1
+        return [head]
+
+
+class RetailResultKindTaggingTests(_Base):
+    """`results[].kind` must reflect the ACTUAL class, not blanket 'person'."""
+
+    def _run_mixed(self):
+        sink = _RecordingSink()
+        app = _load_new_app_class()()
+        orig = kit_app.App._load_model
+        kit_app.App._load_model = lambda s, path: _MixedClassModel(path)
+        try:
+            app.start("models/yolo8n_rawhead_int8.rknn", source="ffmpeg",
+                      sink=sink, n=0, verbose=False, app_dir=APP_DIR,
+                      manifest=self.manifest, config=dict(EFF))
+            try:
+                app.run()
+            finally:
+                app.finish()
+        finally:
+            kit_app.App._load_model = orig
+        return sink
+
+    def test_non_person_results_are_not_tagged_person(self):
+        sink = self._run_mixed()
+        by_kind = {}
+        for payload, _ in sink.payloads:
+            for r in payload["results"]:
+                by_kind.setdefault(r["cls_name"], set()).add(r["kind"])
+
+        self.assertTrue(by_kind, "fixture produced no results at all")
+        self.assertIn("person", by_kind, "fixture lost the person detection")
+        self.assertIn("chair", by_kind, "fixture lost the non-person detection")
+        self.assertEqual(by_kind["person"], {"person"},
+                         "person detections must be tagged kind='person'")
+        self.assertEqual(by_kind["chair"], {"detection"},
+                         "a chair must NOT be tagged kind='person' "
+                         f"(got {by_kind['chair']})")
+
+    def test_only_persons_reach_the_tracker(self):
+        """The chair must never become a track (tracking filters on cls==0)."""
+        sink = self._run_mixed()
+        tracked = [e for payload, _ in sink.payloads
+                   for e in payload["events"] if e["kind"] == "track"]
+        self.assertTrue(tracked, "no track events produced")
+        for payload, _ in sink.payloads:
+            n_person = sum(1 for r in payload["results"] if r["cls"] == 0)
+            n_track = sum(1 for e in payload["events"] if e["kind"] == "track")
+            self.assertLessEqual(n_track, n_person,
+                                 "more tracks than person detections")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -192,8 +192,14 @@ class RetailVisionApp(App):
             self.window.update(counts, entry, exit_, frame.pts)
             events.append(E.metrics(self.window.snapshot()))
 
+            # Tag by ACTUAL class: the detector is COCO-80, so a frame carries
+            # chairs/suitcases too. Tagging every result "person" mis-labelled
+            # them for any downstream consumer keying on `kind` (the manifest
+            # even documented it as "kind may be mis-tagged"). Only cls==0 is a
+            # person; everything else is a plain detection.
             for r in results:
-                r.setdefault("kind", "person")
+                r.setdefault("kind", "person" if r.get("cls") == PERSON_CLS
+                             else "detection")
             self.emit(events, frame.pts, results=results)
 
 
