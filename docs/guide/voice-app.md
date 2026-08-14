@@ -13,7 +13,19 @@
 - ❌ **server/**(FastAPI + Docker):完整产品服务,太重,**不用**——我们要的是"嵌进 app 的库",不是"起个语音服务器"。
 - ❌ **agent/**(ovs_agent mic→speaker apps):是它自己的对话 agent,我们只要 ASR 转录,不要 TTS/对话回路(先不做)。
 
-> 取舍:reCamera Pro 是 2GB / 3TOPS / 4×A53 的小设备,**优先 voxedge 的 sherpa-onnx CPU 小模型 ASR**(SenseVoice-small/Paraformer),稳;RKNN ASR(rkvoice-stream)作为提速可选,需实测放不放得下。
+> 取舍:reCamera Pro 是 2GB / 3TOPS / 4×A53 的小设备,**优先 voxedge 的 sherpa-onnx CPU 小模型 ASR**(SenseVoice-small/Paraformer),稳;RKNN ASR(rkvoice-stream)作为提速可选。
+
+### rkvoice-stream 静态可行性核实(2026-08-15 真机)
+
+**结论:内存/磁盘不是瓶颈,瓶颈是 `rkvoice-stream` 根本没在设备上,也没有现成的离线安装包。**
+
+- **设备上不存在**:`find / -xdev -iname '*rkvoice*'` 无命中;`/userdata/rknnenv/bin/python3 -c "import rkvoice_stream"` → `ModuleNotFoundError`。
+- **内存余量**(`free -m`,`retail-vision` 正在跑时):total **1985 MB**,used 920,buff/cache 889,**available 1021 MB**,swap 0。
+- **磁盘余量**:`/userdata` 11.3 G,已用 2.2 G,**可用 8.4 G**。RKNN venv `/userdata/rknnenv` 88.3 MB,ASR 模型目录 `/userdata/local/models/asr` 134.9 MB。
+- **voice-transcribe 实际内存占用:未测**。该 app 当前未运行,`logs/app.log` 只记到 `ready -- listening`,不含 RSS/内存字段,无从回溯。要数字需单独跑一轮并采 `/proc/<pid>/status`。
+- **顺带订正**:线上部署的 voice-transcribe **已经在跑 RKNN 版 SenseVoice**(日志:`rknn-toolkit-lite2 2.3.2` / `librknnrt 2.3.2` / `target platform: rv1126b` / `model inference type: static_shape`),而不是 sherpa-onnx CPU 后端;sherpa 只用在 KWS(`sherpa KeywordSpotter`)。也就是说"RKNN 提速"这条路已经用另一种方式走通了,`rkvoice-stream` 未必是必需项。
+
+**方案商要用 rkvoice-stream 需自己解决**:交叉编译/取得 aarch64 的 `rkvoice-stream` 运行时并离线装进 `/userdata/rknnenv`(设备无外网包管理,本轮按约束未做任何安装),再补对应的 RKNN ASR 模型。
 
 ## 2. 三段管线 + 归属
 
