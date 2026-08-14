@@ -87,6 +87,60 @@ class CapabilitiesForwardingTests(unittest.TestCase):
             self.assertNotIn("capabilities", app)
 
 
+class RuntimeBundleTests(unittest.TestCase):
+    """`runtimes` tells the store WHERE to get an on-demand runtime.
+
+    Without it the store knows an app needs the audio runtime (capabilities) but
+    has no URL to fetch it from, so the whole §3 path is inert. Keyed by
+    capability, because that is the side the store is coming from.
+    """
+    DIST = os.path.normpath(os.path.join(_HERE, "..", "packaging", "dist"))
+    BASE = "https://cdn.example/pkgs/"
+
+    def test_bundle_present_yields_a_fetchable_descriptor(self):
+        with tempfile.TemporaryDirectory() as rt:
+            blob = b"not really a tarball, but the bytes are what get hashed"
+            p = os.path.join(rt, "voice-runtime-1.0.0.tar.gz")
+            with open(p, "wb") as f:
+                f.write(blob)
+            cat = gen_catalog.build_catalog(self.DIST, self.BASE, runtimes_dir=rt)
+            got = cat["runtimes"]["audio"]
+            sha, size = _sha_size(p)
+            self.assertEqual(got, {
+                "url": self.BASE + "voice-runtime-1.0.0.tar.gz",
+                "filename": "voice-runtime-1.0.0.tar.gz",
+                "sha256": sha,
+                "size": size,
+            })
+
+    def test_absent_bundle_omits_the_key_rather_than_stubbing_it(self):
+        """A stub with a dead URL would fail mid-download instead of up front."""
+        with tempfile.TemporaryDirectory() as rt:
+            cat = gen_catalog.build_catalog(self.DIST, self.BASE, runtimes_dir=rt)
+            self.assertNotIn("runtimes", cat)
+
+    def test_newest_wins_when_several_bundles_are_staged(self):
+        with tempfile.TemporaryDirectory() as rt:
+            for v in ("1.0.0", "1.0.2", "1.0.1"):
+                with open(os.path.join(rt, f"voice-runtime-{v}.tar.gz"), "wb") as f:
+                    f.write(v.encode())
+            cat = gen_catalog.build_catalog(self.DIST, self.BASE, runtimes_dir=rt)
+            self.assertEqual(cat["runtimes"]["audio"]["filename"],
+                             "voice-runtime-1.0.2.tar.gz")
+
+    def test_capability_key_matches_what_apps_declare(self):
+        """The join between the two halves: app.capabilities[] -> runtimes{}."""
+        with tempfile.TemporaryDirectory() as rt:
+            with open(os.path.join(rt, "voice-runtime-1.0.0.tar.gz"), "wb") as f:
+                f.write(b"x")
+            cat = gen_catalog.build_catalog(self.DIST, self.BASE, runtimes_dir=rt)
+            voice = next(a for a in cat["apps"] if a["id"] == "voice-transcribe")
+            needed = [c for c in voice["capabilities"] if c in cat["runtimes"]]
+            self.assertEqual(needed, ["audio"],
+                             "voice-transcribe declares 'audio' but no runtime "
+                             "in the catalog answers to that key")
+
+
 class BuildModelsTests(unittest.TestCase):
     def setUp(self):
         with open(os.path.join(_HERE, "models.json")) as f:

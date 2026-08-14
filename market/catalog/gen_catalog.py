@@ -81,6 +81,13 @@ DEFAULT_OUT = os.path.join(_HERE, "catalog.json")
 DEFAULT_BASE_URL = "/appcenter/apps/"
 DEFAULT_MODELS_SPEC = os.path.join(_HERE, "models.json")
 DEFAULT_MODELS_DIR = os.path.normpath(os.path.join(_HERE, "..", "packaging", "models"))
+# On-demand runtime bundles (release/build-voice-runtime.sh output). These are
+# NOT apps: they are ~18 MB of aarch64 wheels a device only needs if it installs
+# an app declaring the matching capability, which is exactly why they are not in
+# the kit package (INSTALL_ASSETS_SPEC §3). Keyed by CAPABILITY, because that is
+# what the store has in hand -- it reads `capabilities: ["audio"]` off the app.
+DEFAULT_RUNTIMES_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "release", "dist"))
+RUNTIME_BUNDLES = {"audio": "voice-runtime-*.tar.gz"}
 
 
 def _sha256_and_size(path: str) -> tuple[str, int]:
@@ -213,9 +220,43 @@ def _build_models(app_id: str, spec: dict, models_dir: str, models_base: str) ->
     return out
 
 
+def _build_runtimes(runtimes_dir: str, base: str) -> dict:
+    """Describe the on-demand runtime bundles present in `runtimes_dir`.
+
+    Absent bundle -> absent key, not a stub: the store treats "no descriptor" as
+    "this device cannot be provisioned from the catalog" and says so, which is
+    honest. A stub with a dead URL would instead fail mid-download.
+    """
+    out = {}
+    for capability, pattern in RUNTIME_BUNDLES.items():
+        hits = sorted(glob.glob(os.path.join(runtimes_dir, pattern)))
+        if not hits:
+            print(f"note  no {pattern} in {runtimes_dir} -- catalog omits the "
+                  f"{capability!r} runtime (apps needing it cannot self-provision)",
+                  file=sys.stderr)
+            continue
+        # Newest by version-ish sort order; warn rather than guess silently.
+        if len(hits) > 1:
+            print(f"WARN  {len(hits)} bundles match {pattern}; using "
+                  f"{os.path.basename(hits[-1])}", file=sys.stderr)
+        path = hits[-1]
+        filename = os.path.basename(path)
+        sha, size = _sha256_and_size(path)
+        out[capability] = {
+            "url": base + filename,
+            "filename": filename,
+            "sha256": sha,
+            "size": size,
+        }
+        print(f"add   runtime {capability:12s} {size/1048576:6.1f} MiB  {sha[:12]}…",
+              file=sys.stderr)
+    return out
+
+
 def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS_DIR,
                   models_spec_path: str = DEFAULT_MODELS_SPEC,
-                  models_base_url: str | None = None) -> dict:
+                  models_base_url: str | None = None,
+                  runtimes_dir: str = DEFAULT_RUNTIMES_DIR) -> dict:
     pkgs = sorted(glob.glob(os.path.join(dist_dir, "*.tar.gz")))
     if not pkgs:
         raise SystemExit(f"no *.tar.gz packages found in {dist_dir}")
@@ -293,13 +334,17 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
         print(f"add   {app_id:20s} v{man.get('version','?'):8s} "
               f"{size/1024:8.1f} KiB  {sha[:12]}…", file=sys.stderr)
 
-    return {
+    out = {
         "schema": 1,
         "generated": datetime.datetime.now(datetime.timezone.utc)
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "recamera_pro/market/packaging/dist",
         "apps": apps,
     }
+    runtimes = _build_runtimes(runtimes_dir, base)
+    if runtimes:
+        out["runtimes"] = runtimes
+    return out
 
 
 def main(argv=None) -> int:
@@ -320,10 +365,14 @@ def main(argv=None) -> int:
     ap.add_argument("--models-base-url", default=None,
                     help="URL prefix shared models are served under "
                          "(default: package base with packages/|pkgs/ -> models/)")
+    ap.add_argument("--runtimes-dir", default=DEFAULT_RUNTIMES_DIR,
+                    help="dir holding on-demand runtime bundles, e.g. "
+                         f"voice-runtime-<ver>.tar.gz (default: {DEFAULT_RUNTIMES_DIR})")
     args = ap.parse_args(argv)
 
     catalog = build_catalog(args.dist, args.base_url, args.models_dir,
-                            args.models_spec, args.models_base_url)
+                            args.models_spec, args.models_base_url,
+                            args.runtimes_dir)
     with open(args.out, "w") as f:
         json.dump(catalog, f, indent=2, ensure_ascii=False)
         f.write("\n")
