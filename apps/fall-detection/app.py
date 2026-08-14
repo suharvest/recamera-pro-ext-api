@@ -2,20 +2,33 @@
 """
 fall-detection -- reCamera Pro pose app (port of the first-gen SSCMA solution).
 
-Pipeline (all shared parts live in kit.app.App):
-  live frame -> letterbox 640 -> YOLO11n-pose RKNN -> pose post-process
-  -> on_results(): associate every pose with a lightweight IoU track, build a
-     geometric Observation per person (hip_y / torso angle / box aspect), and
-     advance one ported temporal FallDetector per track -> emit keypoints,
-     per-person pose_state, and fall events.
+Migrated to the new kit shape (internal/KIT_APP_SHAPE_SPEC.md §1): `run()` owns
+the loop and the whole pipeline reads top to bottom as ordinary Python:
 
-Only the pose post-processor selection and the on_results() business logic are
-app-specific; everything else is the generic Kit loop.
+  frame -> self.pre()             letterbox to 640 (manifest models[0].input)
+        -> self.models.pose       YOLO11n-pose rawhead RKNN
+        -> pose_post.postprocess  person boxes + COCO-17 keypoints
+        -> ★business★             IoU-associate every pose with a track, build a
+                                  geometric Observation per person (hip_y /
+                                  torso angle / box aspect), advance that
+                                  track's own 48-frame temporal classifier and
+                                  its own ported FallDetector state machine
+        -> self.emit()            keypoints + per-person `pose_state` + `fall`
 
-The 12 tuning parameters come from THIS app's manifest.json config_schema
-(grouped detection/timing). appmgr's minimal launcher only forwards --model /
---sink / --port, so the app reads its own manifest for the fall thresholds --
-this keeps appmgr generic and matches the first-gen 12-param schema exactly.
+`model_frame` stays "hw-direct" ON PURPOSE: this app only ever consumes the
+post-processed keypoint/box COORDINATES and never reads `frame.data` pixels, so
+the frame source may letterbox on RGA straight into `data` (the cheapest path).
+See docs/guide/hw-preprocess.md.
+
+Cross-frame state that MUST survive a hot-reload (see `on_params_changed`):
+  * `self.tracker`               -- IoU track identities + lost-track grace,
+  * `self.detectors[track_id]`   -- one FallDetector state machine per identity,
+  * `self.temporal_classifiers[track_id]` -- one 48-frame sliding window +
+                                  positive_run counter per identity.
+
+Every knob is auto-bound from the manifest config_schema and re-bound on SIGHUP
+for the apply:"live" ones, so there is no setup() param-copying and no
+on_config_reload.
 
 Run on device (inference requires root):
     KIT=/userdata/local/kit
@@ -368,39 +381,73 @@ class IoUTracker:
 class FallDetectionApp(App):
     id = "fall-detection"
     name = "Fall Detection"
-    postproc = "pose"
+    owns_loop = True          # explicit new shape: run() drives self.frames()
     # Only skeleton coordinates are consumed -- never frame.data pixels -- so the
     # frame source can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"
 
+    # Fallbacks for the auto-bound config_schema keys (used when a key is missing
+    # from the effective config; the manifest supplies each default).
+    # NOTE every knob is declared `type: "number"` in the manifest, so the
+    # auto-bind coerces it to FLOAT -- including `min_suspected_features`, which
+    # FallConfig wants as an int. Its use site below therefore goes through
+    # int(), exactly like the pre-migration `int(params.get(...))` did. The two
+    # angle knobs stay float() (FallConfig declares them float and the
+    # pre-migration code used float() too; int()-ing them would truncate a
+    # 55.5-degree threshold).
+    confidence = 0.4
+    keypoint_confidence = 0.5
+    temporal_confirmation_required = True
+    hip_drop_speed_threshold = 0.25
+    hip_drop_distance_threshold = 0.02
+    motion_window_sec = 0.75
+    torso_angle_threshold_deg = 55.0
+    bbox_aspect_ratio_threshold = 1.25
+    min_suspected_features = 2
+    confirmation_sec = 0.80
+    suspected_timeout_sec = 1.50
+    occlusion_grace_sec = 0.75
+    recovery_torso_angle_deg = 35.0
+    recovery_aspect_ratio = 1.10
+    recovery_window_sec = 2.00
+    cooldown_sec = 3.00
+
+    def _build_fall_config(self):
+        """One FallConfig from the already-bound `self.<knob>` attributes.
+
+        The single place the 14 thresholds are assembled -- setup() uses it to
+        create the template new tracks inherit, and `on_params_changed()` uses it
+        to rebuild that template after a SIGHUP.
+        """
+        return FallConfig(
+            temporal_confirmation_required=bool(self.temporal_confirmation_required),
+            hip_drop_speed_threshold=float(self.hip_drop_speed_threshold),
+            hip_drop_distance_threshold=float(self.hip_drop_distance_threshold),
+            motion_window_sec=float(self.motion_window_sec),
+            torso_angle_threshold_deg=float(self.torso_angle_threshold_deg),
+            bbox_aspect_ratio_threshold=float(self.bbox_aspect_ratio_threshold),
+            min_suspected_features=int(self.min_suspected_features),
+            confirmation_sec=float(self.confirmation_sec),
+            suspected_timeout_sec=float(self.suspected_timeout_sec),
+            occlusion_grace_sec=float(self.occlusion_grace_sec),
+            recovery_torso_angle_deg=float(self.recovery_torso_angle_deg),
+            recovery_aspect_ratio=float(self.recovery_aspect_ratio),
+            recovery_window_sec=float(self.recovery_window_sec),
+            cooldown_sec=float(self.cooldown_sec),
+        )
+
     def setup(self, config):
+        """Build the tracker / detector registries from the already-bound params.
+
+        Called by `App.start()` AFTER the config_schema auto-bind, so every
+        `self.<knob>` read by `_build_fall_config()` is already populated.
+        `config` is still consulted for the two knobs that are deliberately NOT
+        in config_schema (they are packaging/tuning constants, not UI knobs).
+        """
         super().setup(config)
-        # `config` is the effective config assembled by kit.config in run_app:
-        # manifest config_schema defaults overlaid by <app_dir>/config.json.
-        # The 12 fall-tuning params are read straight from it (single entry).
         params = {k: v for k, v in (config or {}).items() if v is not None}
 
-        # Person / keypoint confidence for the pose post-process.
-        self.conf = float(params.get("confidence", 0.4))
-        self.kpt_thres = float(params.get("keypoint_confidence", 0.5))
-
-        cfg = FallConfig(
-            temporal_confirmation_required=bool(
-                params.get("temporal_confirmation_required", True)),
-            hip_drop_speed_threshold=float(params.get("hip_drop_speed_threshold", 0.25)),
-            hip_drop_distance_threshold=float(params.get("hip_drop_distance_threshold", 0.02)),
-            motion_window_sec=float(params.get("motion_window_sec", 0.75)),
-            torso_angle_threshold_deg=float(params.get("torso_angle_threshold_deg", 55.0)),
-            bbox_aspect_ratio_threshold=float(params.get("bbox_aspect_ratio_threshold", 1.25)),
-            min_suspected_features=int(params.get("min_suspected_features", 2)),
-            confirmation_sec=float(params.get("confirmation_sec", 0.80)),
-            suspected_timeout_sec=float(params.get("suspected_timeout_sec", 1.50)),
-            occlusion_grace_sec=float(params.get("occlusion_grace_sec", 0.75)),
-            recovery_torso_angle_deg=float(params.get("recovery_torso_angle_deg", 35.0)),
-            recovery_aspect_ratio=float(params.get("recovery_aspect_ratio", 1.10)),
-            recovery_window_sec=float(params.get("recovery_window_sec", 2.00)),
-            cooldown_sec=float(params.get("cooldown_sec", 3.00)),
-        )
+        cfg = self._build_fall_config()
         # Pose detections have no identity.  Associate boxes first, then keep
         # one independent temporal state machine per track.  The same
         # occlusion grace used by the detector also bounds tracker retention;
@@ -417,7 +464,8 @@ class FallDetectionApp(App):
             max_lost_sec=cfg.occlusion_grace_sec,
         )
         self.detectors = {}
-        print(f"[fall] setup conf={self.conf} kpt_thres={self.kpt_thres} "
+        print(f"[fall] setup conf={self.confidence} "
+              f"kpt_thres={self.keypoint_confidence} "
               f"torso>={cfg.torso_angle_threshold_deg} aspect>="
               f"{cfg.bbox_aspect_ratio_threshold} confirm={cfg.confirmation_sec}s "
               f"track_iou>={self.tracker.iou_threshold} "
@@ -426,55 +474,27 @@ class FallDetectionApp(App):
               f"window={self._temporal_profile.window}",
               flush=True)
 
-    def on_config_reload(self, config):
-        """★S1 live hot-reload★ (SIGHUP -> re-read config.json).
+    def on_params_changed(self, changed):
+        """★S1 live hot-reload★ -- only what the auto-bind cannot do by itself.
 
-        fall-detection's live knobs are the two thresholds (self.conf /
-        self.kpt_thres) plus the full FallConfig, which is copied per-track into
-        each FallDetector. Reapply by VALUE-REPLACE: rebuild the shared
-        FallConfig template (so NEW tracks inherit it) and push a fresh copy into
-        every EXISTING detector via set_config() -- which swaps the config
-        without touching the per-track temporal state machine (no reset()). The
-        tracker's occlusion timeout tracks occlusion_grace_sec. Nothing here
-        reloads the pose model or clears track history.
+        The 16 scalars are already re-bound onto `self`; what is left is the
+        derived state, and the rule is the one the pre-migration
+        `on_config_reload` implemented:
+
+          * the shared `self._fall_config` template is REBUILT, so tracks
+            created from now on inherit the new thresholds;
+          * every EXISTING per-track detector gets a fresh dataclass copy pushed
+            in via `set_config()` -- a VALUE swap that leaves the state machine
+            (state, event_id, hip baseline, suspicion clock, cooldown) intact.
+            Rebuilding a FallDetector here would silently clear a live alarm;
+          * `self.tracker.max_lost_sec` is mutated IN PLACE (occlusion grace also
+            bounds track retention) so no identity is dropped and re-issued.
+
+        `self.temporal_classifiers` is deliberately untouched: the 48-frame
+        sliding windows and `positive_run` counters are frozen-profile state, not
+        config, and a threshold edit must not restart a confirmation in flight.
         """
-        params = {k: v for k, v in (config or {}).items() if v is not None}
-        self.config = config or {}
-
-        def _f(key, cur):
-            try:
-                return float(params.get(key, cur))
-            except (TypeError, ValueError):
-                return cur
-
-        self.conf = _f("confidence", self.conf)
-        self.kpt_thres = _f("keypoint_confidence", self.kpt_thres)
-
-        cur = self._fall_config
-        cfg = FallConfig(
-            temporal_confirmation_required=bool(params.get(
-                "temporal_confirmation_required",
-                cur.temporal_confirmation_required)),
-            hip_drop_speed_threshold=_f("hip_drop_speed_threshold",
-                                        cur.hip_drop_speed_threshold),
-            hip_drop_distance_threshold=_f("hip_drop_distance_threshold",
-                                           cur.hip_drop_distance_threshold),
-            motion_window_sec=_f("motion_window_sec", cur.motion_window_sec),
-            torso_angle_threshold_deg=_f("torso_angle_threshold_deg",
-                                         cur.torso_angle_threshold_deg),
-            bbox_aspect_ratio_threshold=_f("bbox_aspect_ratio_threshold",
-                                           cur.bbox_aspect_ratio_threshold),
-            min_suspected_features=int(_f("min_suspected_features",
-                                          cur.min_suspected_features)),
-            confirmation_sec=_f("confirmation_sec", cur.confirmation_sec),
-            suspected_timeout_sec=_f("suspected_timeout_sec", cur.suspected_timeout_sec),
-            occlusion_grace_sec=_f("occlusion_grace_sec", cur.occlusion_grace_sec),
-            recovery_torso_angle_deg=_f("recovery_torso_angle_deg",
-                                        cur.recovery_torso_angle_deg),
-            recovery_aspect_ratio=_f("recovery_aspect_ratio", cur.recovery_aspect_ratio),
-            recovery_window_sec=_f("recovery_window_sec", cur.recovery_window_sec),
-            cooldown_sec=_f("cooldown_sec", cur.cooldown_sec),
-        )
+        cfg = self._build_fall_config()
         self._fall_config = cfg
         # Swap config into live per-track detectors WITHOUT resetting their state.
         for detector in self.detectors.values():
@@ -482,7 +502,8 @@ class FallDetectionApp(App):
         # occlusion grace also bounds tracker retention (see setup()).
         if getattr(self, "tracker", None) is not None:
             self.tracker.max_lost_sec = cfg.occlusion_grace_sec
-        print(f"[fall] hot-reload conf={self.conf} kpt_thres={self.kpt_thres} "
+        print(f"[fall] hot-reload changed={sorted(changed)} "
+              f"conf={self.confidence} kpt_thres={self.keypoint_confidence} "
               f"torso>={cfg.torso_angle_threshold_deg} "
               f"aspect>={cfg.bbox_aspect_ratio_threshold} "
               f"confirm={cfg.confirmation_sec}s cooldown={cfg.cooldown_sec}s "
@@ -505,12 +526,29 @@ class FallDetectionApp(App):
             self.temporal_classifiers[track_id] = classifier
         return classifier
 
-    def run_postproc(self, outs, info):
-        return pose_post.postprocess(outs, info, conf_thres=self.conf,
-                                     iou_thres=self.iou,
-                                     kpt_thres=self.kpt_thres)
+    def run(self):
+        for frame in self.frames():
+            # -- 1. pre / infer / post ----------------------------------- #
+            x = self.pre(frame)
+            outs = self.models.pose.infer(x.data)
+            results = pose_post.postprocess(
+                outs, x.info,
+                conf_thres=self.confidence,
+                iou_thres=self.iou,
+                kpt_thres=self.keypoint_confidence)
 
-    def on_results(self, results, frame):
+            # -- 2. ★business★ track association + per-identity fall state - #
+            events = self._advance_tracks(results, frame)
+
+            self.emit(events, frame.pts, results=results)
+
+    def _advance_tracks(self, results, frame):
+        """★business★ one frame of multi-person fall reasoning -> events.
+
+        Kept as a method purely so `run()` above stays readable; every decision
+        here (who is whom, when a fall is confirmed, what a pose_state carries)
+        is app semantics and stays in the app, never in a kit helper.
+        """
         results = list(results or [])
         events = []
         # Pose post-processing normally guarantees a valid box, but keep the
@@ -532,7 +570,8 @@ class FallDetectionApp(App):
                     person = results[idx]
 
             detector = self._detector_for(track.track_id)
-            obs = make_observation(person, frame.pts, frame.h, self.kpt_thres)
+            obs = make_observation(person, frame.pts, frame.h,
+                                   self.keypoint_confidence)
             temporal = self._temporal_for(track.track_id)
             temporal_frame = _make_temporal_frame(
                 person, obs, int(frame.w), int(frame.h))

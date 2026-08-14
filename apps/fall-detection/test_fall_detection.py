@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -25,6 +26,21 @@ def _load_app_module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def _make_app(mod, config):
+    """A started-enough FallDetectionApp, without a camera or an NPU.
+
+    `App.start()` binds the manifest `config_schema` keys onto the instance and
+    THEN calls `setup()`; these offline tests do the same two steps by hand so
+    the auto-bound knobs (`occlusion_grace_sec`, ...) really take effect.
+    """
+    app = mod.FallDetectionApp()
+    with open(os.path.join(_HERE, "manifest.json")) as f:
+        app._manifest = json.load(f)
+    app._bind_params(config)
+    app.setup(config)
+    return app
 
 
 def _pose(box):
@@ -82,12 +98,12 @@ def test_iou_tracker_keeps_ids_through_reordering_and_short_occlusion():
 
 def test_fall_app_runs_one_detector_per_track_and_feeds_invalid_on_loss():
     mod = _load_app_module()
-    app = mod.FallDetectionApp()
-    app.setup({"keypoint_confidence": 0.5, "occlusion_grace_sec": 0.5})
+    app = _make_app(mod, {"keypoint_confidence": 0.5,
+                          "occlusion_grace_sec": 0.5})
     frame = SimpleNamespace(pts=0.0, w=200, h=100)
 
     results = [_pose([0, 0, 50, 90]), _pose([100, 0, 150, 90])]
-    events = app.on_results(results, frame)
+    events = app._advance_tracks(results, frame)
     assert {r["track_id"] for r in results} == {1, 2}
     assert len(app.detectors) == 2
     assert len(app.temporal_classifiers) == 2
@@ -97,7 +113,7 @@ def test_fall_app_runs_one_detector_per_track_and_feeds_invalid_on_loss():
     # Brief occlusion advances both independent state machines with invalid
     # observations and retains their identities.
     frame.pts = 0.2
-    events = app.on_results([], frame)
+    events = app._advance_tracks([], frame)
     states = [e for e in events if e["kind"] == "pose_state"]
     assert {e["track_id"] for e in states} == {1, 2}
     assert all(e["visible"] is False for e in states)
@@ -107,12 +123,12 @@ def test_fall_app_runs_one_detector_per_track_and_feeds_invalid_on_loss():
     # both detector instances.
     frame.pts = 0.3
     returned = [_pose([100, 0, 150, 90])]
-    app.on_results(returned, frame)
+    app._advance_tracks(returned, frame)
     assert returned[0]["track_id"] == 2
     assert returned[0]["state"] == "normal"
     assert returned[0]["fall_detected"] is False
     frame.pts = 1.0
-    app.on_results([], frame)
+    app._advance_tracks([], frame)
     assert app.detectors == {}
     assert app.temporal_classifiers == {}
 
