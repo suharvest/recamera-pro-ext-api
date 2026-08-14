@@ -94,16 +94,97 @@ def busy_gate():
 # --------------------------------------------------------------------------- #
 # operations
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# read-path caches (GET /list is polled by the App Center page; it was doing
+# 9 JSON parses + ~36 icon stats + a TLS round-trip to entry.cgi on EVERY call)
+#
+# Every cache below is keyed on an OS-observed identity of the thing it caches,
+# never on a timer alone, so a change is picked up on the next call:
+#   manifest -> stat(manifest.json) = (mtime_ns, size, inode, device)
+#   icon     -> stat(<app_dir>)     = same tuple (a dir's mtime bumps when a file
+#                                     is created/removed inside it)
+# An install/upgrade swaps the whole app dir, so BOTH keys change by inode alone
+# even if the clock stood still.
+#
+# ★Settle window★: a stat key is only TRUSTED once the file has been quiet for
+# _SETTLE_SEC. Coarse mtime granularity (some filesystems round to ms, HFS+ to
+# 1s) means two rewrites inside one tick can share a key, and an in-place rewrite
+# keeps the inode -- so a just-touched path is always re-read rather than served
+# from a key that cannot yet distinguish versions. Steady-state polling reads
+# manifests that are minutes old, so this costs nothing where it matters.
+# --------------------------------------------------------------------------- #
+_SETTLE_SEC = 1.0
+
+_manifest_cache: dict = {}     # app_id -> (statkey, manifest)
+_icon_cache: dict = {}         # app_id -> (statkey, icon_path or None)
+
+
+def _stat_key(path: str):
+    """(mtime_ns, size, inode, device) or None when the path is gone."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino, st.st_dev)
+
+
+def _settled(statkey) -> bool:
+    """True when the path has not been written within the last _SETTLE_SEC."""
+    return statkey is not None and (time.time() - statkey[0] / 1e9) > _SETTLE_SEC
+
+
+def cache_clear() -> None:
+    """Drop every read-path cache. Not needed for correctness (the stat keys do
+    that); exists so tests and a manual `appmgr` CLI run start from a clean slate."""
+    _manifest_cache.clear()
+    _icon_cache.clear()
+    _builtin_invalidate()
+
+
 def _read_manifest(app_id: str):
+    """The app's manifest, or None. ★The returned dict is SHARED with the cache --
+    treat it as read-only.★ Every consumer today only reads (config.py's
+    effective_manifest/_normalized_schema copy before they touch anything), so
+    nothing needs a defensive deepcopy on the polled path."""
     mp = os.path.join(paths.app_dir(app_id), "manifest.json")
+    key = _stat_key(mp)
+    if key is None:                       # not installed / unreadable
+        _manifest_cache.pop(app_id, None)
+        return None
+    hit = _manifest_cache.get(app_id)
+    if hit is not None and hit[0] == key and _settled(key):
+        return hit[1]
     try:
         with open(mp) as f:
-            return json.load(f)
+            man = json.load(f)
     except (OSError, ValueError):
+        _manifest_cache.pop(app_id, None)
         return None
+    _manifest_cache[app_id] = (key, man)
+    return man
 
 
 ICON_ENDPOINT = "/api/appMgr/icon"
+
+
+def _icon_file_cached(app_id: str):
+    """paths.icon_file() memoised on the app dir's stat key.
+
+    The uncached call stats up to 4 candidate extensions per app per list; the
+    icon itself is written once at install time and never changes in between.
+    """
+    if not paths.valid_app_id(app_id):
+        return None
+    key = _stat_key(paths.app_dir(app_id))
+    if key is None:
+        _icon_cache.pop(app_id, None)
+        return None
+    hit = _icon_cache.get(app_id)
+    if hit is not None and hit[0] == key and _settled(key):
+        return hit[1]
+    p = paths.icon_file(app_id)
+    _icon_cache[app_id] = (key, p)
+    return p
 
 
 def _icon_url(app_id: str, manifest: dict = None):
@@ -112,7 +193,7 @@ def _icon_url(app_id: str, manifest: dict = None):
     The `v=<version>` suffix is a cache-buster: the response carries a long
     max-age, so without it an upgraded app would keep showing the old artwork.
     """
-    if paths.icon_file(app_id) is None:
+    if _icon_file_cached(app_id) is None:
         return None
     ver = str((manifest or {}).get("version") or "")
     q = "id=" + quote(app_id, safe="")
@@ -149,8 +230,14 @@ def do_list() -> dict:
     # Reap any child that died since the last call BEFORE reporting liveness:
     # this both clears the `<defunct>` entries appmgr used to leak and makes a
     # crash visible (last_exit below) instead of it only showing up in `ps`.
+    #
+    # throttle_sweep: reaping + last_exit publication still happen on EVERY call
+    # (they are one waitpid syscall and a no-op on an empty queue); only the
+    # stale-pidfile sweep -- which walks /proc for every app -- is rate-limited.
+    # That sweep is pure hygiene: is_running() re-validates each pid anyway, so a
+    # stale run.pid never reaches the response. See supervisor.reap_and_sweep().
     try:
-        supervisor.reap_and_sweep()
+        supervisor.reap_and_sweep(throttle_sweep=True)
     except Exception:
         pass
     active = state.get_active()
@@ -211,8 +298,56 @@ def do_list() -> dict:
                 "last_exit": supervisor.last_exit(name),
                 "active": (name == active),
             })
+    # Bound the caches: an app that is gone (uninstalled, or a dir renamed out
+    # from under us) must not keep its slot forever. do_list() is the only place
+    # that sees the full id set, so the prune lives here.
+    seen = {a["id"] for a in apps}
+    for cache in (_manifest_cache, _icon_cache):
+        for gone in [k for k in cache if k not in seen]:
+            cache.pop(gone, None)
     apps.append(_builtin_entry(active))
     return {"active_app": active, "apps": apps}
+
+
+# ★The one network call on the list path★. builtin.is_running() is an HTTPS
+# request to entry.cgi on 127.0.0.1:443 -- TLS handshake + a CGI process fork per
+# call, with a 10 s timeout. Unthrottled that is one such round-trip per /list,
+# and the App Center page polls /list; a slow or wedged entry.cgi therefore
+# stalls the whole listing.
+#
+# Cached for _BUILTIN_TTL, and this cache is TIME-based because iEnable lives
+# behind an HTTP endpoint -- there is no inode to watch. Correctness comes from
+# explicit invalidation instead: appmgr is the only writer of iEnable it needs to
+# care about (do_activate / do_stop / do_set_config all go through this process),
+# and each of those calls _builtin_invalidate(). A change made behind appmgr's
+# back -- somebody POSTing entry.cgi directly -- shows up within the TTL.
+_BUILTIN_TTL = float(os.environ.get("APPMGR_BUILTIN_TTL", "2.0"))
+# None, or (monotonic_at, running). A TUPLE rebound as a whole, not a dict
+# mutated in place: the HTTP server is threaded, and rebinding one global name is
+# atomic under the GIL, so a concurrent reader can never observe a half-updated
+# entry (it sees either the old tuple or the new one).
+_builtin_probe = None
+
+
+def _builtin_invalidate() -> None:
+    """Force the next list to re-read /model/inference (call after any write)."""
+    global _builtin_probe
+    _builtin_probe = None
+
+
+def _builtin_running() -> bool:
+    global _builtin_probe
+    hit = _builtin_probe
+    if hit is not None and (time.monotonic() - hit[0]) < _BUILTIN_TTL:
+        return hit[1]
+    try:
+        running = builtin.is_running()
+    except Exception:
+        # Do NOT cache a transport failure: entry.cgi being momentarily
+        # unreachable must not pin running=False for the whole TTL.
+        return False
+    _builtin_probe = (time.monotonic(), running)
+    return running
 
 
 def _builtin_entry(active_self: str) -> dict:
@@ -221,10 +356,7 @@ def _builtin_entry(active_self: str) -> dict:
     (endpoint may be momentarily unreachable) degrades to running=False rather
     than dropping the entry."""
     man = builtin.manifest()
-    try:
-        running = builtin.is_running()
-    except Exception:
-        running = False
+    running = _builtin_running()
     return {
         "id": builtin.BUILTIN_ID,
         "name": man.get("name"),
@@ -416,6 +548,7 @@ def do_activate(app_id: str) -> dict:
         if app_id in (None, "", "none"):
             prev = _stop_active_self()
             binf = builtin.stop()
+            _builtin_invalidate()
             _audit("activate", id="none", prev=prev)
             return {"active": None, "prev_self": prev, "builtin": False,
                     "inference": binf}
@@ -423,6 +556,7 @@ def do_activate(app_id: str) -> dict:
         if app_id == builtin.BUILTIN_ID:
             prev = _stop_active_self()
             binf = builtin.start()          # iEnable=1, keeps persisted model/fps
+            _builtin_invalidate()
             _audit("activate", id="builtin", prev=prev)
             return {"active": "builtin", "prev_self": prev, "builtin": True,
                     "inference": binf}
@@ -433,6 +567,7 @@ def do_activate(app_id: str) -> dict:
         if not os.path.isdir(paths.app_dir(app_id)):
             raise ValueError(f"app not installed: {app_id}")
         builtin.stop()                       # turn the built-in detector off first
+        _builtin_invalidate()
         prev = state.get_active()
         if prev and prev != app_id:
             supervisor.stop(prev)
@@ -454,6 +589,7 @@ def do_stop(app_id: str = None) -> dict:
         target = app_id or state.get_active()
         if target == builtin.BUILTIN_ID:
             res = builtin.stop()
+            _builtin_invalidate()
             _audit("stop", id="builtin", result=res)
             return {"stopped": "builtin", "detail": res}
         if not target:
@@ -492,6 +628,9 @@ def do_set_config(app_id: str, incoming: dict) -> dict:
     if app_id == builtin.BUILTIN_ID:
         with busy_gate():
             res = builtin.set_config(incoming)   # driver dispatches per-item bind
+        # A builtin config write can flip iEnable (and always restarts the
+        # pipeline), so the cached liveness must not survive it.
+        _builtin_invalidate()
         _audit("config", id="builtin", keys=sorted((res.get("config") or {}).keys()),
                applied=res.get("applied"), restarted=res.get("restarted"))
         return res
@@ -595,7 +734,7 @@ def do_metrics() -> dict:
     """Lightweight device telemetry for the /appcenter debug panel. Reads a few
     procfs/sysfs files on demand (no daemon, no polling loop)."""
     try:
-        supervisor.reap_and_sweep()
+        supervisor.reap_and_sweep(throttle_sweep=True)   # polled endpoint
     except Exception:
         pass
     up = _read_first_line("/proc/uptime").split()

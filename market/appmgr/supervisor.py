@@ -311,11 +311,41 @@ def sweep_stale() -> List[str]:
     return cleared
 
 
-def reap_and_sweep() -> dict:
-    """One call for the read paths: reap, publish exits, clean stale pidfiles."""
+# Minimum spacing between stale-pidfile sweeps on the THROTTLED (read/poll) path.
+# Only sweep_stale() is rate-limited -- see reap_and_sweep().
+SWEEP_MIN_INTERVAL = float(os.environ.get("APPMGR_SWEEP_MIN_INTERVAL", "1.0"))
+_last_sweep = 0.0
+
+
+def reap_and_sweep(throttle_sweep: bool = False) -> dict:
+    """One call for the read paths: reap, publish exits, clean stale pidfiles.
+
+    `throttle_sweep=True` (used by the polled endpoints /list and /metrics) skips
+    sweep_stale() when it ran less than SWEEP_MIN_INTERVAL ago. What is throttled
+    and what is not, deliberately:
+
+      * reap_children() + drain_exits() ALWAYS run. They are what make a crash
+        visible -- drain_exits() writes last_exit.json and drops the dead run.pid
+        -- and they are nearly free: one waitpid(WNOHANG) syscall, and a no-op
+        when nothing was reaped. Rate-limiting these would make `last_exit` lag.
+      * sweep_stale() is throttled. It walks every installed app, and for each
+        one with a run.pid does /proc reads (state + cwd + cmdline). Its only
+        effect is deleting a run.pid whose process is gone -- pure hygiene:
+        is_running() re-validates every pid it reads, so a run.pid that survives
+        one extra second never makes the API report a dead app as running.
+
+    Mutating paths (stop(), which calls reap_children()/drain_exits() directly)
+    are untouched by the throttle.
+    """
+    global _last_sweep
     reap_children()
     exits = drain_exits()
-    return {"exits": exits, "cleared": sweep_stale()}
+    if throttle_sweep:
+        now = time.monotonic()
+        if (now - _last_sweep) < SWEEP_MIN_INTERVAL:
+            return {"exits": exits, "cleared": [], "swept": False}
+        _last_sweep = now
+    return {"exits": exits, "cleared": sweep_stale(), "swept": True}
 
 
 # ---- launch command --------------------------------------------------------- #
