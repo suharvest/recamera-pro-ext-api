@@ -56,6 +56,12 @@ class SetConfigApplyTests(unittest.TestCase):
             self.running[app_id] = 9999
             return 9999
 
+        # Patch the REAL supervisor module attributes -> must be undone, or the
+        # stubs leak into every later test module in the same pytest process.
+        self._orig_sup = {n: getattr(server.supervisor, n)
+                          for n in ("is_running", "reload", "stop", "start")}
+        self.addCleanup(lambda: [setattr(server.supervisor, n, v)
+                                 for n, v in self._orig_sup.items()])
         server.supervisor.is_running = fake_is_running
         server.supervisor.reload = fake_reload
         server.supervisor.stop = fake_stop

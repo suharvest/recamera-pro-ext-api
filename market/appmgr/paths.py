@@ -148,6 +148,15 @@ def logdir(app_id: str) -> str:
     return os.path.join(app_dir(app_id), "logs")
 
 
+def exitfile(app_id: str) -> str:
+    """Where supervisor records the app's LAST process exit (code/signal/ts).
+
+    Sits next to run.pid inside the install dir: it describes this installation's
+    process lifecycle (not user data), so an upgrade/uninstall correctly drops it.
+    """
+    return os.path.join(app_dir(app_id), "last_exit.json")
+
+
 def ensure_dirs() -> None:
     for d in (APPS_DIR, APPMGR_DIR):
         os.makedirs(d, exist_ok=True)

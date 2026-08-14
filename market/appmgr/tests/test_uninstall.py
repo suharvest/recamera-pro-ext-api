@@ -60,6 +60,12 @@ class UninstallTests(unittest.TestCase):
             self.running.pop(app_id, None)
             return {"app": app_id, "signalled": True}
 
+        # Patch the REAL supervisor module attributes -> must be undone, or the
+        # stubs leak into every later test module in the same pytest process.
+        self._orig_sup = {n: getattr(server.supervisor, n)
+                          for n in ("is_running", "stop")}
+        self.addCleanup(lambda: [setattr(server.supervisor, n, v)
+                                 for n, v in self._orig_sup.items()])
         server.supervisor.is_running = fake_is_running
         server.supervisor.stop = fake_stop
 

@@ -146,6 +146,13 @@ def do_icon(app_id: str):
 
 
 def do_list() -> dict:
+    # Reap any child that died since the last call BEFORE reporting liveness:
+    # this both clears the `<defunct>` entries appmgr used to leak and makes a
+    # crash visible (last_exit below) instead of it only showing up in `ps`.
+    try:
+        supervisor.reap_and_sweep()
+    except Exception:
+        pass
     active = state.get_active()
     apps = []
     if os.path.isdir(paths.APPS_DIR):
@@ -160,6 +167,7 @@ def do_list() -> dict:
             man = _read_manifest(name)
             if man is None:
                 continue
+            pid = supervisor.is_running(name)
             apps.append({
                 "id": name,
                 "name": man.get("name", name),
@@ -187,8 +195,14 @@ def do_list() -> dict:
                 # the front end falls back (its bundled art, then a placeholder).
                 "icon_url": _icon_url(name, man),
                 "installed": True,
-                "running": supervisor.is_running(name) is not None,
-                "pid": supervisor.is_running(name),
+                "running": pid is not None,
+                "pid": pid,
+                # ★Crash visibility★: last recorded process exit, e.g.
+                # {"code": -11, "signal": "SIGSEGV", "at": 1765..., "pid": 4009}.
+                # null when the app has never exited under this appmgr. There is
+                # deliberately NO auto-restart, so a non-null last_exit with
+                # running=false is the UI's only signal that the app died.
+                "last_exit": supervisor.last_exit(name),
                 "active": (name == active),
             })
     apps.append(_builtin_entry(active))
@@ -220,6 +234,10 @@ def _builtin_entry(active_self: str) -> dict:
         "installed": True,
         "running": running,
         "pid": None,
+        # The built-in pipeline is not an appmgr child (it lives behind
+        # /model/inference), so there is no wait status to report -- always null,
+        # kept so every /list entry has the same shape.
+        "last_exit": None,
         # active = iEnable AND no self-hosted app is active (mutual exclusion is
         # maintained by do_activate; this AND is belt-and-braces for the UI).
         "active": running and not active_self,
@@ -569,16 +587,26 @@ def _temp_c() -> float:
 def do_metrics() -> dict:
     """Lightweight device telemetry for the /appcenter debug panel. Reads a few
     procfs/sysfs files on demand (no daemon, no polling loop)."""
+    try:
+        supervisor.reap_and_sweep()
+    except Exception:
+        pass
     up = _read_first_line("/proc/uptime").split()
     try:
         uptime_s = int(float(up[0])) if up else None
     except (ValueError, IndexError):
         uptime_s = None
+    active = state.get_active()
     return {
         "npu_load": _npu_load(),
         "mem": _mem_info(),
         "temp_c": _temp_c(),
-        "active_app": state.get_active(),
+        "active_app": active,
+        # Whether the ACTIVE app is actually alive, plus how it died last time.
+        # A panel showing active_app with active_running=false and a signal in
+        # active_last_exit is the crash indicator; appmgr does not auto-restart.
+        "active_running": bool(active and supervisor.is_running(active)),
+        "active_last_exit": supervisor.last_exit(active) if active else None,
         "uptime_s": uptime_s,
         "ts": time.time(),
     }
@@ -822,6 +850,13 @@ def serve(host: str = None, port: int = None) -> None:
     port = port or paths.HTTP_PORT
     if not _acquire_single_instance():
         raise SystemExit("appmgr already running (single-instance lock held)")
+    # Reap app processes as they die. Without this the daemon leaks a
+    # `[python] <defunct>` entry for every crashed app (it is their parent and
+    # never called waitpid). The handler itself only does waitpid(WNOHANG) and
+    # queues the status; the visible bookkeeping (last_exit.json, run.pid
+    # cleanup, log line) happens in normal context from do_list/do_metrics/stop.
+    if not supervisor.install_sigchld():
+        print("[appmgr] warning: could not install SIGCHLD handler", flush=True)
     httpd = ThreadingHTTPServer((host, port), _Handler)
     print(f"[appmgr] listening on http://{host}:{port}", flush=True)
     # Boot-restore: HTTP is up; resume the last active app if it isn't running.
