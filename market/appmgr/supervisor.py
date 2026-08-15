@@ -39,6 +39,21 @@ PROC_ROOT = os.environ.get("APPMGR_PROC_ROOT", "/proc")
 
 
 # ---- pid helpers ------------------------------------------------------------ #
+def _join_pathlist(parts) -> str:
+    """Join a colon path list, dropping empty entries and later duplicates.
+
+    Empty entries are the reason this exists rather than a plain `":".join()`:
+    in LD_LIBRARY_PATH glibc reads "" as the current directory. Order is kept --
+    the first occurrence of a dir wins -- because search order is semantic.
+    """
+    seen, out = set(), []
+    for p in parts:
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return os.pathsep.join(out)
+
+
 def _read_pid(app_id: str) -> Optional[int]:
     pf = paths.pidfile(app_id)
     try:
@@ -424,25 +439,13 @@ def _load_manifest(app_id: str) -> dict:
         return json.load(f)
 
 
-# ---- public API ------------------------------------------------------------- #
-def start(app_id: str) -> int:
-    if not paths.valid_app_id(app_id):
-        raise SupervisorError(f"invalid app id {app_id!r}")
-    d = paths.app_dir(app_id)
-    if not os.path.isdir(d):
-        raise SupervisorError(f"app not installed: {app_id}")
+def _build_env(app_id: str, manifest: dict) -> dict:
+    """Environment handed to an app process.
 
-    existing = is_running(app_id)
-    if existing:
-        return existing
-
-    manifest = _load_manifest(app_id)
-    cmd = _build_cmd(app_id, manifest)
-
-    os.makedirs(paths.logdir(app_id), exist_ok=True)
-    logpath = os.path.join(paths.logdir(app_id), "app.log")
-    logf = open(logpath, "ab", buffering=0)
-
+    Split out of start() so it can be asserted without launching anything:
+    the LD_LIBRARY_PATH hygiene below is security-relevant and a test that
+    has to spawn a real process would not have been written.
+    """
     env = dict(os.environ)
     env["KIT_PARENT"] = paths.KIT_PARENT
     # kit.config resolves the user config under this root; export appmgr's own
@@ -467,9 +470,20 @@ def start(app_id: str) -> int:
     # boot-restore -- inherits them, instead of relying on a hand-typed
     # `export LD_LIBRARY_PATH` in an ssh session. Prepend (don't clobber) any
     # inherited value.
-    _extlibs = "/oem/usr/lib" + os.pathsep + "/oem/lib"
-    env["LD_LIBRARY_PATH"] = _extlibs + (
-        os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    # Normalized, not just prepended. An inherited value picks up junk across
+    # appmgr restarts (each deploy re-execs it from a shell that already had the
+    # variable), and on device it was observed as
+    #   /oem/usr/lib:/oem/lib:/oem/usr/lib:/oem/lib:...:/oem/lib:
+    # -- four duplicate pairs and a TRAILING EMPTY SEGMENT. The duplicates are
+    # only noise, but the empty segment is not: glibc (2.38 here) reads an empty
+    # element of LD_LIBRARY_PATH as THE CURRENT DIRECTORY, so every app would
+    # search its cwd for shared objects. Apps run with cwd=/userdata/local, which
+    # is root-owned -- but /userdata itself is 0777, so any app that chdir'd into
+    # a writable subdir would turn that empty element into a local library
+    # injection point for uid 1000. Dropping empties costs nothing and closes it.
+    _extlibs = ["/oem/usr/lib", "/oem/lib"]
+    env["LD_LIBRARY_PATH"] = _join_pathlist(
+        _extlibs + env.get("LD_LIBRARY_PATH", "").split(os.pathsep))
     # On-demand runtime environment (RUNTIME_BUNDLE_SPEC §3). A file-shaped
     # runtime (the RK hardware codec plugins) is useless once unpacked unless the
     # loader and GStreamer are told where to look, and that cannot be done for
@@ -488,6 +502,30 @@ def start(app_id: str) -> int:
         env.update(mqttcfg.env_for_launch())
     except Exception:
         pass
+
+    return env
+
+
+# ---- public API ------------------------------------------------------------- #
+def start(app_id: str) -> int:
+    if not paths.valid_app_id(app_id):
+        raise SupervisorError(f"invalid app id {app_id!r}")
+    d = paths.app_dir(app_id)
+    if not os.path.isdir(d):
+        raise SupervisorError(f"app not installed: {app_id}")
+
+    existing = is_running(app_id)
+    if existing:
+        return existing
+
+    manifest = _load_manifest(app_id)
+    cmd = _build_cmd(app_id, manifest)
+
+    os.makedirs(paths.logdir(app_id), exist_ok=True)
+    logpath = os.path.join(paths.logdir(app_id), "app.log")
+    logf = open(logpath, "ab", buffering=0)
+
+    env = _build_env(app_id, manifest)
 
     proc = subprocess.Popen(
         cmd,
