@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from typing import Any, Dict, List, Tuple
 
 from . import paths
@@ -178,13 +179,28 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
             os.remove(tmp)
 
 
+def _canonical_ok(path: str) -> bool:
+    """True iff the canonical config at `path` exists AND parses as a dict."""
+    try:
+        with open(path) as f:
+            return isinstance(json.load(f), dict)
+    except (OSError, ValueError):
+        return False
+
+
 def migrate_legacy_config(app_id: str) -> bool:
     """One-shot, idempotent move of <app_dir>/config.json -> appdata.
 
     Devices upgraded from an older appmgr still carry the user's settings inside
-    the install dir. Copy them to the new location (only if nothing is there
-    yet -- the new location always wins), then rename the old file to
+    the install dir. Copy them to the new location (only if nothing valid is
+    there yet -- the new location always wins), then rename the old file to
     `config.json.migrated` so it is not re-read and the trace stays on disk.
+
+    ★Only RETIRE the legacy file once the canonical copy exists AND parses★
+    (健壮#20). The old code renamed the legacy file even when the canonical write
+    had failed or the canonical file was corrupt -- leaving BOTH gone and the app
+    silently back on manifest defaults. Now a canonical that will not parse keeps
+    the legacy file as the source of truth.
 
     Returns True when a legacy file was consumed/retired. Best-effort: an
     unreadable/corrupt legacy file is left untouched and reported as False.
@@ -200,8 +216,24 @@ def migrate_legacy_config(app_id: str) -> bool:
     if not isinstance(data, dict):
         return False
     new = config_path(app_id)
-    if not os.path.isfile(new):
-        _atomic_write_json(new, data)
+    if os.path.isfile(new) and not _canonical_ok(new):
+        # A canonical file EXISTS but does not parse (half-written / corrupted).
+        # Do NOT blindly overwrite it and do NOT retire the legacy file: quarantine
+        # the corrupt copy (it may hold a newer, partially-written value worth
+        # inspecting) and leave the legacy file as the working source of truth
+        # (load_user_config falls back to it). A later clean state migrates it.
+        try:
+            os.replace(new, new + ".corrupt")
+        except OSError:
+            pass
+        return False
+    if not os.path.isfile(new):            # nothing there yet -> write it
+        try:
+            _atomic_write_json(new, data)
+        except OSError:
+            return False                   # cannot persist -> KEEP the legacy file
+    if not _canonical_ok(new):
+        return False                       # write did not take -> keep legacy
     os.replace(old, old + ".migrated")     # keep a trace, stop re-reading it
     return True
 
@@ -364,6 +396,57 @@ def validate_config(manifest: dict, incoming: dict) -> Tuple[Dict[str, Any], Lis
         else:
             errors.append(err)
     return clean, errors
+
+
+def _quarantine_config(app_id: str, dropped: Dict[str, Any]) -> None:
+    """Persist config keys a new schema rejected, so they are inspectable rather
+    than silently lost. Best-effort."""
+    try:
+        d = paths.appdata_dir(app_id)
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".quarantine.", suffix=".json", dir=d)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"ts": int(time.time()), "dropped": dropped},
+                      f, indent=2, ensure_ascii=False)
+        os.replace(tmp, os.path.join(d, "config.quarantine.json"))
+    except OSError:
+        pass
+
+
+def revalidate_user_config(manifest: dict, app_id: str) -> dict:
+    """After an upgrade, drop stored config keys the NEW schema rejects (健壮#20).
+
+    A manifest upgrade can REMOVE a key, change its type, or narrow a range. The
+    stored config.json is not re-checked anywhere, so a now-invalid value would
+    reach the app unchanged. Here every stored key is validated against the new
+    schema: unknown or invalid keys are dropped (and quarantined for inspection),
+    valid keys are kept as-is. Returns {"dropped": {...}, "kept": n}.
+
+    ★No-op when the manifest declares NO schema★ (specs == {}): a third-party app
+    without a config_schema must not have its entire config wiped just because
+    there is nothing to validate against."""
+    cfg = load_user_config(app_id)
+    if not cfg:
+        return {"dropped": {}, "kept": 0}
+    specs = schema_specs(manifest)
+    if not specs:
+        return {"dropped": {}, "kept": len(cfg), "skipped": True}
+    kept: Dict[str, Any] = {}
+    dropped: Dict[str, Any] = {}
+    for k, v in cfg.items():
+        spec = specs.get(k)
+        if spec is None:
+            dropped[k] = v
+            continue
+        ok, _coerced, _err = _validate_one(spec, v)
+        if ok:
+            kept[k] = v                    # keep the user's original value verbatim
+        else:
+            dropped[k] = v
+    if dropped:
+        _quarantine_config(app_id, dropped)
+        _atomic_write_json(config_path(app_id), kept)
+    return {"dropped": dropped, "kept": len(kept)}
 
 
 def get_config(manifest: dict, app_id: str) -> dict:
