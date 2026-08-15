@@ -32,6 +32,24 @@ class InstallError(Exception):
     pass
 
 
+def _fsync_dir(path: str) -> None:
+    """Flush a directory entry to disk so a rename survives a power cut (健壮#16).
+
+    Best-effort: some filesystems refuse O_RDONLY fsync on a directory, and the
+    dev box's tmpfs has nothing to flush -- neither is a reason to fail an
+    install."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _validate_pkg_path(pkg_path: str) -> str:
     real = os.path.realpath(pkg_path)
     if not real.endswith(".tar.gz"):
@@ -271,6 +289,12 @@ def install(pkg_path: str, signature: Optional[str] = None) -> Tuple[str, dict]:
             os.rename(dest, backup)
         os.rename(staging, dest)
         staging = None
+        # ★Durability★: fsync the parent dir so the two renames above are on
+        # stable storage. Without it a power cut between `dest->.prev` and
+        # `staging->dest` can leave ONLY `.prev` (dest gone) -- reconcile_
+        # interrupted_installs() recovers that on the next boot, but fsyncing
+        # here makes the window as small as the FS allows (健壮#16).
+        _fsync_dir(paths.APPS_DIR)
         # retire the pre-.prev naming if an older appmgr left one behind
         stale = dest + ".old"
         if os.path.isdir(stale):
@@ -279,6 +303,71 @@ def install(pkg_path: str, signature: Optional[str] = None) -> Tuple[str, dict]:
         if staging and os.path.isdir(staging):
             shutil.rmtree(staging, ignore_errors=True)
     return app_id, manifest
+
+
+def restore_prev(app_id: str) -> bool:
+    """Swap the retained `<id>.prev` rollback copy back into place (健壮#15).
+
+    Used by the upgrade transaction when the NEW version fails to come up: the
+    broken dir is moved aside to `<id>.failed` (then removed) and `.prev` is
+    renamed back to the live dir. Returns False when there is no `.prev` to
+    restore (nothing to roll back to). Renames are fsync'd like install()."""
+    if not paths.valid_app_id(app_id):
+        raise InstallError(f"invalid app id {app_id!r}")
+    dest = paths.app_dir(app_id)
+    prev = dest + ".prev"
+    if not os.path.isdir(prev):
+        return False
+    failed = dest + ".failed"
+    if os.path.exists(dest):
+        shutil.rmtree(failed, ignore_errors=True)
+        os.rename(dest, failed)
+    os.rename(prev, dest)
+    _fsync_dir(paths.APPS_DIR)
+    shutil.rmtree(failed, ignore_errors=True)
+    return True
+
+
+def reconcile_interrupted_installs() -> list:
+    """Recover installs a crash/power-cut interrupted mid-swap (健壮#16).
+
+    install() does `dest -> <id>.prev` then `staging -> dest`. A crash between
+    the two leaves `<id>.prev` with NO live dir -- the app has vanished though
+    its previous version sits right there. On boot, for every `<id>.prev` whose
+    live `<id>` dir is missing, rename it back. Also sweeps orphaned staging dirs
+    (`.<id>.stage.*`) and abandoned `<id>.failed` copies from a rollback that
+    died. Returns the list of app ids restored. Best-effort per entry."""
+    restored = []
+    try:
+        names = os.listdir(paths.APPS_DIR)
+    except OSError:
+        return restored
+    for name in names:
+        full = os.path.join(paths.APPS_DIR, name)
+        # orphaned in-flight extraction dir -> just remove it
+        if name.startswith(".") and ".stage." in name:
+            shutil.rmtree(full, ignore_errors=True)
+            continue
+        if name.endswith(".failed"):
+            shutil.rmtree(full, ignore_errors=True)
+            continue
+        if not name.endswith(".prev"):
+            continue
+        base = name[:-len(".prev")]
+        if not paths.valid_app_id(base):
+            continue
+        dest = paths.app_dir(base)
+        if os.path.isdir(dest):
+            continue                     # live dir present -> normal one-gen .prev
+        if not os.path.isdir(full):
+            continue
+        try:
+            os.rename(full, dest)
+            _fsync_dir(paths.APPS_DIR)
+            restored.append(base)
+        except OSError:
+            pass
+    return restored
 
 
 def uninstall(app_id: str, purge_config: bool = False) -> None:
