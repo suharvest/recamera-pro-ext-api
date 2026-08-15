@@ -25,7 +25,7 @@ import sys
 import time
 from typing import List, Optional
 
-from . import mqtt as mqttcfg, paths
+from . import mqtt as mqttcfg, paths, voiceruntime
 
 
 class SupervisorError(Exception):
@@ -470,6 +470,18 @@ def start(app_id: str) -> int:
     _extlibs = "/oem/usr/lib" + os.pathsep + "/oem/lib"
     env["LD_LIBRARY_PATH"] = _extlibs + (
         os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    # On-demand runtime environment (RUNTIME_BUNDLE_SPEC §3). A file-shaped
+    # runtime (the RK hardware codec plugins) is useless once unpacked unless the
+    # loader and GStreamer are told where to look, and that cannot be done for
+    # every app: GST_PLUGIN_PATH on all nine vision apps would make an unrelated
+    # plugin failure everyone's problem. So the variables go ONLY to apps whose
+    # manifest declares the capability, and only when the runtime actually probes
+    # present -- an app declaring `hwcodec` on a device without the bundle still
+    # starts (and falls back to software decode) instead of being blocked here.
+    # merge_env appends rather than assigns for the path variables: assigning
+    # LD_LIBRARY_PATH would erase the /oem/... entries set six lines above and
+    # librockchip_mpp.so.1 would stop resolving.
+    voiceruntime.apply_runtime_env(env, manifest.get("capabilities"))
     # Inject global MQTT/HA broker settings when enabled (app publishes WS+MQTT).
     # Empty dict when disabled -> app stays WS-only (unchanged behaviour).
     try:
