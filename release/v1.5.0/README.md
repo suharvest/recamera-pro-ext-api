@@ -199,6 +199,28 @@ python3 build-packages.py --frontend /path/to/recamera_web_react/build
 
 本表是本版所有产物校验值的**唯一权威来源**。
 
+> ### ⚠️ 原地更新记录
+>
+> **2026-08-15:`deploy-app.sh` 在 v1.5.0 发布后被原地替换过一次。**
+>
+> | | size | md5 |
+> |---|---:|---|
+> | 初版(已作废) | 12761 | `924626c55fee005b7cd18ed054a25a8b` |
+> | **当前** | 16636 | `13acde357be974bfc29d8b24faaf18c3` |
+>
+> 改动:前端部署由"推 36 MB 整包 + 整目录替换"改为**按文件 md5 比对、只推变化的文件**。
+> 前端包里 34 MB 是三个思源黑体 woff2、从不变化,每次重传纯属浪费。真机实测:
+> 同步态由 **503s / 36 MB** 降到 **13s / 0 字节**;只改了 JS 时推 1.7 MB / 42s。
+>
+> 行为未变:备份、权限(目录 755 / 文件 644)、rkipc md5 前后断言、dmesg 检查
+> 全部保留。删除严格限定在 `static/` 子树内,`cgi-bin` 与 `sdcard`/`usb0`/`userdata`
+> 三个软链显式排除,且待删数超过新包文件数时中止。
+>
+> **如果你在 2026-08-15 之前下载过 `deploy-app.sh`,手里是初版。** 它功能正常、
+> 只是每次多传 34 MB;要用新版重新下载即可,两版可互换,不影响设备状态。
+>
+> 其余产物未变动。
+
 ### release/v1.5.0/
 
 | 包 | size (bytes) | md5 | 与 v1.4.0 |
@@ -210,7 +232,7 @@ python3 build-packages.py --frontend /path/to/recamera_web_react/build
 | `apps-v1.5.0.tar.gz` | 986014 | `01033bf889ae2613c858a138e955507a` | **相同** |
 | `voice-runtime-1.0.0.tar.gz` | 18856604 | `ace48a688d41a3fc6b852a0f14ddad8d` | **相同** |
 | `gst-hwcodec-1.0.0.tar.gz` | 425137 | `8e6d286fac58a5b366e8fdd1709b212f` | 新增 |
-| `deploy-app.sh` | 12761 | `924626c55fee005b7cd18ed054a25a8b` | 不同（仅版本号） |
+| `deploy-app.sh` | 16636 | `13acde357be974bfc29d8b24faaf18c3` | 不同（版本号 + 前端按文件去重，见下方「原地更新」） |
 | `deploy-firmware.sh` | 4945 | `82396b0f8cbf6094429bcdacefdb1631` | 不同（仅版本号） |
 
 `recamera-ext-api-v1.5.0.tar` 的 tar md5 与 v1.4.0 不同，因为内附 `MANIFEST.txt` / `README.md`
