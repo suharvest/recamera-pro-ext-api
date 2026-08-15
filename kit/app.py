@@ -1236,6 +1236,25 @@ class App:
 
 
 
+def _signal_ready() -> None:
+    """Tell appmgr this app reached its main loop (readiness handshake §core1).
+
+    appmgr's supervisor.start() blocks until this file appears before it commits
+    the app as running/active, so an interpreter/import failure, a missing model,
+    or a sink it could not bind is caught as a failed start (the process dies
+    before this point) instead of the UI showing a dead app as "running". A no-op
+    when APPMGR_READY_FILE is unset (hand-run / demo), so nothing changes off
+    appmgr. Best-effort: a write failure must never take the app down."""
+    path = os.environ.get("APPMGR_READY_FILE")
+    if not path:
+        return
+    try:
+        with open(path, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     """Generic CLI entry an app's app.py calls from __main__.
 
@@ -1323,6 +1342,9 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
         app.start(args.model, source=args.source, url=args.url, sink=sink,
                   n=args.n, every=args.every, verbose=not args.quiet,
                   app_dir=app_dir, manifest=manifest, config=eff)
+        # start() returned: models loaded, sink bound, frame source open. Signal
+        # READY so appmgr commits the app as running BEFORE the loop begins.
+        _signal_ready()
         try:
             app.run()
         finally:

@@ -470,7 +470,10 @@ class SupervisorInjectionTests(HwcodecTestBase):
     def _run_and_read_env(self, app_id, capabilities):
         d = self._make_app(app_id, capabilities)
         dump = os.path.join(d, "env.dump")
-        supervisor.start(app_id)
+        # This fake "app" (a /bin/sh one-liner) dumps its env and exits at once;
+        # it never signals READY, so start without the readiness gate -- these
+        # tests assert on the injected ENVIRONMENT, not on lifecycle.
+        supervisor.start(app_id, wait_ready=False)
         deadline = time.time() + 10
         while time.time() < deadline and not os.path.isfile(dump):
             time.sleep(0.05)

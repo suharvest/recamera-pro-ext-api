@@ -23,7 +23,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import mqtt as mqttcfg, paths, voiceruntime
 
@@ -36,6 +36,33 @@ class SupervisorError(Exception):
 # fixture tree -- macOS (the dev box) has no /proc at all, and even on Linux you
 # cannot conjure a process in an arbitrary state on demand.
 PROC_ROOT = os.environ.get("APPMGR_PROC_ROOT", "/proc")
+
+# ---- app-readiness handshake (lifecycle §core1) ----------------------------- #
+# Popen returning does NOT mean the app is up: an interpreter/import failure, a
+# missing model, or a socket it cannot bind all surface only after the process
+# has already forked, while the UI would already read "running/active". start()
+# therefore waits for the app to CREATE its readyfile (kit.run_app writes it once
+# App.start() has loaded models, opened the sink and bound the frame source) and
+# only then reports success. Timeout is generous -- real vision apps load an RKNN
+# model + open the camera before signalling -- but env-overridable so a test can
+# drive it low.
+READY_TIMEOUT = float(os.environ.get("APPMGR_READY_TIMEOUT", "30"))
+_READY_POLL = float(os.environ.get("APPMGR_READY_POLL", "0.05"))
+
+# ---- app child registry (健壮#17) ------------------------------------------- #
+# pid -> Popen for the app children THIS appmgr launched. SIGCHLD reaping consults
+# ONLY this registry (via Popen.poll(), the single reaper for each app pid) and
+# NEVER waitpid(-1): a process-wide reap steals the exit status of the short-lived
+# helpers appmgr shells out to with subprocess.run() -- openssl (signing), pip
+# (voiceruntime), gst-inspect, the pkill sweep -- and subprocess.run reports a
+# stolen status as ChildProcessError -> returncode 0, so a FAILED runtime probe
+# would read as success (voiceruntime.py judges "present" off that return code).
+_apps: Dict[int, "subprocess.Popen"] = {}
+
+
+def _register_child(proc: "subprocess.Popen") -> None:
+    """Record an app child so reap_children() (and only it) can reap its exit."""
+    _apps[proc.pid] = proc
 
 
 # ---- pid helpers ------------------------------------------------------------ #
@@ -181,24 +208,28 @@ _reaped: List[tuple] = []
 
 
 def reap_children() -> int:
-    """waitpid(-1, WNOHANG) until drained. Safe to call from a signal handler.
+    """Reap the app children that have exited. Safe to call from a signal handler.
 
-    Returns the number of children reaped. Reaping is process-wide, so it also
-    collects short-lived helpers (the `pkill -x ffmpeg` sweep). That is harmless:
-    subprocess.Popen tolerates a stolen status (ChildProcessError -> returncode
-    0) and drain_exits() ignores pids that match no app pidfile.
+    ★Reaps ONLY registered app children★ (via Popen.poll(), the single reaper for
+    each app pid), never waitpid(-1). A process-wide reap would steal the wait
+    status of the helpers appmgr runs with subprocess.run() -- openssl, pip,
+    gst-inspect, the pkill sweep -- turning their clean exit into a
+    ChildProcessError that subprocess.run reports as returncode 0, so a failed
+    runtime probe would silently read as success (健壮#17). Each reaped pid's
+    returncode is queued (as a NEGATIVE signal number when killed) for
+    drain_exits(); list.append is a single C op so the queue needs no lock.
+    Returns the number of children reaped.
     """
     n = 0
-    while True:
+    for pid, proc in list(_apps.items()):
         try:
-            pid, status = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:      # no children at all
-            break
-        except OSError:
-            break
-        if pid == 0:                   # children exist, none exited
-            break
-        _reaped.append((pid, status, time.time()))
+            rc = proc.poll()           # reaps + caches returncode; None = alive
+        except Exception:
+            rc = None
+        if rc is None:
+            continue
+        _reaped.append((pid, rc, time.time()))
+        _apps.pop(pid, None)
         n += 1
     return n
 
@@ -232,6 +263,25 @@ def describe_status(status: int, at: float = None) -> dict:
             name = f"SIG{sig}"
         return {"code": -sig, "signal": name, "at": ts}
     return {"code": os.WEXITSTATUS(status), "signal": None, "at": ts}
+
+
+def describe_returncode(rc: Optional[int], at: float = None) -> dict:
+    """Popen.returncode -> {"code", "signal", "at"}.
+
+    Popen encodes a signal death as a NEGATIVE number (-N), which is exactly the
+    shape describe_status() produced from a raw wait status, so the API field is
+    unchanged: {"code": -11, "signal": "SIGSEGV"}. A normal exit is {"code": N,
+    "signal": None}.
+    """
+    ts = time.time() if at is None else at
+    if rc is not None and rc < 0:
+        sig = -rc
+        try:
+            name = signal.Signals(sig).name
+        except ValueError:
+            name = f"SIG{sig}"
+        return {"code": rc, "signal": name, "at": ts}
+    return {"code": rc, "signal": None, "at": ts}
 
 
 def _app_ids() -> List[str]:
@@ -286,13 +336,13 @@ def drain_exits() -> List[dict]:
     out = []
     while _reaped:
         try:
-            pid, status, ts = _reaped.pop(0)
+            pid, rc, ts = _reaped.pop(0)
         except IndexError:             # concurrent drain
             break
         app_id = _app_for_pid(pid)
         if app_id is None:
-            continue                   # not one of ours (e.g. the pkill helper)
-        info = describe_status(status, ts)
+            continue                   # not one of ours (stale queue entry)
+        info = describe_returncode(rc, ts)
         info["pid"] = pid
         _write_exit(app_id, info)
         _clear_pidfile(app_id, pid)
@@ -506,8 +556,99 @@ def _build_env(app_id: str, manifest: dict) -> dict:
     return env
 
 
+# ---- readiness handshake ---------------------------------------------------- #
+def _clear_ready(app_id: str) -> None:
+    try:
+        os.remove(paths.readyfile(app_id))
+    except OSError:
+        pass
+
+
+def _log_tail(app_id: str, limit: int = 1500) -> str:
+    """Last `limit` bytes of the app's stdout/stderr log -- the root cause a
+    failed startup left behind (ImportError, `model not found`, bind refused)."""
+    try:
+        with open(os.path.join(paths.logdir(app_id), "app.log"), "rb") as f:
+            try:
+                f.seek(-limit, os.SEEK_END)
+            except OSError:
+                f.seek(0)
+            return f.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+
+
+def _await_ready(app_id: str, proc: "subprocess.Popen", ready_path: str,
+                 timeout: float) -> bool:
+    """Block until the app signals READY, dies, or `timeout` elapses.
+
+    Returns True the moment the readyfile appears (app reached its loop). Returns
+    False if the process exits first (early death -- the failure modes core1
+    targets) or the deadline passes (hung startup). The readyfile is checked
+    BEFORE proc.poll() each turn so an app that signals and then exits still
+    counts as started.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if os.path.exists(ready_path):
+            return True
+        if proc.poll() is not None:            # exited before signalling ready
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_READY_POLL)
+
+
+def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0) -> None:
+    """Tear down a process group whose startup failed (TERM -> grace -> KILL).
+
+    Kills the whole PGID (the app is a session leader; its ffmpeg children share
+    the group), so a half-started app leaves no orphan frame source holding the
+    camera. Then reaps + records the exit and drops run.pid / run.ready."""
+    pid = proc.pid
+    if _pid_running(pid):
+        _killpg(pid, signal.SIGTERM)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            reap_children()
+            if proc.poll() is not None or not _pid_running(pid):
+                break
+            time.sleep(0.1)
+        if _pid_running(pid):
+            _killpg(pid, signal.SIGKILL)
+            time.sleep(0.2)
+    reap_children()
+    drain_exits()
+    _clear_ready(app_id)
+    _clear_pidfile(app_id, pid)
+
+
+def _startup_failure(app_id: str, proc: "subprocess.Popen", timeout: float) -> str:
+    """Human-readable root cause for a failed start(), with the app's log tail."""
+    rc = proc.poll()
+    if rc is not None:
+        reap_children()
+        drain_exits()                          # persist last_exit for the UI
+        info = last_exit(app_id) or describe_returncode(rc)
+        base = (f"app {app_id!r} exited during startup "
+                f"(code={info.get('code')}, signal={info.get('signal')})")
+    else:
+        base = f"app {app_id!r} did not signal ready within {timeout:g}s"
+    tail = _log_tail(app_id)
+    return base + (f"; last log:\n{tail}" if tail else "")
+
+
 # ---- public API ------------------------------------------------------------- #
-def start(app_id: str) -> int:
+def start(app_id: str, *, wait_ready: bool = True,
+          ready_timeout: Optional[float] = None) -> int:
+    """Launch an app and (by default) block until it signals READY.
+
+    `wait_ready=True` gates success on the app reaching its main loop, so a
+    caller (do_switch / do_activate / do_install) only commits `active` for a
+    process that is actually up; a failure to come up raises SupervisorError with
+    the root cause and leaves NO orphan process. Pass wait_ready=False for a
+    fire-and-forget launch (kept for callers that manage readiness themselves).
+    """
     if not paths.valid_app_id(app_id):
         raise SupervisorError(f"invalid app id {app_id!r}")
     d = paths.app_dir(app_id)
@@ -526,6 +667,10 @@ def start(app_id: str) -> int:
     logf = open(logpath, "ab", buffering=0)
 
     env = _build_env(app_id, manifest)
+    # READY handshake: clear any stale marker, then tell the app where to signal.
+    ready_path = paths.readyfile(app_id)
+    _clear_ready(app_id)
+    env["APPMGR_READY_FILE"] = ready_path
 
     proc = subprocess.Popen(
         cmd,
@@ -537,9 +682,21 @@ def start(app_id: str) -> int:
         start_new_session=True,     # setsid: child is session+group leader, pgid == pid
     )
     logf.close()
+    _register_child(proc)           # so reap_children() (only it) collects its exit
     with open(paths.pidfile(app_id), "w") as f:
         f.write(str(proc.pid))
-    return proc.pid
+
+    if not wait_ready:
+        return proc.pid
+
+    timeout = READY_TIMEOUT if ready_timeout is None else ready_timeout
+    if _await_ready(app_id, proc, ready_path, timeout):
+        return proc.pid
+    # Startup failed: capture the cause, then guarantee teardown (no orphan) so
+    # the caller's transactional rollback starts from a clean slate.
+    reason = _startup_failure(app_id, proc, timeout)
+    _terminate_proc(app_id, proc)
+    raise SupervisorError(reason)
 
 
 def reload(app_id: str) -> bool:
@@ -606,13 +763,13 @@ def stop(app_id: str, grace: float = 5.0) -> dict:
     reap_children()
     drain_exits()
 
-    # sweep any ffmpeg children by EXACT name only (never pkill -f python/app.py).
-    try:
-        subprocess.run(["pkill", "-x", "ffmpeg"], check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
-        pass
-
+    # ★No global `pkill -x ffmpeg`★ (健壮#19 / P4). The app was launched with
+    # start_new_session, so its pgid == its pid, and the ffmpeg the kit frame
+    # source spawns runs WITHOUT setsid -> it inherits that same process group.
+    # The killpg(pgid) above therefore already delivered TERM/KILL to ffmpeg;
+    # a system-wide `pkill -x ffmpeg` added nothing for THIS app while killing
+    # every unrelated ffmpeg on the box (another user's transcode, a debug pull).
+    _clear_ready(app_id)
     try:
         os.remove(paths.pidfile(app_id))
     except FileNotFoundError:

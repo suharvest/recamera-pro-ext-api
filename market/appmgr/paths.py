@@ -183,6 +183,18 @@ def pidfile(app_id: str) -> str:
     return os.path.join(app_dir(app_id), "run.pid")
 
 
+def readyfile(app_id: str) -> str:
+    """Where a freshly launched app signals it reached its main loop (READY).
+
+    supervisor.start() clears this before launch, injects its path as
+    APPMGR_READY_FILE, and waits for the app (kit.run_app) to create it once
+    start() has loaded models / opened the sink / bound the frame source. Its
+    presence is what lets a switch/upgrade COMMIT `active` only after the process
+    is actually up, instead of the moment Popen returned (§lifecycle). Lives in
+    the install dir next to run.pid so an upgrade/uninstall drops it too."""
+    return os.path.join(app_dir(app_id), "run.ready")
+
+
 def logdir(app_id: str) -> str:
     return os.path.join(app_dir(app_id), "logs")
 

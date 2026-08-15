@@ -71,6 +71,10 @@ def _spawn(code, app_id=APP):
                          stdin=subprocess.DEVNULL, start_new_session=True)
     with open(paths.pidfile(app_id), "w") as f:
         f.write(str(p.pid))
+    # Mirror supervisor.start(): reaping now consults an app-child registry (only
+    # registered pids are waitpid'd, never waitpid(-1)), so a hand-spawned test
+    # child must register the same way its production counterpart does.
+    supervisor._register_child(p)
     return p
 
 
@@ -130,6 +134,7 @@ class ReapTests(unittest.TestCase):
         self._proc_root = supervisor.PROC_ROOT
         self._procdir = tempfile.mkdtemp(prefix="fakeproc.", dir=_BASE)
         del supervisor._reaped[:]
+        supervisor._apps.clear()
         self._children = []
 
     def tearDown(self):
@@ -141,6 +146,7 @@ class ReapTests(unittest.TestCase):
             except Exception:
                 pass
         del supervisor._reaped[:]
+        supervisor._apps.clear()
         try:
             os.remove(paths.pidfile(APP))
         except OSError:
@@ -319,6 +325,7 @@ class ApiVisibilityTests(unittest.TestCase):
         self.server, self.state = server, state
         paths.ensure_dirs()
         del supervisor._reaped[:]
+        supervisor._apps.clear()
         self._proc_root = supervisor.PROC_ROOT
 
     def tearDown(self):
