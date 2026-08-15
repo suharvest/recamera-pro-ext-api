@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-14T23:42:15Z",
+  "generated": "2026-08-15T00:58:38Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -23,7 +23,7 @@
         "filename": "face-analysis-0.1.0-arm64.tar.gz",
         "sha256": "c748d9ca58b9377f7048c464405ba2192aa4a40ab157ac0587524649bb76a8d3",
         "size": 52838389,
-        "signature": "MEUCIGYdShO3GXjI0ECVDBTSjRANOXywyjY89c2YhPeW2nWkAiEArdbSmpR5F4OtVNCXHTGOmGbnIoa7EhNN29bhq72i/ac=",
+        "signature": "MEUCIQCfenXrWT5BBSlQgHV2jZ8bKNmoJRJJJLVvIf08Y+rfCQIgAIxyNG3f0aTQPs6VdOn0Yt0ooFSo0bQLLG9JTlREC/s=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -48,7 +48,7 @@
         "filename": "facemesh-reader-0.1.0-arm64.tar.gz",
         "sha256": "249e6a0fc9ff470ac58e761f34fcddba03b0b3e6deefebcf56e323412f28e2b8",
         "size": 6843123,
-        "signature": "MEQCIEOkGplLGHezW18nF1u1E09iJogjeU0XisYtkgfKPSzUAiAPk67kTkEpmg8lNdRDeAnebvoNgAfnRdyq5GJu1DarlA==",
+        "signature": "MEQCIHpP9VHyAGqQ8s+yg6SxYBeRoaB9+avHn3IYPLT6eP/PAiAvpxY7bwlcSrxJklLR6Qm9SwuaxBv6QkmKpRCGIzZgUg==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -73,7 +73,7 @@
         "filename": "fall-detection-0.2.0-arm64.tar.gz",
         "sha256": "67773daf4d2079d28700fe12005be8654a3de010def3400b28a7ea333d0c69f9",
         "size": 3053510,
-        "signature": "MEUCIQDr0wZ7hLUlACd4PXihAIl3EpMQsIvd05QtbDjLU1TYkgIgbB1YS7OIgcDwuHWu560crINpwJRXm6/+bvQ4yGo5+0o=",
+        "signature": "MEUCIQCFCWsxZv/kbv6GHGQubMf5Qty714K0eJOghDsUOK9JJQIgKRoKHYeS0pvkvHM+zhU1hRtTo2K2tuOrWAiKGn+DsA4=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -98,7 +98,7 @@
         "filename": "fitness-trainer-0.1.0-arm64.tar.gz",
         "sha256": "0bbcbe7707f70f49f520beb6dc6755b7fe462511529b2e04617f942a886745a2",
         "size": 2867151,
-        "signature": "MEYCIQDA3i4vRt4MwFUvvJd6VNvQT0a4rzBLhlRvWGtnJroXsQIhAKsaK3MoFjAD0YuxaN0jLWklV88DQoIkKB+f/dfCVjC+",
+        "signature": "MEUCIQCj0TaNNJjyWDkXMa/uMWSOj8+N1kIg3MU4Z0A9j3rvxwIgSGAoOQlsu8Rtgunp40ZyWVBoXfsSndTOQh/fY33Prx8=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -123,7 +123,7 @@
         "filename": "ppocr-reader-0.1.0-arm64.tar.gz",
         "sha256": "8ea129949f8efa5e435e054e70fd632b407ba9a190637e21ada4881ace755ca6",
         "size": 5194719,
-        "signature": "MEUCIQDbH5Rdi2Z+ofJinlx2Pg3s4TBABQWcgCVGXCofYbVoAgIgCtIYa5Gve+W7NjaWmn75rx4cF1/kspu8TirZPLCRL90=",
+        "signature": "MEUCIBnHR3GKz8KIMIJFK9x967IHaariAxdTvPHlmO8yYZmQAiEA6JJFuwMq3QRm0XOBZKTOWZl1iRgwhHJW7F3ODgMgkTg=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -144,7 +144,7 @@
         "filename": "qrcode-reader-0.1.0-arm64.tar.gz",
         "sha256": "b791b79dd5ef372e6ae260748945c8ca9c90bfff07674b1720e3765e2e7cf641",
         "size": 922415,
-        "signature": "MEUCIQCk+B1vc3lDkFX+rjy23ePXZFK9A1qANgbNEOdSJty2dAIgYyBz9uucNFcjPkD/GO0WruJS5qloltLo/YHfloYfVDM=",
+        "signature": "MEUCIEF8Wh2lUe7A/x9ol4HESPf+bwhozpagPSPlD5cJv8FeAiEA+sWd9/m3av/N5vk6vx8sTOYxBM2TaCfjoRXXUXZwtf8=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -169,7 +169,7 @@
         "filename": "retail-vision-0.1.0-arm64.tar.gz",
         "sha256": "9c5efc040dc46a506effbf1aa5cd6c9e56853c136eff3a5113fa7a9955080f82",
         "size": 3023387,
-        "signature": "MEYCIQCD2Vp05VhLB49m0GAFvpHK0zBe8dVr7UM8iFa8QVpttgIhAK9M3+lD0A43eCgpS+rK2pdtkQ0RWuf+Y+lrXAA9H2hZ",
+        "signature": "MEUCIHTu+FMfiijcllLfNHi9VLiRSwoqdnYbHztWwlGpZK3bAiEAtS85Rf5hnKm+SFMCjipPUJErtmp53iDrHAW3PWQZKqk=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -195,7 +195,7 @@
         "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
         "sha256": "abe531f2baa22680e660791051168bc7e2326c01d720703ce6389b3f9f88c914",
         "size": 8158,
-        "signature": "MEUCIQDp6tBpDTj+Rle2HsbKzewJlpIu75v+pQK73/hEF0Iz3QIgbKhfdEWDWQthNveD3EzTzhaxJCfZAtLftfH2wdpwHio=",
+        "signature": "MEUCIApz4Tc/vgif56+35QKhPV2+CbrqLYf0RW/eggaP9ygNAiEAySCqhEEG2WKbZMexc5OlrRyLIj54JlLSnpQfx5TfcsI=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -287,7 +287,7 @@
         "filename": "yolo-detector-0.1.0-arm64.tar.gz",
         "sha256": "8b78f8abac329f633b125d23ab1bf30400a63b77ccb2823c352ed2ec2ff9b809",
         "size": 3018913,
-        "signature": "MEUCIDTv941dQHsuj9CcxuWmjMQ6aMU/HB4ck9UMIhTxp0h9AiEAoCptwKYhM8XaZvmbBa6oXyOqOOHb79zrwjq/lWPRVlI=",
+        "signature": "MEQCIA2o7gwi6u3LQtOXGr11Bf64OwqnTEZ1ndF/+DLb09hUAiA74sAl2Skl+Pos4UbTOILMjimRiLZC2rI658Z5vV72wA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -299,6 +299,12 @@
       "filename": "voice-runtime-1.0.0.tar.gz",
       "sha256": "e1bccfc4f42f43478186d17119a20c4d7f0834640bf9bc324ed5d028e397f711",
       "size": 18856604
+    },
+    "hwcodec": {
+      "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/gst-hwcodec-1.0.0.tar.gz",
+      "filename": "gst-hwcodec-1.0.0.tar.gz",
+      "sha256": "ec9e0eb0286bb78740fd45ad1c9c8333f6f2621cb660154852039efadb9ddddc",
+      "size": 425137
     }
   }
 }
