@@ -220,7 +220,10 @@ class BundleShapeTests(unittest.TestCase):
     def test_pip_invocation_is_offline(self):
         """The device has no network: --no-index --find-links or nothing."""
         import inspect
-        src = inspect.getsource(voiceruntime.install)
+        # install() is now a two-line dispatch on the entry's `kind`
+        # (RUNTIME_BUNDLE_SPEC §2); the pip invocation this pins lives in the
+        # wheels branch.
+        src = inspect.getsource(voiceruntime._install_wheels)
         self.assertIn("--no-index", src)
         self.assertIn("--find-links", src)
 
