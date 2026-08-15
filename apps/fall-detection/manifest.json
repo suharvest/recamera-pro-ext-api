@@ -12,6 +12,9 @@
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "kit": ">=0.1.0",
+  "package": {
+    "exclude": ["evaluation", "tools", "test_*.py", "*.md"]
+  },
   "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
     "output"

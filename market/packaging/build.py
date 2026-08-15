@@ -2,11 +2,12 @@
 """
 build.py -- pack an app directory into a distributable app package.
 
-    <id>-<ver>-arm64.tar.gz   (manifest.json + app.py + models/ ; NO kit)
+    <id>-<ver>-arm64.tar.gz   (the whole app dir tree, minus junk ; NO kit)
 
 The shared `kit` runtime is deployed once to the device (see appmgr) and is
-NOT bundled per app (docs/guide/kit-design.md §0.6): an app package is just the
-model + thin app.py + manifest, kept a few hundred KB.
+NOT bundled per app (docs/guide/kit-design.md §0.6): an app package is the app's
+own files -- manifest + app.py + any sibling helper modules/templates/data +
+models/ -- kept small (a `kit/` subdir, caches and build products are excluded).
 
 Usage:
     python3 build.py apps/yolo-detector
@@ -25,17 +26,35 @@ import os
 import sys
 import tarfile
 
-# Files/dirs that belong in an app package. Anything else in the app dir
-# (kit/, __pycache__, logs/, run.pid, .DS_Store, hidden files) is excluded.
-# `icon.<ext>` is the app's card artwork (RENDER_DECLARATION_SPEC §5 P0-1):
-# appmgr's installer keeps it in the install dir and serves it at
-# GET /api/appMgr/icon?id=<id>, which is how a THIRD-PARTY app gets a card image
-# without being baked into the front-end bundle. Raster only -- the installer
-# refuses any other icon.* extension (SVG is an active document).
-# Label files for `models[].classes` need no entry here: they live under
-# `models/`, which is packed wholesale.
-INCLUDE_TOP = ("manifest.json", "app.py", "models", "hooks", "run",
-               "icon.png", "icon.webp", "icon.jpg", "icon.jpeg")
+# Packaging collects the WHOLE app directory tree, not a fixed whitelist.
+#
+# The launcher (kit/run.py:load_app_module) puts the app dir on sys.path so an
+# app may `import` sibling helper modules, and the docs encourage organising an
+# app across several files / a package + templates / data assets. A fixed
+# whitelist (manifest/app.py/models/hooks/run/icon) silently DROPPED every such
+# extra file: the app ran on the dev machine (all files present) but shipped a
+# package missing them, failing only on a clean device. So we pack the entire
+# tree and instead EXCLUDE a precise deny-list of junk / build products.
+#
+# Notable members that this naturally includes (no special-casing needed):
+#   * `icon.<ext>` -- the app's card artwork (RENDER_DECLARATION_SPEC §5 P0-1):
+#     appmgr's installer keeps it and serves GET /api/appMgr/icon?id=<id>, the
+#     way a THIRD-PARTY app gets a card image without a front-end rebuild. The
+#     installer still enforces raster-only at install time (SVG is refused).
+#   * `models/` label files for `models[].classes`, and any sibling helper .py.
+
+# Directory names pruned wholesale (never descended into).
+EXCLUDE_DIRS = frozenset((
+    "__pycache__", ".git", ".hg", ".svn", "kit",
+    "build", "dist", "target", "node_modules",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+    ".venv", "venv", ".idea", ".vscode", ".DS_Store",
+))
+# File suffixes that are build products / editor cruft, never source.
+EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".pyd", ".log", ".swp", ".swo", ".orig")
+# Exact file names to drop (runtime state a dev run leaves in the app dir).
+EXCLUDE_FILES = frozenset(("run.pid", ".DS_Store"))
+
 ID_RE_HINT = "[a-z0-9-]{1,64}"
 
 
@@ -44,24 +63,46 @@ def _is_valid_id(app_id: str) -> bool:
     return re.fullmatch(r"[a-z0-9-]{1,64}", app_id or "") is not None
 
 
-def _members(app_dir: str):
-    """Yield (abspath, arcname) for each file to pack, arcname relative to app_dir."""
-    for top in INCLUDE_TOP:
-        p = os.path.join(app_dir, top)
-        if not os.path.exists(p):
-            continue
-        if os.path.isfile(p):
-            yield p, top
-        else:
-            for root, dirs, files in os.walk(p):
-                # skip caches / hidden dirs
-                dirs[:] = [d for d in dirs if d != "__pycache__" and not d.startswith(".")]
-                for f in files:
-                    if f.startswith(".") or f.endswith(".pyc"):
-                        continue
-                    ap = os.path.join(root, f)
-                    arc = os.path.relpath(ap, app_dir)
-                    yield ap, arc
+def _match_any(name: str, patterns) -> bool:
+    import fnmatch
+    return any(fnmatch.fnmatch(name, p) for p in patterns)
+
+
+def _skip_dir(name: str, rel: str, patterns) -> bool:
+    return (name in EXCLUDE_DIRS or name.startswith(".")
+            or _match_any(name, patterns) or _match_any(rel, patterns))
+
+
+def _skip_file(name: str, rel: str, patterns) -> bool:
+    # Hidden files (.DS_Store, ._AppleDouble, .gitignore) and build cruft, plus
+    # any manifest-declared `package.exclude` glob (matched on basename or the
+    # full app-relative path so `evaluation` and `docs/*.md` both work).
+    return (name.startswith(".")
+            or name in EXCLUDE_FILES
+            or name.endswith(EXCLUDE_SUFFIXES)
+            or _match_any(name, patterns) or _match_any(rel, patterns))
+
+
+def _members(app_dir: str, exclude=()):
+    """Yield (abspath, arcname) for every file to pack, arcname relative to
+    app_dir. Walks the whole tree, pruning EXCLUDE_DIRS / hidden dirs and
+    skipping junk / build-product files (see the deny-lists above); `exclude`
+    adds app-specific globs declared in `manifest.package.exclude`."""
+    patterns = tuple(exclude)
+    for root, dirs, files in os.walk(app_dir):
+        # Prune in place so os.walk never descends excluded/hidden dirs.
+        kept = []
+        for d in dirs:
+            rel = os.path.relpath(os.path.join(root, d), app_dir)
+            if not _skip_dir(d, rel, patterns):
+                kept.append(d)
+        dirs[:] = sorted(kept)
+        for f in sorted(files):
+            ap = os.path.join(root, f)
+            rel = os.path.relpath(ap, app_dir)
+            if _skip_file(f, rel, patterns):
+                continue
+            yield ap, rel
 
 
 def build(app_dir: str, out_dir: str) -> str:
@@ -83,7 +124,10 @@ def build(app_dir: str, out_dir: str) -> str:
     pkg_name = f"{app_id}-{version}-arm64.tar.gz"
     pkg_path = os.path.join(out_dir, pkg_name)
 
-    members = sorted(_members(app_dir), key=lambda m: m[1])
+    exclude = (manifest.get("package") or {}).get("exclude") or ()
+    if not isinstance(exclude, (list, tuple)):
+        sys.exit("error: manifest package.exclude must be a list of globs")
+    members = sorted(_members(app_dir, exclude), key=lambda m: m[1])
     if not any(arc == "app.py" for _, arc in members):
         sys.exit("error: app.py missing from app dir")
 
