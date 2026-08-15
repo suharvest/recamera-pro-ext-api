@@ -179,26 +179,116 @@ else
   die "appmgr did not answer on :8130 after restart (see /var/log/appmgr.log)"
 fi
 
-# ---- step 3: frontend ------------------------------------------------------
+# ---- step 3: frontend (differential sync) ----------------------------------
+# The bundle is ~36 MB, but 34 MB of that is three Source Han Sans woff2 files
+# that never change between releases. Pushing the whole tarball every time wastes
+# minutes of adb-over-Tailscale bandwidth on bytes the device already has.
+# Instead: unpack locally, md5 every file, ask the device for the md5 of the same
+# paths, and push only what differs. Stale files under static/ (old hashed
+# bundles) are pruned explicitly.
+WWW=/oem/usr/www
 if [ "$SKIP_FRONTEND" = "1" ]; then
   say "step 3/5 frontend -- skipped (--skip-frontend)"
 else
-  say "step 3/5 frontend web bundle -> /oem/usr/www"
-  push_verified "$PKG_FRONTEND" "$STAGE/frontend.tar.gz"
-  # backup current www (symlinks stored as-is, not followed; cgi-bin included)
+  say "step 3/5 frontend web bundle -> $WWW (differential sync)"
+  T0=$(date +%s)
+  LOCAL_FE="$(mktemp -d "${TMPDIR:-/tmp}/rcfrontend.XXXXXX")"
+  trap 'rm -rf "$LOCAL_FE" "$LOCAL_FE".manifest "$LOCAL_FE".device "$LOCAL_FE".push "$LOCAL_FE".del' EXIT
+  tar xzf "$PKG_FRONTEND" -C "$LOCAL_FE" || die "cannot unpack $PKG_FRONTEND"
+  LOCAL_MAN="$LOCAL_FE.manifest"   # lines: "<relpath> <md5>"
+  DEV_MAN="$LOCAL_FE.device"       # lines: "<relpath> <md5>"
+  : > "$LOCAL_MAN"
+  while IFS= read -r rel; do
+    printf '%s %s\n' "$rel" "$(lmd5 "$LOCAL_FE/$rel")" >> "$LOCAL_MAN"
+  done < <(cd "$LOCAL_FE" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+  N_LOCAL=$(wc -l < "$LOCAL_MAN" | tr -d ' ')
+  [ "$N_LOCAL" -gt 0 ] || die "frontend package unpacked to 0 files"
+  ok "package unpacked locally: $N_LOCAL files, $(du -sh "$LOCAL_FE" | cut -f1)"
+
+  # backup current www BEFORE any write (symlinks stored as-is; cgi-bin included)
   ash "cd /oem/usr && tar cf - www 2>/dev/null | gzip > $STAGE/backups/www.$TS.tar.gz" >/dev/null
-  ok "backed up /oem/usr/www -> $STAGE/backups/www.$TS.tar.gz"
-  ash "rm -rf $STAGE/frontend.new && mkdir -p $STAGE/frontend.new && gzip -dc $STAGE/frontend.tar.gz | tar -xf - -C $STAGE/frontend.new" >/dev/null
-  # static/ is fully build-generated -> replace wholesale (prunes old hashed
-  # bundles). Top-level html/json/png/svg overlaid. cgi-bin + sdcard/usb0/userdata
-  # symlinks are NOT under static/ and are never touched.
-  ash "rm -rf /oem/usr/www/static && cp -a $STAGE/frontend.new/static /oem/usr/www/static" >/dev/null
-  ash "cd $STAGE/frontend.new && for f in *.html *.json *.png *.svg; do [ -f \"\$f\" ] && cp -a \"\$f\" /oem/usr/www/; done" >/dev/null
+  ok "backed up $WWW -> $STAGE/backups/www.$TS.tar.gz"
+
+  # Device-side manifest: top-level regular files + everything under static/.
+  # `find` (no -L) never descends the sdcard/usb0/userdata symlinks, and cgi-bin
+  # is outside both scopes, so it is never even listed.
+  ash "cd $WWW && { find . -maxdepth 1 -type f; find ./static -type f 2>/dev/null; } \
+       | sed 's|^\\./||' | while read -r f; do md5sum \"\$f\"; done" \
+    | awk 'NF>=2 { h=$1; $1=""; sub(/^[ \t]+/,""); print $0" "h }' | LC_ALL=C sort > "$DEV_MAN"
+  ok "device manifest: $(wc -l < "$DEV_MAN" | tr -d ' ') files already under $WWW"
+
+  # ---- diff: which local files must be pushed -------------------------------
+  PUSH_LIST="$LOCAL_FE.push"; : > "$PUSH_LIST"
+  N_SKIP=0
+  while read -r rel md5; do
+    dev="$(awk -v p="$rel" '{ r=$0; sub(/ [0-9a-f]*$/,"",r); if (r==p) print $NF }' "$DEV_MAN" | head -1)"
+    if [ "$dev" = "$md5" ]; then
+      N_SKIP=$((N_SKIP+1))
+    else
+      echo "$rel" >> "$PUSH_LIST"
+    fi
+  done < "$LOCAL_MAN"
+  N_PUSH=$(wc -l < "$PUSH_LIST" | tr -d ' ')
+  PUSH_BYTES=0
+  if [ "$N_PUSH" -gt 0 ]; then
+    while IFS= read -r rel; do
+      sz=$(wc -c < "$LOCAL_FE/$rel" | tr -d ' ')
+      PUSH_BYTES=$((PUSH_BYTES+sz))
+      printf '     + %s (%s KB)\n' "$rel" "$((sz/1024))"
+    done < "$PUSH_LIST"
+  fi
+  ok "diff: push $N_PUSH file(s) / $((PUSH_BYTES/1024)) KB, skip $N_SKIP identical file(s)"
+
+  # ---- prune: files on the device that the new bundle no longer contains ----
+  # HARD LIMITS: only paths under static/ are ever deletable. Top-level files are
+  # overlaid, never removed. cgi-bin and the sdcard/usb0/userdata symlinks are
+  # rejected explicitly rather than relying on "they aren't under static/".
+  DEL_LIST="$LOCAL_FE.del"; : > "$DEL_LIST"
+  while read -r rel md5; do
+    case "$rel" in
+      static/*) ;;
+      *) continue;;                                   # top level: overlay only
+    esac
+    case "$rel" in
+      cgi-bin/*|*/cgi-bin/*|sdcard/*|usb0/*|userdata/*|*/..*|/*)
+        warn "refusing to consider protected path for deletion: $rel"; continue;;
+    esac
+    grep -q "^$rel " "$LOCAL_MAN" || echo "$rel" >> "$DEL_LIST"
+  done < "$DEV_MAN"
+  N_DEL=$(wc -l < "$DEL_LIST" | tr -d ' ')
+  if [ "$N_DEL" -gt 0 ]; then
+    echo "  stale files to delete under $WWW/static ($N_DEL):"
+    sed 's/^/     - /' "$DEL_LIST"
+    [ "$N_DEL" -le "$N_LOCAL" ] || die "refusing to delete $N_DEL files (more than the $N_LOCAL files in the new bundle) -- STOP"
+    QDEL=""
+    while IFS= read -r rel; do QDEL="$QDEL '$WWW/$rel'"; done < "$DEL_LIST"
+    ash "rm -f $QDEL" >/dev/null
+    ok "pruned $N_DEL stale file(s)"
+  else
+    ok "no stale files to prune"
+  fi
+
+  # ---- push the differing files --------------------------------------------
+  if [ "$N_PUSH" -gt 0 ]; then
+    DIRS="$(sed 's|/[^/]*$||' "$PUSH_LIST" | grep '/' | LC_ALL=C sort -u || true)"
+    if [ -n "$DIRS" ]; then
+      QDIR=""; for d in $DIRS; do QDIR="$QDIR '$WWW/$d'"; done
+      ash "mkdir -p $QDIR" >/dev/null
+    fi
+    # read the list on fd 3: `adb push` / `adb shell` inside push_verified read
+    # stdin and would otherwise eat the rest of the list after the first file.
+    while IFS= read -r rel <&3; do
+      push_verified "$LOCAL_FE/$rel" "$WWW/$rel"
+    done 3< "$PUSH_LIST"
+  else
+    ok "device already byte-identical with the bundle -- nothing pushed"
+  fi
+
   # perms: 755 dirs / 644 files, scoped to what we deployed (cgi-bin untouched).
-  ash "find /oem/usr/www/static -type d -exec chmod 755 {} +; find /oem/usr/www/static -type f -exec chmod 644 {} +; \
-       cd /oem/usr/www && for f in index.html asset-manifest.json favicon.png login-device.svg login-path.svg sensecraft-callback.html; do [ -f \"\$f\" ] && chmod 644 \"\$f\"; done" >/dev/null
-  BUNDLE="$(ash 'ls /oem/usr/www/static/js/ | grep -E "^main\\..*\\.js$" | head -1')"
-  ok "frontend deployed (bundle: $BUNDLE)"
+  ash "find $WWW/static -type d -exec chmod 755 {} +; find $WWW/static -type f -exec chmod 644 {} +; \
+       cd $WWW && for f in index.html asset-manifest.json favicon.png login-device.svg login-path.svg sensecraft-callback.html; do [ -f \"\$f\" ] && chmod 644 \"\$f\"; done" >/dev/null
+  BUNDLE="$(ash "ls $WWW/static/js/ | grep -E '^main\\..*\\.js$' | head -1")"
+  ok "frontend deployed in $(( $(date +%s) - T0 ))s (bundle: $BUNDLE)"
 fi
 
 # ---- step 4: apps ----------------------------------------------------------
