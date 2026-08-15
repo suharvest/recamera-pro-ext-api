@@ -35,16 +35,18 @@ class MyApp(App):
 
 | 取值 | 行为 | `frame.data` 是什么 | 适用 |
 |---|---|---|---|
-| `"cpu"`（默认） | 主循环里 Python letterbox | 全分辨率原图 | 需要原图像素的 app（当前推荐） |
+| `"cpu"`（默认） | 主循环里 Python letterbox | 全分辨率原图 | 需要原图像素、且没走 `crop_roi_hw` 的 app |
 | `"hw"` | RGA 产出 letterbox 放进 `frame.model_data`，**同时**保留原图 | **全分辨率原图** | 机制可用，但**实测无吞吐收益**，默认不开 |
 | `"hw-direct"` | RGA 产出的 letterbox **就是** `frame.data`，连全分辨率 NV12→RGB 转换也省掉 | **模型尺寸的 letterbox 图** | **只消费框 / 关键点坐标、从不读 `frame.data`** 的 app（+55%） |
+| `"hw-roi"` | 同 `hw-direct`（跳过全分辨率转换），但**保留 NV12 dma-buf**，app 用 `self.crop_roi_hw(frame, box, out_size, pad)` 按需从 dma-buf 上 RGA 裁 ROI | **模型尺寸的 letterbox 图** | **检测→裁 ROI→二级模型**的级联 app（face / facemesh / ppocr），ROI 必须走 `crop_roi_hw`，收益**待真机 A/B**（见 §7） |
 
 ### 怎么选
 
 **判据只有一条：推理之后，你的 app 还需要读原始分辨率的像素吗？**
 
 - **不需要**（只用框 / 关键点坐标）→ **`"hw-direct"`**，实测 +55%。
-- **需要**（裁 ROI 做二级识别、透视裁剪、人脸对齐等）→ **留在 `"cpu"`**。`"hw"` 在这类 app 上实测没有吞吐收益（§4），还会让结果与 CPU 路径不再逐像素一致；除非你在自己的场景里实测出收益，否则不必开。
+- **需要，且是"裁 ROI / 透视裁剪喂二级模型"这类级联**（face / facemesh / ppocr）→ **`"hw-roi"`**：把每次 `crop_square_roi(frame.data, …)` / `perspective_crop(frame.data, …)` 换成 `self.crop_roi_hw(frame, …)`（见 §7），ROI 直接从 dma-buf 上 RGA 裁，省掉每帧全分辨率 NV12→RGB。收益**待真机 A/B**。
+- **需要原图、但不方便走 `crop_roi_hw`** → **留在 `"cpu"`**。`"hw"` 在这类 app 上实测没有吞吐收益（§4），还会让结果与 CPU 路径不再逐像素一致；除非你在自己的场景里实测出收益，否则不必开。
 
 > ⚠️ `"hw-direct"` 下 `frame.data` **不再是原始像素**，而是 letterbox 后的模型图。如果 app 还去裁它，裁到的是缩放+带灰边的图 —— 这是唯一会出错的用法，所以判据要照上面走。
 
@@ -53,7 +55,8 @@ class MyApp(App):
 | 模式 | app |
 |---|---|
 | `hw-direct` | `fall-detection`、`retail-vision`、`yolo-detector`、`fitness-trainer` |
-| `cpu`（需要原图像素） | `face-analysis`、`facemesh-reader`、`ppocr-reader` |
+| `hw-roi`（dma-buf 裁 ROI，见 §7） | `face-analysis`（已接入示范） |
+| `cpu`（需要原图像素） | `facemesh-reader`、`ppocr-reader`（可按 §7 迁到 `hw-roi`，暂未迁） |
 | 不适用 | `qrcode-reader`、`voice-transcribe`（`needs_model = False`，无模型推理） |
 
 ## 2. 坐标契约（三种模式完全一致）
@@ -153,10 +156,64 @@ if padded is None:
 
 ## 5. 自己直接调用 RGA？
 
-`kit/adapters/_rga.py` 的 `RgaNV12ToRGB` 接受的是 **dma-buf fd + NV12 平面信息**（`resize_nv12_to_rgb(fd, width, height, y_stride, y_vstride, dst_width, dst_height)`），不是 numpy 数组。它服务的是"帧代理原始缓冲区 → 模型输入"这一段。
+`kit/adapters/_rga.py` 的 `RgaNV12ToRGB` 接受的是 **dma-buf fd + NV12 平面信息**（`resize_nv12_to_rgb(...)`、`crop_nv12_to_rgb(...)`），不是 numpy 数组。它服务的是"帧代理原始缓冲区 → 模型输入"这一段。
 
-因此 app 在 `run()` 里对 **numpy 图像**做的二次裁剪 / 缩放（`crop_square_roi`、`perspective_crop`、`fit_rec_input` 等）**用不上这个组件** —— 那些数据已经离开 dma-buf。要给那一段也上硬件加速，需要另开一条 numpy/fd 路径，属于新开发，不在当前实现范围内。
+原来这里写着"app 里对 numpy 图像做的二次裁剪用不上这个组件、要上硬件需另开一条 numpy/fd 路径、不在实现范围内"。**这条路径现在实现了**，见 §7：`model_frame = "hw-roi"` + `App.crop_roi_hw(frame, box, out_size, pad)` 让级联 app 在 `frame.data` 之外，直接从 dma-buf 上 RGA 裁 ROI，不必先转出全分辨率 RGB 再在 numpy 上裁。
 
 ## 6. 一句话
 
-**不读原图像素的视觉 app 加一行 `model_frame = "hw-direct"`，实测端到端 +55%**（赢在跳过全分辨率 NV12→RGB，不只是省 Python letterbox）；需要原图像素的 app 留在 `"cpu"` —— `"hw"` 机制可用但实测无吞吐收益。几何契约、灰边值、后处理代码在三种模式下一致，任何前提不满足都自动回退 CPU，不会出错；但 RGA 与 PIL 的重采样不同，**换模式会让输出不再逐像素一致**。
+**不读原图像素的视觉 app 加一行 `model_frame = "hw-direct"`，实测端到端 +55%**（赢在跳过全分辨率 NV12→RGB，不只是省 Python letterbox）；**检测→裁 ROI→二级模型的级联 app 用 `model_frame = "hw-roi"` + `self.crop_roi_hw(...)`，从 dma-buf 上按需裁 ROI，同样跳过全分辨率转换（收益待真机 A/B，§7）**；其余需要原图像素的 app 留在 `"cpu"` —— `"hw"` 机制可用但实测无吞吐收益。几何契约、灰边值、后处理代码在各模式下一致，任何前提不满足都自动回退，不会出错；但 RGA 与 PIL 的重采样不同、且 `hw-roi` 越界处用灰边而非边缘复制，**换模式会让输出不再逐像素一致**。
+
+## 7. `hw-roi`：级联 app 的 dma-buf 按需裁剪
+
+### 7.1 解决什么
+
+`hw`（§4）在需要原图的级联 app 上只有 +0.8%，原因是它**仍然生成全分辨率 RGB**：为了让 `crop_square_roi(frame.data, …)` 有原图可裁，每帧都要把 1280×720 NV12 转一张全分辨率 RGB，内存带宽成本没省掉。
+
+`hw-roi` 换个思路：**不预先生成全分辨率 RGB**，而是保留相机的 NV12 dma-buf，等 app 真的要某个 ROI 时，用 RGA 从 dma-buf 上**直接裁 + 缩放到目标尺寸**。stage-1 仍吃 RGA letterbox（`frame.data` 就是 letterbox 图，同 `hw-direct`）。检测框拿到后，每张脸 / 每个文本框的 ROI 走硬件裁，绕开"全分辨率转换 + numpy 裁 + PIL resize"三步。
+
+### 7.2 怎么用（app 侧改动）
+
+两步，控制流仍在 Python：
+
+```python
+class MyCascadeApp(App):
+    model_frame = "hw-roi"          # ① 声明模式
+
+    def run(self):
+        for frame in self.frames():
+            x = self.pre(frame)                    # stage-1 吃 RGA letterbox
+            dets = post(self.models.det.infer(x.data), x.info, ...)
+            for d in dets[:k]:
+                roi, roi_map = self.crop_roi_hw(   # ② 换掉 crop_square_roi(frame.data,…)
+                    frame, d["box"], OUT_SIZE, pad)
+                self.models.stage2.infer(roi)
+```
+
+`crop_roi_hw` 返回 `(roi_uint8_HWC_RGB, roi_map)`，与 `kit.pipeline.crop_square_roi` **同契约**——`roi_map` 逐字段相同（两条路径共用一个几何函数 `square_roi_geometry`），可直接换用。
+
+**`face-analysis` 已作为示范接入**（`apps/face-analysis/app.py`）：改动就是把 `model_frame = "cpu"` 改成 `"hw-roi"`，把两处 `crop_square_roi(frame.data, r["box"], …)` 改成 `self.crop_roi_hw(frame, r["box"], …)`——**约 5 行**，循环体、模型调用、跨帧聚合、事件结构一律不变。等价性由 `kit/tests/test_face_shape_equivalence.py` 守（fake source 不提供硬件 cropper 时，`crop_roi_hw` 自动回退到同一个 numpy `crop_square_roi`，逐字段对拍旧路径仍全过）。
+
+### 7.3 契约与回退
+
+- **`frame.data` 在 `hw-roi` 下是 letterbox 图，不是原图**。ROI 必须走 `crop_roi_hw`，不能再直接裁 `frame.data`（会裁到缩放+带灰边的模型图）。`frame.w/h` 与后处理坐标仍是原始相机几何。
+- **越界填充差异**：`crop_square_roi` 对超出画面的方框边缘做 **edge 复制**；RGA 路径填 **灰 114**。几何（裁哪块、缩到多大、`roi_map`）完全一致，只有越界那圈边像素不同——与 §4 记录的"换模式不逐像素一致"同类。
+- **多级回退，任一前提不满足都不报错**：
+  | 前提 | 不满足时 |
+  |---|---|
+  | librga 可用 | → 全分辨率 + numpy 裁（`crop_roi_hw` 自动回退） |
+  | librga 导出 `improcess_t`（裁剪算子） | 源退回 `hw`：`frame.data` 恢复为原图、不挂 cropper，`crop_roi_hw` 走 numpy | 
+  | 帧源是官方 dma-buf 帧代理 | RTSP/snapshot 无 fd → 无 cropper → numpy 裁原图 |
+  | Y 平面 offset == 0、模型输入为方形 | 不满足 → letterbox 那步先回退，连带无 cropper |
+  单次硬件裁失败（罕见，正常由首帧探测拦掉）→ 打日志 + 返回灰 ROI，**绝不**拿 letterbox 当原图裁出错误区域，也不会把循环带崩。
+
+### 7.4 实现位置
+
+- `kit/adapters/_rga.py`：`crop_nv12_to_rgb(fd, w, h, y_stride, y_vstride, src_rect, dst_size, dst_window, out, pad_value)`——`improcess_t` 一次完成 NV12 dma-buf 裁剪 + 缩放 + NV12→RGB；`can_crop()` 探测 `improcess_t` 是否存在。NV12 色度 2×2 子采样，源矩形按偶数对齐。
+- `kit/pipeline.py`：`square_roi_geometry(frame_h, frame_w, box, out_size, pad)`——padded-square 几何的唯一实现，`crop_square_roi` 与 `hw-roi` 共用，保证 `roi_map` 逐字节一致。
+- `kit/adapters/official.py`：`hw_roi` 开关、`_crop_roi()`（复用 per-size scratch buffer）、`_FrameRoiCropper`（绑定当前借用帧的 dma-buf，仅当帧步内有效）。
+- `kit/app.py`：`model_frame = "hw-roi"` 选路、`App.crop_roi_hw()`（硬件优先 / numpy 回退 / 失败灰 ROI）。
+
+### 7.5 性能
+
+**收益（+多少 fps）待真机 A/B benchmark。** 本批只做实现 + 离线正确性验证（几何/尺寸/通道与 numpy 参考对拍、越界灰边、回退与 dispatch，见 `kit/adapters/test_rga_roi.py`），**未在设备上测过吞吐，未编造 fps 数字**。理论收益来自每帧省掉一次全分辨率 NV12→RGB（1280×720 约 2.7 MB）+ numpy 裁 + PIL resize，但 §4 已记录两个未定变量：硬件模式下 `infer_ms` 会升（疑 RGA/NPU 带宽争用），以及 RGA 与 NPU 并发的实际表现；ROI 裁剪引入的 RGA 调用次数（每帧 k 个 ROI）也需在真机上确认没有把 RGA 打满。**上设备后按 §4 的方式做稳态 A/B，再回填本节。**
