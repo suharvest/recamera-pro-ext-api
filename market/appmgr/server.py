@@ -63,6 +63,7 @@ import re
 import tempfile
 import time
 from contextlib import contextmanager
+from typing import Optional
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
@@ -511,16 +512,86 @@ def do_putmodel(target_path: str, filename: str, data: bytes,
     return res
 
 
+def _rollback_upgrade(app_id: str, restore_active: bool) -> Optional[str]:
+    """Undo a failed upgrade: stop the broken new version, swap the retained
+    `<id>.prev` back into place, and restart the old app (健壮#15). Returns the
+    id if the previous version is running again, else None. Caller holds the
+    busy-gate."""
+    try:
+        supervisor.stop(app_id)
+    except Exception:
+        pass
+    if not installer.restore_prev(app_id):
+        state.clear_active_if(app_id)
+        return None
+    try:
+        supervisor.start(app_id)
+        if restore_active:
+            man = _read_manifest(app_id) or {}
+            state.set_active(app_id, man.get("version"))
+        return app_id
+    except Exception:
+        state.clear_active_if(app_id)
+        return None
+
+
 def do_install(pkg_path: str, signature: str = None) -> dict:
+    """Install (or UPGRADE) an app as a transaction (健壮#15).
+
+    An upgrade of the running app is the dangerous case: installer.install()
+    renames the LIVE dir (holding run.pid) to `<id>.prev`, so the old process
+    keeps running from .prev while the new dir has no pidfile -- is_running()
+    then reads false and a later switch starts a SECOND instance (the observed
+    "11 apps"). So: stop the old process first, install atomically, and if the
+    app was up, restart the NEW version and gate on READY. Any failure rolls the
+    whole thing back to .prev and restarts the previous version.
+    """
     with busy_gate():
         info = installer.inspect(pkg_path, signature)   # verifies signature
+        app_id = info["id"]
+        pre_installed = os.path.isdir(paths.app_dir(app_id))
+        was_running = pre_installed and supervisor.is_running(app_id) is not None
+        was_active = state.get_active() == app_id
+
+        # ★Stop the old process BEFORE the dir swap★ so it cannot linger on the
+        # soon-to-be-.prev copy as an orphan double.
+        if was_running:
+            supervisor.stop(app_id)
+
         app_id, manifest = installer.install(pkg_path, signature)
+        # Drop caches so the freshly swapped manifest/icon are re-read now.
+        cache_clear()
+        # Prune any stored config keys the NEW schema no longer accepts, so the
+        # restarted app never reads a removed/type-changed/out-of-range value
+        # (健壮#20). Best-effort -- a revalidation hiccup must not fail the install.
+        try:
+            appconfig.revalidate_user_config(manifest, app_id)
+        except Exception:
+            pass
+
+        restarted = False
+        if was_running:
+            try:
+                supervisor.start(app_id)      # blocks until the NEW version is READY
+            except Exception as e:
+                restored = _rollback_upgrade(app_id, was_active)
+                _audit("install_failed", id=app_id,
+                       version=manifest.get("version"), error=str(e),
+                       restored=restored)
+                cache_clear()
+                raise
+            restarted = True
+            if was_active:
+                man = _read_manifest(app_id) or {}
+                state.set_active(app_id, man.get("version"))
+
         sig = info.get("signature") or {}
         _audit("install", id=app_id, version=manifest.get("version"),
-               pkg=os.path.realpath(pkg_path),
+               pkg=os.path.realpath(pkg_path), upgrade=pre_installed,
+               restarted=restarted,
                signed=sig.get("signed"), sig_verified=sig.get("verified"))
         return {"id": app_id, "version": manifest.get("version"),
-                "installed": True, "signature": sig}
+                "installed": True, "restarted": restarted, "signature": sig}
 
 
 def do_uninstall(app_id: str) -> dict:
@@ -557,6 +628,29 @@ def do_uninstall(app_id: str) -> dict:
                 "stopped": stopped, "was_active": was_active}
 
 
+def _restore_active(prev: str, failed_id: str) -> Optional[str]:
+    """Transactionally bring the PREVIOUS active app back after a target failed
+    to start (健壮#19). Ensures the failed target is fully stopped, then restarts
+    `prev` and re-points `active` at it. If prev is absent or itself won't start,
+    active is cleared (None) -- never left pointing at an app that isn't up.
+    Caller holds the busy-gate."""
+    try:
+        supervisor.stop(failed_id)          # guarantee the corpse is gone
+    except Exception:
+        pass
+    if not prev or prev == failed_id:
+        state.set_active(None, None)
+        return None
+    try:
+        supervisor.start(prev)
+        man = _read_manifest(prev) or {}
+        state.set_active(prev, man.get("version"))
+        return prev
+    except Exception:
+        state.set_active(None, None)
+        return None
+
+
 def do_switch(app_id: str) -> dict:
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
@@ -570,11 +664,12 @@ def do_switch(app_id: str) -> dict:
             supervisor.stop(prev)
         supervisor.stop(app_id)
         try:
-            pid = supervisor.start(app_id)
+            pid = supervisor.start(app_id)     # blocks until READY (or fails)
         except Exception as e:
-            # rollback: never leave state pointing at an app that won't start.
-            state.set_active(None, None)
-            _audit("switch_failed", id=app_id, error=str(e))
+            # rollback: restart the previous active app rather than leaving the
+            # device with nothing running because the target wouldn't come up.
+            restored = _restore_active(prev, app_id)
+            _audit("switch_failed", id=app_id, error=str(e), restored=restored)
             raise
         man = _read_manifest(app_id) or {}
         state.set_active(app_id, man.get("version"))
@@ -626,17 +721,28 @@ def do_activate(app_id: str) -> dict:
             raise ValueError(f"invalid app id {app_id!r}")
         if not os.path.isdir(paths.app_dir(app_id)):
             raise ValueError(f"app not installed: {app_id}")
+        prev = state.get_active()
+        # Remember whether the built-in detector was the thing running BEFORE we
+        # tear it down, so a failed activation can restore it (not just a
+        # self-hosted prev).
+        prev_builtin = _builtin_running() if not prev else False
         builtin.stop()                       # turn the built-in detector off first
         _builtin_invalidate()
-        prev = state.get_active()
         if prev and prev != app_id:
             supervisor.stop(prev)
         supervisor.stop(app_id)              # clean (re)start
         try:
-            pid = supervisor.start(app_id)
+            pid = supervisor.start(app_id)   # blocks until READY (or fails)
         except Exception as e:
-            state.set_active(None, None)
-            _audit("activate_failed", id=app_id, error=str(e))
+            restored = _restore_active(prev, app_id)
+            if restored is None and prev_builtin:
+                try:
+                    builtin.start()          # re-enable the built-in we stopped
+                    _builtin_invalidate()
+                    restored = "builtin"
+                except Exception:
+                    pass
+            _audit("activate_failed", id=app_id, error=str(e), restored=restored)
             raise
         man = _read_manifest(app_id) or {}
         state.set_active(app_id, man.get("version"))
@@ -1083,6 +1189,16 @@ def serve(host: str = None, port: int = None) -> None:
     # cleanup, log line) happens in normal context from do_list/do_metrics/stop.
     if not supervisor.install_sigchld():
         print("[appmgr] warning: could not install SIGCHLD handler", flush=True)
+    # Recover any install a crash interrupted mid dir-swap BEFORE we look at what
+    # is installed / boot-restore the active app (健壮#16): a `<id>.prev` with no
+    # live `<id>` dir means the app silently vanished and must be swapped back.
+    try:
+        restored = installer.reconcile_interrupted_installs()
+        if restored:
+            print(f"[appmgr] reconciled interrupted installs: {restored}",
+                  flush=True)
+    except Exception as e:
+        print(f"[appmgr] install reconciliation skipped: {e!r}", flush=True)
     httpd = ThreadingHTTPServer((host, port), _Handler)
     print(f"[appmgr] listening on http://{host}:{port}", flush=True)
     # Boot-restore: HTTP is up; resume the last active app if it isn't running.
