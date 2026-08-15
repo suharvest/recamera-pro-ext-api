@@ -4,9 +4,13 @@ Equivalence gate for the face-analysis app-shape migration (KIT_APP_SHAPE_SPEC Â
 face-analysis is the THREE-STAGE CASCADE + CROSS-FRAME-STATE case, and it is the
 app that pins down two things at once:
 
-  * stages 2 and 3 crop a padded SQUARE ROI out of the ORIGINAL camera pixels
-    (`kit.pipeline.crop_square_roi` on `frame.data`), so `model_frame` must stay
-    "cpu" while `self.pre()` letterboxes to 640 -- two DIFFERENT images;
+  * stages 2 and 3 crop a padded SQUARE ROI per face, routed through
+    `App.crop_roi_hw` (`model_frame = "hw-roi"`): on device the crop comes off
+    the camera dma-buf on RGA, and -- absent a hardware cropper, as with this
+    fixture's fake source -- it falls back to the identical numpy
+    `kit.pipeline.crop_square_roi` on `frame.data`, which is what this gate
+    exercises. Either way the crop is a DIFFERENT image from the stage-1
+    letterbox `self.pre()` produces;
   * the demographic window (`_win_start` / `_hist` / `_win_faces`), the frame
     counter (`_frame_idx`) and the per-slot emotion cache (`_emotion_cache`)
     all persist between frames. `emotion_interval` means stage 3 runs only every
@@ -625,10 +629,24 @@ class FaceFrameGeometryTests(_Base):
                          "the emotion model did not get a 224x224 ROI")
         self.assertEqual(set(self.crop_out_sizes), {CLS_SIZE})
 
-    def test_new_app_keeps_cpu_frame_mode(self):
+    def test_new_app_uses_hw_roi_frame_mode(self):
+        """face-analysis crops each face ROI off the dma-buf (hw-roi), never the
+        letterbox: the mode must be "hw-roi" -- NOT "hw-direct"/"hw" (those put
+        the model image in frame.data with no cropper, breaking the crop) and no
+        longer "cpu" (which paid the full-res convert this path removes).
+
+        Equivalence is preserved because the loop still routes every ROI through
+        `crop_roi_hw`, which -- absent a hardware cropper, e.g. this fixture's
+        fake source -- falls straight back to the identical numpy
+        `crop_square_roi(frame.data, ...)`; that is exactly what the crop-source
+        and field-for-field equivalence tests in this module exercise.
+        """
         mod = _load_new_app_module()
-        self.assertEqual(mod.FaceAnalysisApp.model_frame, "cpu",
-                         "face-analysis must not letterbox into frame.data")
+        self.assertEqual(mod.FaceAnalysisApp.model_frame, "hw-roi",
+                         "face-analysis must crop ROIs off the dma-buf (hw-roi)")
+        self.assertNotIn(mod.FaceAnalysisApp.model_frame, ("hw-direct", "hw"),
+                         "a data-is-letterbox mode with no cropper breaks the "
+                         "stage-2/3 crop")
 
     def test_negative_control_hw_direct_would_break_the_crop(self):
         """Proof the assertion above is load-bearing, not a tautology.

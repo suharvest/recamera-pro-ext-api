@@ -12,7 +12,8 @@ Python -- no cascade framework, no declarative stage list:
         -> face_post.postprocess  face boxes in ORIGINAL pixels, score-desc
         -> results[:max_faces]    ★business★ top-K faces
         -> for each face:         <-- stages 2+3 are a PLAIN `for`, spec §3
-             crop_square_roi      padded SQUARE ROI out of the FULL-RES frame
+             self.crop_roi_hw     padded SQUARE ROI, cropped on RGA straight
+                                  from the camera NV12 dma-buf (hw-roi mode)
              self.models.fairface_fp16        (1,18) -> race/gender/age heads
              self.models.emotion_enet_b0_fp16 (1,8)  -> AffectNet emotion,
                                   ★business★ only every `emotion_interval`
@@ -22,12 +23,22 @@ Python -- no cascade framework, no declarative stage list:
         -> self.emit()            one `face` event per face + the periodic
                                   `demographics` aggregate + results[]
 
-`model_frame` stays "cpu" ON PURPOSE. Stages 2/3 crop SOURCE-RESOLUTION pixels
-out of `frame.data`, so "hw-direct" -- which letterboxes into `frame.data`
-itself -- would silently feed the classifiers a 640x640 model image instead of
-the camera frame. A 2026-08-14 device A/B also measured "hw" at +0.8% (noise)
-because it still pays the full-res convert plus an extra RGA resize. See
+`model_frame = "hw-roi"`: stage-1 runs on the RGA letterbox and stages 2/3 crop
+each face ROI off the camera NV12 dma-buf on RGA (`self.crop_roi_hw`), so the
+per-frame full-resolution NV12->RGB convert the old "cpu" path paid is gone --
+this is the cascade path added in docs/guide/hw-preprocess.md §7. It stays
+correct if librga lacks the crop op (source degrades to "hw", crop_roi_hw falls
+to the numpy crop) or the frame backend has no dma-buf (RTSP/snapshot). ROIs
+MUST go through `self.crop_roi_hw`, never `frame.data` (which is the letterbox,
+not the camera frame). "hw-direct" would be wrong here (no cropper), and plain
+"hw" measured +0.8% (noise) because it still pays the full-res convert. See
 docs/guide/hw-preprocess.md before touching this.
+
+★Equivalence with the pre-change "cpu" path★: the loop body, model calls,
+cross-frame aggregation and events are UNCHANGED; only where each ROI comes from
+moved (numpy `crop_square_roi(frame.data, ...)` -> `self.crop_roi_hw(frame,
+...)`), and both return the identical `(roi, roi_map)` contract via one shared
+geometry helper.
 
 All three models are declared in the manifest `models[]` and preloaded by the
 kit, so the hand-written "scan the manifest for role==stage2_fairface" loop is
@@ -50,7 +61,6 @@ Run on device (inference requires root):
 
 from kit.app import App, run_app
 from kit import events as E
-from kit.pipeline import crop_square_roi
 from kit.runtime.postprocess import face_detect as face_post
 from kit.runtime.postprocess import classify as clf
 
@@ -68,9 +78,10 @@ class FaceAnalysisApp(App):
     id = "face-analysis"
     name = "Face Analysis"
     owns_loop = True          # explicit new shape: run() drives self.frames()
-    # Stages 2/3 crop original-resolution pixels out of frame.data -- see the
-    # module docstring for why this must not become "hw"/"hw-direct".
-    model_frame = "cpu"
+    # Stages 2/3 crop each face ROI off the camera dma-buf on RGA via
+    # self.crop_roi_hw -- see the module docstring. Must NOT be "hw-direct"
+    # (no cropper) or "cpu" (pays the full-res convert this path removes).
+    model_frame = "hw-roi"
 
     # Fallbacks for the auto-bound config_schema keys (used when a key is
     # missing from the effective config; the manifest supplies each default).
@@ -170,16 +181,17 @@ class FaceAnalysisApp(App):
             run_emotion = (self._frame_idx % interval) == 0
 
             # -- 2. stages 2+3: one padded square ROI per face ----------- #
-            # A plain Python loop, not a declared pipeline stage. `frame.data`
-            # is the ORIGINAL camera frame (model_frame="cpu"), which is what
-            # crop_square_roi must cut from.
+            # A plain Python loop, not a declared pipeline stage. Each ROI is
+            # cropped on RGA straight from the camera dma-buf (model_frame=
+            # "hw-roi") via self.crop_roi_hw -- never from frame.data, which in
+            # this mode holds the stage-1 letterbox, not the camera frame.
             faces = results[: self.max_faces]
             for i, r in enumerate(faces):
                 r["kind"] = "face"
                 r["blur"] = self.privacy_blur
 
-                roi, _roi_map = crop_square_roi(frame.data, r["box"],
-                                                FF_INPUT, self.crop_pad)
+                roi, _roi_map = self.crop_roi_hw(frame, r["box"],
+                                                 FF_INPUT, self.crop_pad)
 
                 # stage 2: FairFace age / gender / race
                 ff = clf.fairface_decode(self.models[FF_ID].infer(roi))
@@ -194,8 +206,8 @@ class FaceAnalysisApp(App):
                 # between, the previous verdict for this face SLOT is reused.
                 if run_emotion:
                     if EMO_INPUT != FF_INPUT:
-                        roi_e, _ = crop_square_roi(frame.data, r["box"],
-                                                   EMO_INPUT, self.crop_pad)
+                        roi_e, _ = self.crop_roi_hw(frame, r["box"],
+                                                    EMO_INPUT, self.crop_pad)
                     else:
                         roi_e = roi
                     em = clf.emotion_decode(self.models[EMO_ID].infer(roi_e))
