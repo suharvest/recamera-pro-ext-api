@@ -124,7 +124,7 @@ class OfficialFrameSource(FrameSource):
                  sock: str = OFFICIAL_FRAME_SOCK,
                  width: int = 0, height: int = 0, fps_divisor: int = 0,
                  input_size: int = 0, direct_preprocess: bool = False,
-                 hw_letterbox: bool = False,
+                 hw_letterbox: bool = False, hw_roi: bool = False,
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
@@ -135,11 +135,21 @@ class OfficialFrameSource(FrameSource):
         self.fps_divisor = int(fps_divisor)
         self.input_size = int(input_size)
         self.direct_preprocess = bool(direct_preprocess and self.input_size > 0)
+        # ROI mode: like `direct` for the model image (RGA letterbox IS `data`,
+        # NO full-resolution RGB convert), but the source ALSO keeps the NV12
+        # dma-buf reachable so a cascade app can crop per-object ROIs from it on
+        # RGA on demand (App.crop_roi_hw). This is the fast path for detect->crop
+        # ->second-model apps that previously had to stay on "cpu" to keep the
+        # full-resolution pixels their numpy crop needs. `direct_preprocess`
+        # (pure model image, no cropper) wins if both are somehow requested.
+        self.hw_roi = bool(hw_roi and self.input_size > 0
+                           and not self.direct_preprocess)
         # Aux mode: letterbox on RGA into a SEPARATE model image while `data`
-        # keeps original-resolution pixels.  `direct_preprocess` (which reuses
-        # the letterbox AS `data`) wins when both are requested.
+        # keeps original-resolution pixels.  `direct_preprocess`/`hw_roi` (which
+        # reuse the letterbox AS `data`) win when more than one is requested.
         self.hw_letterbox = bool(hw_letterbox and self.input_size > 0
-                                 and not self.direct_preprocess)
+                                 and not self.direct_preprocess
+                                 and not self.hw_roi)
         self.timeout_ms = int(timeout_ms)
         self.prefer_rga = bool(prefer_rga)
         self.lib_path = lib_path
@@ -148,6 +158,11 @@ class OfficialFrameSource(FrameSource):
         self._rga = None            # RgaNV12ToRGB instance, or None once latched off
         self._rga_decided = False   # first-frame latch flag
         self._direct_logged = False  # one diagnostic line per source lifetime
+        self._roi_logged = False    # one diagnostic line for the ROI crop path
+        # Persistent per-output-size RGB scratch buffers reused across every ROI
+        # crop of a run (keyed by out_size), so cropping N faces per frame for
+        # thousands of frames allocates the canvas ONCE per size, not per crop.
+        self._roi_scratch: dict = {}
         # NOTE: no connection at construction -- the registry only builds this
         # once frame.sock is probed present; the real open() happens in frames().
 
@@ -165,6 +180,18 @@ class OfficialFrameSource(FrameSource):
             self._rga = None
         self._log("preprocess backend: %s"
                   % ("RGA (hardware)" if self._rga else "OpenCV (librga unavailable)"))
+        # ROI mode additionally needs improcess_t (the crop op). Older librga
+        # builds export the letterbox helpers but not improcess_t; drop back to
+        # the full-resolution "hw" path (data keeps original pixels, crop_roi_hw
+        # then falls to numpy) rather than a broken cropper.
+        if self.hw_roi:
+            can_crop = bool(self._rga is not None
+                            and getattr(self._rga, "can_crop", lambda: False)())
+            if not can_crop:
+                self.hw_roi = False
+                self.hw_letterbox = True   # keep the model letterbox on RGA
+                self._log("hw-roi unavailable (librga improcess_t missing); "
+                          "falling back to hw (full-res + numpy ROI crop)")
 
     def _letterbox_geometry(self, width: int, height: int):
         """Return RGA resize geometry and a LetterboxInfo-compatible object."""
@@ -225,17 +252,23 @@ class OfficialFrameSource(FrameSource):
             self._decide_backend(frame)
 
         model_data = model_info = None
-        if self._rga is not None and (self.direct_preprocess or self.hw_letterbox):
-            direct = self.direct_preprocess
+        if self._rga is not None and (self.direct_preprocess or self.hw_roi
+                                      or self.hw_letterbox):
+            # Both `direct` and `hw-roi` reuse the letterbox AS `data` and skip
+            # the full-resolution NV12->RGB convert; `hw-roi` additionally lets
+            # the app crop ROIs off the dma-buf (the cropper is attached in
+            # frames(), not here). Only `aux` (hw_letterbox) keeps full-res data.
+            skip_fullres = self.direct_preprocess or self.hw_roi
+            mode = ("direct" if self.direct_preprocess
+                    else ("roi" if self.hw_roi else "aux"))
             try:
                 model_data, model_info = self._rga_letterbox(frame)
                 if not self._direct_logged:
                     self._direct_logged = True
                     self._log("preprocess path: RGA %s NV12 resize %dx%d -> RGB %dx%d + gray pad"
-                              % ("direct" if direct else "aux",
-                                 int(frame.width), int(frame.height),
+                              % (mode, int(frame.width), int(frame.height),
                                  model_data.shape[1], model_data.shape[0]))
-                if direct:
+                if skip_fullres:
                     # The letterbox IS the frame: skip the full-res conversion.
                     return model_data, model_data, model_info
             except Exception as e:
@@ -243,10 +276,11 @@ class OfficialFrameSource(FrameSource):
                 # Disable only the optimization and continue through the
                 # known-good full-resolution RGA/OpenCV path below.
                 self.direct_preprocess = False
+                self.hw_roi = False
                 self.hw_letterbox = False
                 model_data = model_info = None
                 self._log("RGA %s preprocess failed (%s); latching to full RGB"
-                          % ("direct" if direct else "aux", e))
+                          % (mode, e))
 
         if self._rga is not None:
             try:
@@ -271,7 +305,56 @@ class OfficialFrameSource(FrameSource):
         if self.verbose:
             print("[OfficialFrameSource] %s" % msg, file=sys.stderr, flush=True)
 
+    # -- hw-roi: on-demand dma-buf ROI crop --------------------------------- #
+    def _roi_out(self, out_size: int):
+        """A persistent [out_size, out_size, 3] uint8 scratch canvas, reused
+        across every ROI crop of this run (allocated once per distinct size)."""
+        buf = self._roi_scratch.get(out_size)
+        if buf is None:
+            buf = np.empty((out_size, out_size, 3), dtype=np.uint8)
+            self._roi_scratch[out_size] = buf
+        return buf
+
+    def _crop_roi(self, ext_frame, box, out_size: int, pad: float):
+        """RGA crop of a padded square ROI straight from the frame's NV12 dma-buf.
+
+        Returns ``(roi_uint8_HWC_RGB copy, roi_map)`` with the SAME `roi_map`
+        contract as `kit.pipeline.crop_square_roi` (shared geometry helper), so
+        downstream coordinate mapping is identical. The out-of-frame margin is
+        gray-filled (114) rather than edge-replicated -- a small border-only
+        difference from the numpy crop, see docs/guide/hw-preprocess.md.
+        """
+        from kit.pipeline import square_roi_geometry
+
+        out_size = int(out_size)
+        off0, stride0, vstride0 = ext_frame.planes[0]
+        if off0 != 0:
+            raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
+        roi_map, src_valid, dst_window, _sq = square_roi_geometry(
+            int(ext_frame.height), int(ext_frame.width), box, out_size, pad)
+        buf = self._roi_out(out_size)
+        if src_valid is None:
+            # Box entirely outside the frame -- match crop_square_roi's zeros.
+            buf[:] = 0
+            return buf.copy(), roi_map
+        self._rga.crop_nv12_to_rgb(
+            fd=ext_frame._c.fd, width=int(ext_frame.width),
+            height=int(ext_frame.height),
+            y_stride=int(stride0), y_vstride=int(vstride0),
+            src_rect=src_valid, dst_size=out_size, dst_window=dst_window,
+            out=buf, pad_value=114)
+        if not self._roi_logged:
+            self._roi_logged = True
+            self._log("roi path: RGA crop %s -> RGB %dx%d (dma-buf, no full-res)"
+                      % (tuple(src_valid), out_size, out_size))
+        # Hand back a COPY: `buf` is reused by the next crop this frame.
+        return buf.copy(), roi_map
+
     # -- FrameSource ABC ---------------------------------------------------- #
+    def _make_cropper(self, ext_frame):
+        """Bind a `_FrameRoiCropper` to THIS borrowed frame (valid this step)."""
+        return _FrameRoiCropper(self, ext_frame)
+
     def frames(self) -> Iterator[Frame]:
         # Lazy import: recamera_ext (+ librecamera_ext.so.1) only exists on the
         # device with the extension-API firmware. Importing here keeps this
@@ -291,6 +374,14 @@ class OfficialFrameSource(FrameSource):
         try:
             for ext_frame in self._src:
                 rgb, model_data, model_info = self._convert(ext_frame)  # standalone copies
+                # hw-roi: attach a cropper bound to THIS borrowed dma-buf so the
+                # app can crop ROIs from it during its loop body. Only when the
+                # RGA letterbox path was actually taken this frame (model_info
+                # set) and hw_roi survived the first-frame probe/latch; otherwise
+                # `roi_cropper` stays None and crop_roi_hw uses the numpy crop.
+                cropper = None
+                if self.hw_roi and self._rga is not None and model_info is not None:
+                    cropper = self._make_cropper(ext_frame)
                 yield Frame(
                     data=rgb,
                     w=int(ext_frame.width),
@@ -299,6 +390,7 @@ class OfficialFrameSource(FrameSource):
                     pts=ext_frame.pts_us / 1e6,    # us -> s; round-trips in the sink
                     model_info=model_info,
                     model_data=model_data,
+                    roi_cropper=cropper,
                 )
                 # The SDK releases `ext_frame`'s dma-buf when the loop advances;
                 # `rgb` is a copy, so nothing here holds the borrowed buffer.
@@ -312,6 +404,32 @@ class OfficialFrameSource(FrameSource):
                 src.close()
             except Exception:
                 pass
+
+
+class _FrameRoiCropper:
+    """Per-frame hardware ROI cropper attached to a Frame in ``hw-roi`` mode.
+
+    Holds the owning `OfficialFrameSource` (for the RGA instance + reused scratch
+    buffers) and the borrowed `recamera_ext` frame (for its dma-buf fd + NV12
+    plane geometry). Valid ONLY for the loop step the frame is yielded on -- the
+    SDK releases the underlying dma-buf when the loop advances. `App.crop_roi_hw`
+    is the app-facing entry; it catches failures and degrades, so this raises
+    freely on any geometry/ABI problem.
+    """
+
+    __slots__ = ("_src", "_frame")
+
+    def __init__(self, source: "OfficialFrameSource", ext_frame):
+        self._src = source
+        self._frame = ext_frame
+
+    def crop_square(self, box, out_size: int, pad: float = 0.25):
+        """Crop a padded square ROI -> ``(roi_uint8_HWC_RGB, roi_map)``.
+
+        Mirrors `kit.pipeline.crop_square_roi`'s signature and `roi_map`
+        contract, backed by RGA reading the dma-buf directly.
+        """
+        return self._src._crop_roi(self._frame, box, out_size, pad)
 
 
 def _bbox_from_quad(quad) -> Optional[list]:

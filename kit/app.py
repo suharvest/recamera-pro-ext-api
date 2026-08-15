@@ -533,12 +533,23 @@ class App:
     #               NO original-resolution pixels are available.  Only for apps
     #               that consume detections/keypoints and never read
     #               ``frame.data``.
+    #   "hw-roi"    like "hw-direct" for the stage-1 model image (RGA letterbox
+    #               IS ``frame.data``, no full-res convert), but the source ALSO
+    #               keeps the NV12 dma-buf reachable so a cascade app can crop
+    #               per-object ROIs off it on RGA via ``self.crop_roi_hw(frame,
+    #               box, out_size, pad)`` instead of numpy-cropping a full-res
+    #               RGB frame.  For detect->crop->second-model apps
+    #               (face-analysis / facemesh / ppocr) that were forced onto
+    #               "cpu" only to keep the pixels their crop needed.  Such an app
+    #               MUST take every ROI through ``crop_roi_hw`` and never read
+    #               ``frame.data`` (it is the letterbox, not the camera frame).
     #
     # ``frame.w``/``frame.h`` and post-processed coordinates stay in original
     # camera geometry in every mode.  Ignored when ``needs_model`` is False, when
     # the backend exposes no dma-buf fd (RTSP/snapshot), or when RGA/librga is
     # unavailable -- each case falls back to the CPU letterbox with identical
-    # geometry, never an error.
+    # geometry, never an error.  For "hw-roi", a librga without ``improcess_t``
+    # degrades to "hw" (full-res data + numpy ROI crop), still correct.
     model_frame: str = "cpu"
 
     def __init__(self) -> None:
@@ -869,10 +880,10 @@ class App:
         self.setup(cfg)
 
         mode = self.model_frame if self.needs_model else "cpu"
-        if mode not in ("cpu", "hw", "hw-direct"):
+        if mode not in ("cpu", "hw", "hw-direct", "hw-roi"):
             raise ValueError(
-                "%s: model_frame must be 'cpu', 'hw' or 'hw-direct' (got %r)"
-                % (self.id, self.model_frame))
+                "%s: model_frame must be 'cpu', 'hw', 'hw-direct' or 'hw-roi' "
+                "(got %r)" % (self.id, self.model_frame))
         if self.needs_frames:
             src = open_frame_source(
                 url=url,
@@ -880,6 +891,7 @@ class App:
                 input_size=self._pre_size if mode != "cpu" else 0,
                 direct_preprocess=(mode == "hw-direct"),
                 hw_letterbox=(mode == "hw"),
+                hw_roi=(mode == "hw-roi"),
             )
         else:
             # No camera at all (needs_frames = False). Everything else below --
@@ -1143,6 +1155,57 @@ class App:
             return PreparedInput(padded, info)
         finally:
             self._t_pre += time.monotonic() - t0
+
+    def crop_roi_hw(self, frame: Frame, box, out_size: int, pad: float = 0.25):
+        """Crop a padded square ROI around `box`, preferring hardware (RGA).
+
+        The cascade counterpart to `pre()`: where `pre()` gives stage-1 its
+        model image, this gives a stage-2 model its per-object ROI. Under
+        ``model_frame = "hw-roi"`` the frame carries a `roi_cropper` bound to the
+        camera's NV12 dma-buf, so the ROI is cropped + resized on RGA WITHOUT
+        first converting a full-resolution RGB frame -- the saving the plain
+        "hw" mode could not realise. Every other mode (cpu/hw/hw-direct,
+        RTSP/snapshot, or after an RGA latch-off) has no cropper, so this simply
+        calls the numpy `crop_square_roi` on `frame.data`.
+
+        Returns ``(roi_uint8_HWC_RGB, roi_map)`` -- the SAME contract as
+        `kit.pipeline.crop_square_roi`, so the ROI and its coordinate mapping are
+        drop-in interchangeable. Timed into the app's `pre` budget.
+
+        ★Correctness note★ the hardware and numpy crops share ONE geometry helper
+        (`kit.pipeline.square_roi_geometry`), so `roi_map` is byte-identical; the
+        pixels differ only by resampling (RGA 2-tap vs PIL antialiased) and by
+        the out-of-frame border fill (RGA gray 114 vs numpy edge-replicate), the
+        same family of differences documented for "hw" in
+        docs/guide/hw-preprocess.md. Perf gain is device-measured; see that doc.
+        """
+        from kit.pipeline import crop_square_roi
+        t0 = time.monotonic()
+        try:
+            cropper = getattr(frame, "roi_cropper", None)
+            if cropper is not None:
+                try:
+                    return cropper.crop_square(box, out_size, pad)
+                except Exception as e:
+                    # A hardware ROI crop failed. `frame.data` is the letterbox
+                    # here (hw-roi), so a numpy crop of it would be the WRONG
+                    # region -- return a gray ROI (no crash, no wrong pixels) and
+                    # warn once. A stable ABI problem is caught by the source's
+                    # first-frame probe, so this is a rare per-crop edge case.
+                    self._warn_roi_hw(e)
+                    roi = np.full((int(out_size), int(out_size), 3), 114,
+                                  dtype=np.uint8)
+                    return roi, (float(box[0]), float(box[1]), 1.0, 1.0)
+            return crop_square_roi(frame.data, box, out_size, pad)
+        finally:
+            self._t_pre += time.monotonic() - t0
+
+    def _warn_roi_hw(self, e) -> None:
+        n = getattr(self, "_roi_hw_warns", 0) + 1
+        self._roi_hw_warns = n
+        if n <= 3:
+            print(f"[app:{self.id}] hw ROI crop failed ({e}); gray ROI this "
+                  f"object", flush=True)
 
     def _render_block(self) -> Optional[dict]:
         """The effective render declaration for the CURRENT config, cached.

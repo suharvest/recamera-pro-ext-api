@@ -85,6 +85,15 @@ class Frame:
     # set.  Consumers should prefer ``model_data`` when present, else fall back
     # to ``data`` + ``model_info``, else letterbox themselves.
     model_data: object = None
+    # Optional per-frame hardware ROI cropper (``hw-roi`` mode). When a source
+    # keeps the camera's NV12 dma-buf available for on-demand cropping instead of
+    # pre-converting a full-resolution RGB frame, it attaches an object exposing
+    #   crop_square(box, out_size, pad) -> (roi_uint8_HWC_RGB, roi_map)
+    # bound to THIS frame's borrowed buffer (valid only for the current loop
+    # step). Cascade apps reach it through ``App.crop_roi_hw``; None on every
+    # other source (RTSP/snapshot, cpu/hw/hw-direct modes, or after an RGA
+    # latch-off), where ``crop_roi_hw`` falls back to the numpy crop.
+    roi_cropper: object = None
 
 
 class FrameSource(ABC):
