@@ -42,17 +42,34 @@ except Exception:                        # pragma: no cover
 # roi_map = (ox, oy, sx, sy): original = (ox + roi_x*sx, oy + roi_y*sy)
 RoiMap = Tuple[float, float, float, float]
 
+# The integer padded-square geometry a crop is taken from.
+#   square      = (ix1, iy1, iside)                -- the ideal square in frame px
+#                 (may run past the frame edge; edge-padded / gray-filled there).
+#   src_valid   = (sx1, sy1, sx2, sy2) | None      -- the square clipped to the
+#                 frame; None when the square lies entirely outside the frame.
+#   dst_window  = (dx1, dy1, dx2, dy2) | None      -- where src_valid lands inside
+#                 the out_size x out_size output canvas (src_valid scaled by
+#                 out_size / iside).  None iff src_valid is None.
+SquareGeometry = Tuple[RoiMap, Optional[Tuple[int, int, int, int]],
+                       Optional[Tuple[int, int, int, int]], Tuple[int, int, int]]
 
-def crop_square_roi(frame: np.ndarray, box: Sequence[float],
-                    out_size: int, pad: float = 0.25
-                    ) -> Tuple[np.ndarray, RoiMap]:
-    """Cut a padded, centered SQUARE ROI around `box` and resize to out_size.
 
-    frame : HWC uint8 RGB (original frame).
-    box   : [x1,y1,x2,y2] in original-frame pixels.
-    Returns (roi_uint8 [out_size,out_size,3], roi_map for coordinate mapping).
+def square_roi_geometry(frame_h: int, frame_w: int, box: Sequence[float],
+                        out_size: int, pad: float = 0.25) -> SquareGeometry:
+    """Compute the padded-centered-square crop geometry for `box`.
+
+    This is the ONE place the "pad the box, square it around its center, round to
+    integers" math lives.  Both the numpy crop (`crop_square_roi`) and the
+    hardware dma-buf crop (kit.adapters.official's RGA ROI path) consume it, so
+    the two produce byte-for-byte identical `roi_map`s (hence identical
+    coordinate mapping back to original-frame pixels) even though they fill the
+    out-of-frame margin differently (numpy edge-replicates, RGA gray-fills).
+
+    Returns a `SquareGeometry` tuple -- see the constant above for the fields.
+    The `roi_map` is `(ix1, iy1, iside/out_size, iside/out_size)`: the full
+    integer square's top-left and its (isotropic) frame-px-per-output-px scale.
     """
-    fh, fw = frame.shape[:2]
+    out_size = int(out_size)
     x1, y1, x2, y2 = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
 
     bw = max(1.0, x2 - x1)
@@ -74,14 +91,49 @@ def crop_square_roi(frame: np.ndarray, box: Sequence[float],
     ix2 = ix1 + iside
     iy2 = iy1 + iside
 
-    # Slice the valid overlap with the frame, edge-pad the out-of-bounds margin.
-    sx1, sy1 = max(0, ix1), max(0, iy1)
-    sx2, sy2 = min(fw, ix2), min(fh, iy2)
-    if sx2 <= sx1 or sy2 <= sy1:
-        # Box entirely outside frame (shouldn't happen for real detections).
-        roi = np.zeros((out_size, out_size, 3), dtype=np.uint8)
-        return roi, (float(ix1), float(iy1), iside / out_size, iside / out_size)
+    # roi_map scale is iside/out_size: crop_square_roi edge-pads the clipped crop
+    # back up to the full iside x iside square before resizing, so its per-axis
+    # scale (cw/out_size, ch/out_size) always equals iside/out_size.
+    roi_map: RoiMap = (float(ix1), float(iy1),
+                       iside / out_size, iside / out_size)
 
+    sx1, sy1 = max(0, ix1), max(0, iy1)
+    sx2, sy2 = min(int(frame_w), ix2), min(int(frame_h), iy2)
+    if sx2 <= sx1 or sy2 <= sy1:
+        return roi_map, None, None, (ix1, iy1, iside)
+
+    dscale = out_size / float(iside)
+    dx1 = int(round((sx1 - ix1) * dscale))
+    dy1 = int(round((sy1 - iy1) * dscale))
+    dx2 = int(round((sx2 - ix1) * dscale))
+    dy2 = int(round((sy2 - iy1) * dscale))
+    clamp = lambda v: max(0, min(out_size, v))
+    dst_window = (clamp(dx1), clamp(dy1), clamp(dx2), clamp(dy2))
+    return roi_map, (sx1, sy1, sx2, sy2), dst_window, (ix1, iy1, iside)
+
+
+def crop_square_roi(frame: np.ndarray, box: Sequence[float],
+                    out_size: int, pad: float = 0.25
+                    ) -> Tuple[np.ndarray, RoiMap]:
+    """Cut a padded, centered SQUARE ROI around `box` and resize to out_size.
+
+    frame : HWC uint8 RGB (original frame).
+    box   : [x1,y1,x2,y2] in original-frame pixels.
+    Returns (roi_uint8 [out_size,out_size,3], roi_map for coordinate mapping).
+
+    The square geometry is delegated to `square_roi_geometry` so the numpy crop
+    and the hardware dma-buf crop share one contract.
+    """
+    fh, fw = frame.shape[:2]
+    roi_map, src_valid, _dst, (ix1, iy1, iside) = square_roi_geometry(
+        fh, fw, box, out_size, pad)
+    ix2, iy2 = ix1 + iside, iy1 + iside
+
+    if src_valid is None:
+        # Box entirely outside frame (shouldn't happen for real detections).
+        return np.zeros((out_size, out_size, 3), dtype=np.uint8), roi_map
+
+    sx1, sy1, sx2, sy2 = src_valid
     crop = frame[sy1:sy2, sx1:sx2]
     pad_t, pad_l = sy1 - iy1, sx1 - ix1
     pad_b, pad_r = iy2 - sy2, ix2 - sx2
@@ -102,7 +154,6 @@ def crop_square_roi(frame: np.ndarray, box: Sequence[float],
         xs = (np.arange(out_size) * cw / out_size).astype(np.int64).clip(0, cw - 1)
         roi = crop[ys][:, xs].astype(np.uint8)
 
-    roi_map: RoiMap = (float(ix1), float(iy1), cw / out_size, ch / out_size)
     return roi, roi_map
 
 

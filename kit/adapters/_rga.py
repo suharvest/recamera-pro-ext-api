@@ -97,6 +97,17 @@ class _rga_buffer_t(Structure):
     _fields_ = [("_opaque", c_char * _RGA_BUFFER_SIZE)]
 
 
+class _im_rect(Structure):
+    """im2d `im_rect` (im2d_api/im2d_type.h): four ints {x, y, width, height}.
+
+    Unlike `rga_buffer_t`, this struct's layout has been stable across librga
+    releases (four `int`s), so we model it explicitly and build it ourselves --
+    it is what selects the crop sub-rectangle passed to `improcess_t`.
+    """
+
+    _fields_ = [("x", c_int), ("y", c_int), ("width", c_int), ("height", c_int)]
+
+
 def _load_librga() -> Optional[ctypes.CDLL]:
     candidates = ["librga.so.2", "librga.so", "librga.so.1"]
     for cand in candidates:
@@ -162,7 +173,31 @@ class RgaNV12ToRGB:
             self._resize.argtypes = [
                 _rga_buffer_t, _rga_buffer_t, c_double, c_double, c_int, c_int,
             ]
+        # improcess_t is the general im2d entry that crops a source sub-rect
+        # (srect), scales it into a destination sub-rect (drect) AND converts the
+        # pixel format in ONE hardware op -- exactly "NV12 dma-buf ROI -> resized
+        # RGB". It is OPTIONAL: some older RV1126B librga builds do not export it,
+        # in which case `can_crop()` is False and the caller keeps the numpy crop.
+        #   improcess(rga_buffer_t src, rga_buffer_t dst, rga_buffer_t pat,
+        #             im_rect srect, im_rect drect, im_rect prect, int usage)
+        # src/dst/pat are the 96-byte rga_buffer_t passed BY VALUE; the rects are
+        # the 16-byte _im_rect passed BY VALUE.
+        self._improcess = getattr(lib, "improcess_t", None)
+        if self._improcess is not None:
+            self._improcess.restype = c_int
+            self._improcess.argtypes = [
+                _rga_buffer_t, _rga_buffer_t, _rga_buffer_t,
+                _im_rect, _im_rect, _im_rect, c_int,
+            ]
         self._lib = lib
+
+    def can_crop(self) -> bool:
+        """True when the librga build exports `improcess_t` (the ROI-crop path).
+
+        Lets the caller probe ONCE whether hardware dma-buf ROI cropping is
+        possible before committing an app to the ``hw-roi`` frame mode; a False
+        keeps it on the numpy crop with no error."""
+        return self._improcess is not None
 
     def convert(self, fd: int, width: int, height: int,
                 y_stride: int, y_vstride: int) -> np.ndarray:
@@ -248,6 +283,80 @@ class RgaNV12ToRGB:
         )
         if rc != IM_STATUS_SUCCESS:
             raise RuntimeError("RGA small imcvtcolor_t failed: IM_STATUS=%d" % rc)
+        return out
+
+    def crop_nv12_to_rgb(self, fd: int, width: int, height: int,
+                         y_stride: int, y_vstride: int,
+                         src_rect, dst_size: int, dst_window=None,
+                         out: Optional[np.ndarray] = None,
+                         pad_value: int = 114) -> np.ndarray:
+        """Crop `src_rect` out of the NV12 dma-buf and scale it to RGB in ONE op.
+
+        Reads the borrowed camera dma-buf directly (near-zero CPU), unlike the
+        numpy `crop_square_roi` which needs a full-resolution RGB frame first.
+        This is the per-ROI hot path for cascade apps (face/facemesh/ppocr) under
+        the ``hw-roi`` frame mode.
+
+        `src_rect`  = (sx1, sy1, sx2, sy2) in NV12 pixels (the square clipped to
+                      the frame). It is aligned DOWN to even bounds because NV12
+                      chroma is 2x2-subsampled -- an odd crop origin/size would
+                      shift the color plane.
+        `dst_size`  = side of the square RGB output canvas.
+        `dst_window`= (dx1, dy1, dx2, dy2) sub-window of the output the crop is
+                      scaled into; the rest of the canvas is filled `pad_value`
+                      (gray, matching the CPU letterbox border). None -> fill the
+                      whole canvas.
+        `out`       = optional preallocated [dst_size, dst_size, 3] uint8 buffer
+                      to reuse across calls (avoids per-ROI reallocation). It is
+                      overwritten in place; hand back a COPY if you must retain it.
+
+        Returns the `out` canvas (the caller owns the buffer it passed in, or a
+        fresh one). Raises on a missing symbol or a non-SUCCESS IM_STATUS so the
+        caller can fall back.
+        """
+        if self._improcess is None:
+            raise RuntimeError("librga improcess_t symbol unavailable")
+        dst_size = int(dst_size)
+        if dst_size <= 0:
+            raise ValueError("invalid RGA crop dst_size")
+        if out is None:
+            out = np.full((dst_size, dst_size, 3), int(pad_value), dtype=np.uint8)
+        else:
+            if out.shape != (dst_size, dst_size, 3) or out.dtype != np.uint8:
+                raise ValueError("crop `out` buffer must be uint8 "
+                                 "[dst_size, dst_size, 3]")
+            out[:] = int(pad_value)
+
+        sx1, sy1, sx2, sy2 = (int(src_rect[0]), int(src_rect[1]),
+                              int(src_rect[2]), int(src_rect[3]))
+        # Align the source rect to even bounds (NV12 chroma subsampling).
+        sx1 &= ~1
+        sy1 &= ~1
+        sw = (sx2 - sx1) & ~1
+        sh = (sy2 - sy1) & ~1
+        if sw < 2 or sh < 2:
+            raise ValueError("degenerate RGA crop source rect")
+
+        src = self._lib.wrapbuffer_fd_t(
+            int(fd), int(width), int(height), int(y_stride), int(y_vstride),
+            RK_FORMAT_YCbCr_420_SP,
+        )
+        dst = self._lib.wrapbuffer_virtualaddr_t(
+            out.ctypes.data_as(c_void_p), dst_size, dst_size,
+            dst_size, dst_size, RK_FORMAT_RGB_888,
+        )
+        srect = _im_rect(sx1, sy1, sw, sh)
+        if dst_window is None:
+            drect = _im_rect(0, 0, dst_size, dst_size)
+        else:
+            dx1, dy1, dx2, dy2 = (int(dst_window[0]), int(dst_window[1]),
+                                  int(dst_window[2]), int(dst_window[3]))
+            drect = _im_rect(dx1, dy1, max(1, dx2 - dx1), max(1, dy2 - dy1))
+        empty = _rga_buffer_t()
+        prect = _im_rect(0, 0, 0, 0)
+        rc = self._improcess(src, dst, empty, srect, drect, prect, 0)
+        if rc != IM_STATUS_SUCCESS:
+            raise RuntimeError("RGA improcess_t crop failed: IM_STATUS=%d" % rc)
         return out
 
 
