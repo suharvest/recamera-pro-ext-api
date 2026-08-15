@@ -40,6 +40,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **硬件隐私遮罩**（COVER 增量控制） | 固件 + SDK 就绪；线 B 冷启动真机验证通过 | `MaskControl` / C ABI `rc_ext_mask_*`（rkipc RPC，M4） | [hw-mask-api.md](./hw-mask-api.md) |
 | **输出组件**（声明式结果输出） | 现成可用；真机 + 本地 broker 验证（P3b） | manifest `capabilities:["output"]` + `output` 块，`ConfigurableSink`（零 app 代码） | [output-sink.md](./output-sink.md) |
 | **硬件预处理加速**（RGA letterbox） | `hw-direct` 真机 A/B **+55%**；`hw` 实测无收益（+0.8%），默认不开 | `App.model_frame = "hw-direct"`（一行类属性，零 RGA 代码） | [hw-preprocess.md](./hw-preprocess.md) |
+| **RK 硬件编解码**（补 GStreamer 插件） | 出厂镜像无；自行补齐后**硬解**真机验证通过，**编码未测** | 交叉编译 `libgstrockchipmpp.so` + buildroot 现成的 `h265parse`，只写 `/userdata` | [hw-codec-gstreamer.md](./hw-codec-gstreamer.md) |
 | **rkipc RPC / 配置类** | 走 HTTP API | entry.cgi HTTP API（`/var/tmp/rkipc` 是内部接口，勿直连） | [rkipc-rpc-status.md](./rkipc-rpc-status.md) |
 | **观测面（M3）** | 已实现（真机验证）；SDK client `ProbeSource`（v1.2.0） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §4.8 与规格 §4 |
 | 控制面（M4）/ 显示（M5）/ 生态（M6）/ 沙箱分发 | 规划中 | — | 见本文 §8 与规格 |
@@ -618,6 +619,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **AI 结果软件叠加** — [ai-result-overlay.md](./ai-result-overlay.md)：自建 app 结果广播到 WS `:8124`（默认，带 `frame:{width,height}` 坐标参考系），官方 React `/preview` 页 canvas 叠加画框；不进码流，OSD 烧流 opt-in。
 - **推理即应用** — [inference-as-app.md](./inference-as-app.md)：内建推理经 `builtin.py` driver 变一等 app、`activate` 单活互斥切换、`config_schema` 的 `apply:live|restart` 热更（SIGHUP `on_config_reload`）、`SchemaForm` 动态配置面板。
 - **硬件隐私遮罩** — [hw-mask-api.md](./hw-mask-api.md)：`rc_ext_mask_*` / `MaskControl` 控制 VI 层硬件 COVER 遮块，增量移动不闪、不落盘；auto/manual 配额 `[3,6)`/`[0,3)`。
+- **RK 硬件编解码** — [hw-codec-gstreamer.md](./hw-codec-gstreamer.md)：出厂镜像缺的是 `gstreamer-rockchip` 插件层而非芯片能力（MPP/RGA 库与 `/dev/mpp_service` 都在）。零源码修改交叉编译出 `libgstrockchipmpp.so`，`h265parse` 取 buildroot 现成产物，只写 `/userdata`，硬件 H.265 **解码**端到端实测通过（`gi` + `cv2.CAP_GSTREAMER`）；**编码器未测**，且会与 rkipc 抢 VEPU。含三条坑（`LD_LIBRARY_PATH` 必须追加、registry 缓存）。
 - **输出组件（声明式结果输出）** — [output-sink.md](./output-sink.md)：manifest 声明 `capabilities:["output"]` + `output` 块（fields/映射/模板），kit 的 `ConfigurableSink` 把每帧结果发到 MQTT/HTTP/UART/WS，含 Home Assistant Discovery + 上下线 LWT，**app.py 零输出代码**；不声明则 app 自己发。
 
 ---
