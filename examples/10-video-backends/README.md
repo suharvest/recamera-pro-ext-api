@@ -18,8 +18,13 @@ python3 video_backends.py --backend opencv --n 60
 python3 video_backends.py --backend kit --hw-direct --model yolo11n.rknn --n 60
 ```
 
-> 2026-08-15 真机实测：当前固件上只有 `ffmpeg` 和 `kit` 两条路能跑，`gst` 与 `opencv`
+> 2026-08-15 真机实测：**出厂固件**上只有 `ffmpeg` 和 `kit` 两条路能跑，`gst` 与 `opencv`
 > 因缺 H.265 解码器 / 缺 FFMPEG backend 不可用，详见 [§前提](#每种后端在-recamera-pro-上的前提)。
+>
+> 同日另一轮实测：给 GStreamer **补上 RK 硬件解码插件后，`gst` 与 `opencv` 两条路都能跑通**
+> （`libgstrockchipmpp.so` + `h265parse`，只写 `/userdata`，不改固件）。补救办法见
+> [hw-codec-gstreamer.md](../../docs/guide/hw-codec-gstreamer.md)。下面各节写的"不可用"
+> 指的是**未做任何补齐的出厂状态**，这个事实不变。
 
 ## 先说清楚：这是旁路，不是第二路采集
 
@@ -120,7 +125,7 @@ letterbox（1280×720 → 640×640 实测 38–43 ms/帧）。
 - 硬件编码不可用：无 `--enable-rkmpp`，`h264_v4l2m2m` 报 `Could not find a valid device`
   （RK 编码器走 `/dev/mpp_service`）。**解码**侧本示例只用软解 H.265，够用。
 
-### OpenCV — 不可用（已实测，缺 FFMPEG backend）
+### OpenCV — 出厂固件不可用（已实测，缺 FFMPEG backend）；补插件后 `CAP_GSTREAMER` 可用
 
 - `cv2` **4.6.0** 在共享基础环境 `/userdata/rknnenv`（`docs/guide/per-app-dependencies.md`：
   rknnlite / numpy / cv2 走共享 base env），**不需要单独装**。
@@ -141,12 +146,16 @@ letterbox（1280×720 → 640×640 实测 38–43 ms/帧）。
     `unable to start pipeline`。根因与下一节的 GStreamer 相同：**没有 H.265 解码器**。
   - 注：`cv2.videoio_registry.getStreamBackends()` 里能看到 `FFMPEG` 字样，那是注册表里的
     枚举名，不代表编进来了。**别拿它当依据**。
-- 结论：`--backend opencv` 在当前固件上**走不通**，只能退回 `--backend ffmpeg`
+- 结论：`--backend opencv` 在**未补齐的出厂固件**上走不通，只能退回 `--backend ffmpeg`
   （子进程管道，不依赖 cv2 编译选项）。
-- 方案商要用 cv2 取流，得自己解决：重新交叉编译 OpenCV 并 `-DWITH_FFMPEG=ON`，
-  或给 GStreamer 补上 H.265 解码器（见下节）——两条路都得自带产物，设备上没有现成的。
+- 方案商要用 cv2 取流，两条路：重新交叉编译 OpenCV 并 `-DWITH_FFMPEG=ON`，
+  或给 GStreamer 补上 H.265 解码器。**后者 2026-08-15 已实测走通**：
+  补上 `libgstrockchipmpp.so` + `h265parse` 后，这份**未重编**的 cv2 4.6.0 用
+  `cv2.VideoCapture(..., cv2.CAP_GSTREAMER)` 拿到 `isOpened: True`、`shape=(480,640,3)`。
+  即 `Video I/O` 里那行 `GStreamer: YES (1.22.6)` 是真的能用的，缺的只是它下面的解码器。
+  做法见 [hw-codec-gstreamer.md](../../docs/guide/hw-codec-gstreamer.md)。
 
-### GStreamer — 不可用（已实测：`rtspsrc` 在，但一个视频解码器都没有）
+### GStreamer — 出厂固件不可用（`rtspsrc` 在，但一个视频解码器都没有）；补插件后硬解可用
 
 - GStreamer **1.22.6** + PyGObject（`gi`）在设备上存在，`appsrc` / `GstDmaBufAllocator` /
   `GstVideoMeta` 均已实测（`docs/guide/gstreamer-integration.md` §前置条件）。
@@ -182,8 +191,17 @@ letterbox（1280×720 → 640×640 实测 38–43 ms/帧）。
 
 - 方案商要用 `--backend gst`，得自己解决**解码器**这一件事，三选一：
   `gst-libav`（软解，最省事）、`gst-plugins-bad` 的 `h265parse` + 某个解码器、
-  或 Rockchip 的 `gstreamer-rockchip`（`mppvideodec`，硬解，性能最好但要配套 MPP 库）。
+  或 Rockchip 的 `gstreamer-rockchip`（`mppvideodec`，硬解，要配套 MPP 库）。
   设备是只读 rootfs 的精简系统，**装插件属于自带依赖的事，不在本示例范围**。
+- **第三条路 2026-08-15 已实测走通**，写成了专篇
+  [hw-codec-gstreamer.md](../../docs/guide/hw-codec-gstreamer.md)：从
+  `gstreamer-rockchip` 零源码修改交叉编译出 `libgstrockchipmpp.so`（含 `mppvideodec`），
+  `h265parse` 直接取 buildroot 里已预编好、只是没打进镜像的 `libgstvideoparsersbad.so`，
+  两者都放 `/userdata`，不改固件。管道
+  `rtspsrc ! rtph265depay ! h265parse ! mppvideodec ! videoconvert ! fakesink num-buffers=30`
+  实测 `Got EOS`，Python `gi` 与 `cv2.CAP_GSTREAMER` 均取到 `(480,640,3)`。
+  **编码器（`mpph264enc`/`mpph265enc`）虽也编出来了但未测**，且会与 rkipc 抢 VEPU。
+  上面这张 element 表描述的仍是**出厂状态**，不受此影响。
 - 同一份固件上**已确认可用**的 GStreamer 用法是另一条：帧代理 dma-buf → `appsrc` → 下游
   （零拷贝，实测 90 帧 3.03 s / 29.8 fps）。那条路不经过解码器，所以不受本节限制。
   **要在设备上用 GStreamer，走那条。**
@@ -223,13 +241,17 @@ letterbox（1280×720 → 640×640 实测 38–43 ms/帧）。
 
 2026-08-15 真机核实后的剩余项：
 
-- **`--backend gst` / `--backend opencv` 在当前固件上跑不了**，原因见上文（缺 H.265 解码器 /
-  缺 FFMPEG backend）。这两条路的 fps、CPU 占用**至今没有实测数字**，补齐插件之后才能测。
+- **`--backend gst` / `--backend opencv` 在未补齐的出厂固件上跑不了**，原因见上文
+  （缺 H.265 解码器 / 缺 FFMPEG backend）。补上 `libgstrockchipmpp.so` + `h265parse` 后
+  两条路都能取到帧（[hw-codec-gstreamer.md](../../docs/guide/hw-codec-gstreamer.md)），
+  但那一轮只验证了"能解出正确尺寸的帧"，**这两条路的 fps、CPU 占用仍然没有实测数字**，
+  也没有跑本示例的 `video_backends.py` 本身。
 - `--backend ffmpeg` 的取流已实测（30 帧逐字节对上），但**没有跑通完整的
   取帧 → letterbox → RKNN → 后处理链路**，所以本示例仍未产出自己的端到端 fps
   与 pre/infer/post 分段耗时。上文表格里的性能数字全部引自
   `docs/guide/hw-preprocess.md` 与 `kit/adapters/frame_source.py`，未新造。
 - `--backend kit` 未实跑（本轮不动摄像头、不切换正在运行的 app）。
 
-已核实、不再是未知项的：GStreamer RTSP 解码链（不可用）、OpenCV 的 FFMPEG backend（未编入）、
+已核实、不再是未知项的：GStreamer RTSP 解码链（出厂不可用，补插件后硬解可用）、
+OpenCV 的 FFMPEG backend（未编入，但补插件后 `CAP_GSTREAMER` 可用）、
 go2rtc 回环是否校验凭据（不校验）。
