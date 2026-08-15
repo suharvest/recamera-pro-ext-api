@@ -37,6 +37,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import queue
 import socket
 import struct
 import threading
@@ -46,6 +48,156 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+# --------------------------------------------------------------------------- #
+# WS server hardening knobs (C9 auth-surface / C10 slow-client DoS)
+#
+# Defaults are conservative and env-overridable. They bound three things a
+# hostile or merely slow WS client could otherwise do: (1) reach the result
+# stream at all (bind host), (2) starve fds by opening many connections
+# (client/per-ip caps), (3) freeze the INFERENCE thread by not reading (per-
+# client queue + background writer + drop-oldest + laggard disconnect).
+# --------------------------------------------------------------------------- #
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+WS_MAX_CLIENTS = _env_int("RECAMERA_WS_MAX_CLIENTS", 32)
+WS_MAX_PER_IP = _env_int("RECAMERA_WS_MAX_PER_IP", 8)
+WS_CLIENT_QUEUE = _env_int("RECAMERA_WS_CLIENT_QUEUE", 64)
+WS_SEND_TIMEOUT = _env_float("RECAMERA_WS_SEND_TIMEOUT", 2.0)
+# Consecutive frames dropped for one client before we give up on it. At 30 fps a
+# 64-deep queue plus this many drops is ~6 s of not reading -> that client is
+# broken, not just briefly busy; disconnect it so it stops wasting a slot.
+WS_LAG_LIMIT = _env_int("RECAMERA_WS_LAG_LIMIT", 128)
+
+
+def effective_bind_host(host: Optional[str]) -> str:
+    """Resolve the requested bind host, DEFAULTING TO LOOPBACK (C9).
+
+    The result stream is published behind the nginx JWT edge, which reverse-
+    proxies /appcenter/ws/results to 127.0.0.1:<port>. Binding loopback means
+    only nginx (already authenticated) and root can reach the raw port -- a LAN
+    peer cannot open an unauthenticated subscription. None/""/localhost/
+    loopback/local all resolve to 127.0.0.1. An explicit routable address
+    (e.g. "0.0.0.0") is honoured for the documented LAN-direct case, but that
+    exposes UNAUTHENTICATED results and must be opted into on purpose.
+    """
+    h = (host or "").strip().lower()
+    if h in ("", "127.0.0.1", "::1", "localhost", "loopback", "local"):
+        return "127.0.0.1"
+    return (host or "").strip()
+
+
+def offer_latest_wins(q: "queue.Queue", item) -> bool:
+    """Put `item` on a bounded queue, dropping the OLDEST if full (latest-wins).
+
+    Returns True if an old item had to be dropped to make room. A live-video
+    overlay wants the freshest frame, never a backlog, so a slow reader loses
+    stale frames instead of the producer blocking (C10)."""
+    try:
+        q.put_nowait(item)
+        return False
+    except queue.Full:
+        dropped = False
+        try:
+            q.get_nowait()
+            dropped = True
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            pass
+        return dropped
+
+
+def admit_reason(n_total: int, n_from_ip: int,
+                 max_clients: int, max_per_ip: int) -> Optional[str]:
+    """Return None if a new client may be admitted, else a short refusal reason.
+
+    Two independent caps (C10): a global fd budget, and a per-IP cap so one peer
+    cannot consume the whole budget by itself."""
+    if max_clients and n_total >= max_clients:
+        return f"server client limit reached ({max_clients})"
+    if max_per_ip and n_from_ip >= max_per_ip:
+        return f"per-ip client limit reached ({max_per_ip})"
+    return None
+
+
+class _WsClient:
+    """One connected WS subscriber: a bounded latest-wins queue drained by a
+    dedicated background writer thread, so the inference thread that calls
+    `offer()` never blocks on a slow/dead socket (C10).
+
+    A client that stays full for WS_LAG_LIMIT consecutive frames is too far
+    behind to be useful and is disconnected, freeing its slot.
+    """
+
+    def __init__(self, conn: socket.socket, ip: str, *, maxq: int,
+                 send_timeout: float, lag_limit: int):
+        self.conn = conn
+        self.ip = ip
+        self._q: "queue.Queue" = queue.Queue(maxsize=max(1, maxq))
+        self._send_timeout = send_timeout
+        self._lag_limit = lag_limit
+        self._drops = 0
+        self._alive = threading.Event()
+        self._alive.set()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def alive(self) -> bool:
+        return self._alive.is_set()
+
+    def offer(self, frame: bytes) -> None:
+        """Enqueue one frame (latest-wins); disconnect a persistently-behind
+        client. Never blocks -- this runs on the inference thread."""
+        if not self._alive.is_set():
+            return
+        if offer_latest_wins(self._q, frame):
+            self._drops += 1
+            if self._drops > self._lag_limit:
+                self.close()
+        else:
+            self._drops = 0
+
+    def _run(self) -> None:
+        while self._alive.is_set():
+            try:
+                frame = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if frame is None:            # close sentinel
+                break
+            try:
+                self.conn.settimeout(self._send_timeout)
+                self.conn.sendall(frame)
+            except Exception:
+                break                    # dead/too-slow socket: drop the client
+        self._alive.clear()
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self._alive.is_set():
+            self._alive.clear()
+            try:
+                self._q.put_nowait(None)  # wake the writer so it exits promptly
+            except queue.Full:
+                pass
 
 
 class ResultSink(ABC):
@@ -141,18 +293,33 @@ class WsResultSink(ResultSink):
     Slow/dead clients never block the inference loop.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8124,
-                 app_id: str = "app", preserve_envelope: bool = False):
-        self.host = host
+    def __init__(self, host: str = "127.0.0.1", port: int = 8124,
+                 app_id: str = "app", preserve_envelope: bool = False,
+                 *, max_clients: int = WS_MAX_CLIENTS,
+                 max_per_ip: int = WS_MAX_PER_IP,
+                 client_queue: int = WS_CLIENT_QUEUE,
+                 send_timeout: float = WS_SEND_TIMEOUT,
+                 lag_limit: int = WS_LAG_LIMIT):
+        # Default binds LOOPBACK (C9): the front end reaches this stream through
+        # nginx (proxy_pass -> 127.0.0.1:<port> at /appcenter/ws/results), so a
+        # loopback bind is fully reachable by the JWT-authenticated edge while a
+        # LAN peer cannot open an unauthenticated subscription. Passing an
+        # explicit "0.0.0.0" opts into LAN-direct exposure on purpose.
+        self.host = effective_bind_host(host)
         self.port = port
         self.app_id = app_id
+        self._max_clients = max_clients
+        self._max_per_ip = max_per_ip
+        self._client_queue = client_queue
+        self._send_timeout = send_timeout
+        self._lag_limit = lag_limit
         # When True, emit()/publish_envelope() broadcast the payload verbatim
         # (no self-generated type/app/pts/seq/frame). ConfigurableSink's
         # WsChannel sets this so the canonical envelope built ONCE upstream is
         # not stamped a second time here. Default False keeps the standalone
         # WsResultSink behaviour (legacy overlay path) byte-for-byte unchanged.
         self.preserve_envelope = preserve_envelope
-        self._clients: List[socket.socket] = []
+        self._clients: List[_WsClient] = []
         self._lock = threading.Lock()
         self._srv: Optional[socket.socket] = None
         self._accept_thread: Optional[threading.Thread] = None
@@ -181,6 +348,12 @@ class WsResultSink(ResultSink):
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind((self.host, self.port))
+        # Reflect the actually-bound port (matters when port=0 is passed for an
+        # OS-assigned ephemeral port, e.g. in tests).
+        try:
+            self.port = self._srv.getsockname()[1]
+        except OSError:
+            pass
         self._srv.listen(8)
         self._srv.settimeout(0.5)
         self._accept_thread = threading.Thread(target=self._accept_loop,
@@ -190,16 +363,34 @@ class WsResultSink(ResultSink):
     def _accept_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                conn, _addr = self._srv.accept()
+                conn, addr = self._srv.accept()
             except socket.timeout:
                 continue
             except OSError:
                 break
+            ip = addr[0] if addr else "?"
+            # Admission cap BEFORE the handshake: reject cheaply so a flood of
+            # connections cannot exhaust fds or the client budget (C10). Reap any
+            # dead clients first so their slots are reclaimed.
+            with self._lock:
+                self._clients = [c for c in self._clients if c.alive()]
+                n_total = len(self._clients)
+                n_ip = sum(1 for c in self._clients if c.ip == ip)
+            reason = admit_reason(n_total, n_ip, self._max_clients,
+                                  self._max_per_ip)
+            if reason is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
             try:
                 self._handshake(conn)
-                conn.setblocking(True)
+                client = _WsClient(conn, ip, maxq=self._client_queue,
+                                   send_timeout=self._send_timeout,
+                                   lag_limit=self._lag_limit)
                 with self._lock:
-                    self._clients.append(conn)
+                    self._clients.append(client)
             except Exception:
                 try:
                     conn.close()
@@ -237,29 +428,22 @@ class WsResultSink(ResultSink):
 
     # -- ResultSink ------------------------------------------------------- #
     def _broadcast(self, obj: dict) -> None:
-        """Serialise one JSON object and best-effort send it as a text frame to
-        every connected client, dropping any that error. Never blocks the loop."""
+        """Serialise one JSON object once and OFFER it to every client's bounded
+        queue. Never blocks the inference loop (C10): each client has its own
+        background writer thread and drops stale frames when it falls behind; a
+        client that is persistently behind disconnects itself. Dead clients are
+        reaped here so their slots free up."""
         frame = _ws_encode_text(
             json.dumps(obj, separators=(",", ":")).encode("utf-8")
         )
         with self._lock:
             clients = list(self._clients)
-        dead = []
         for c in clients:
-            try:
-                c.sendall(frame)
-            except Exception:
-                dead.append(c)
-        if dead:
+            c.offer(frame)
+        # Reap any client whose writer has exited (send error / self-disconnect).
+        if any(not c.alive() for c in clients):
             with self._lock:
-                for c in dead:
-                    if c in self._clients:
-                        self._clients.remove(c)
-            for c in dead:
-                try:
-                    c.close()
-                except Exception:
-                    pass
+                self._clients = [c for c in self._clients if c.alive()]
 
     def publish_envelope(self, envelope: dict) -> None:
         """Broadcast a pre-built canonical envelope verbatim (used by
@@ -298,6 +482,7 @@ class WsResultSink(ResultSink):
 
     def client_count(self) -> int:
         with self._lock:
+            self._clients = [c for c in self._clients if c.alive()]
             return len(self._clients)
 
     def close(self) -> None:

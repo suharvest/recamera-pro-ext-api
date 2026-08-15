@@ -366,7 +366,7 @@ class WsChannel(OutputChannel):
 
     name = "ws"
 
-    def __init__(self, ws: Optional[WsResultSink] = None, *, host: str = "0.0.0.0",
+    def __init__(self, ws: Optional[WsResultSink] = None, *, host: str = "127.0.0.1",
                  port: int = 8124, app_id: str = "app", own: Optional[bool] = None):
         if ws is None:
             ws = WsResultSink(host=host, port=port, app_id=app_id,

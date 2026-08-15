@@ -1253,7 +1253,11 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--url", default=DEFAULT_SUB_STREAM)
     ap.add_argument("--sink", default="ws", choices=["ws", "stdout"])
     ap.add_argument("--port", type=int, default=8124)
-    ap.add_argument("--host", default="0.0.0.0")
+    # Default LOOPBACK (C9): the overlay reaches this WS through nginx
+    # (proxy_pass -> 127.0.0.1:<port>), so binding loopback keeps the raw result
+    # stream off the LAN behind the JWT edge. Pass --host 0.0.0.0 to deliberately
+    # expose an UNAUTHENTICATED LAN-direct stream.
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--n", type=int, default=0, help="stop after N frames (0=forever)")
     ap.add_argument("--every", type=int, default=1)
     ap.add_argument("--quiet", action="store_true")
