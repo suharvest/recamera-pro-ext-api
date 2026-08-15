@@ -241,8 +241,13 @@ app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方
 - 开发时放 `apps/<id>/models/`，manifest `models[].file` 用相对路径 `models/xxx.rknn`。
 - 打包时 `models/` 整个进包（`build.py:28`）。
 - 运行时 supervisor 以 app 安装目录为 cwd，把 `models[0].file` 作为 `--model` 传给
-  `app.py`（`supervisor._build_cmd`）。多模型级联由 app 自己在 `setup()` 里按
-  `models[]` 逐个 `self.models.load(...)`。
+  `app.py`（`supervisor._build_cmd`）。
+- **kit 在 `App.start()` 里预加载 manifest 的全部 `models[]`**（相对路径按安装目录
+  转绝对，逐个构建 NPU 模型并挂到 `self.models`）。app **不调用 `self.models.load(...)`**
+  ——没有这个 API；多模型级联直接用 `self.models.<id>.infer(...)`（或单模型
+  `self.models[0].infer(...)`）。`--model` 只覆盖**第一个** manifest 模型，供临时换
+  模型调试。详见 [model-onboarding.md](./model-onboarding.md) §7 与
+  `internal/KIT_APP_SHAPE_SPEC.md`。
 
 ### 两种模型分发形态：随包 bundle vs 共享 `models[]`+`target_path`
 

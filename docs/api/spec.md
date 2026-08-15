@@ -2,7 +2,9 @@
 
 > **文档性质**：实施规格。本文把上游能力分析（内部设计文档）的 6.2/6.3 落成可开发的契约定义与实现方案。
 > **代码基**：`recamera_v2` manifest main 分支（2026-08-10 sync，82 仓库），路径基于 `project/app/`。
-> **状态**：v0.1 评审 REDESIGN-NEEDED（7 条）→ v0.2 复审 **SHIP-WITH-FIXES**（3 CLOSED / 4 PARTIAL / 3 新发现）→ v0.3 吸收全部剩余项（两轮修订记录见文末）→ **v0.4 增补 §8 架构与扩展模型**（服务端核心库、扩展五规则、兼容性工程）。**本版为开工基线**：M0 即刻开工；M1 待门禁 G3/G4；M2 核心待 G1/G2。字段编号、socket 路径、结构体布局实现后冻结。
+> **状态**：v0.1 评审 REDESIGN-NEEDED（7 条）→ v0.2 复审 **SHIP-WITH-FIXES**（3 CLOSED / 4 PARTIAL / 3 新发现）→ v0.3 吸收全部剩余项（两轮修订记录见文末）→ **v0.4 增补 §8 架构与扩展模型**（服务端核心库、扩展五规则、兼容性工程）。字段编号、socket 路径、结构体布局已冻结。
+>
+> **交付现状（截至发布 train v1.5.0）**：本规格定义的核心已**交付并真机验证**——M1 结果注入（`result-in.sock` + `rc_ext_result_send_*`）、M2 帧代理（`frame.sock` 零拷贝 NV12）、M3 观测面（`probe.sock` / `ProbeSource`，SDK 1.2.0）、M4 硬件遮罩（`rc_ext_mask_*` / `MaskControl`）均已随 SDK `librecamera_ext.so.1`（版本 1.2.0）发布，9 个自建 app 在其上运行。下文若出现「待门禁 Gx / 待做 / 即刻开工」等**规划口吻，是留存的原始分期基线**，不代表当前未实现；具体某能力的落地状态以其所在小节的现状标注、`CHANGELOG.md` 与 `docs/guide/` 各专题手册为准。
 
 ---
 
@@ -33,7 +35,7 @@
   - `/run/recamera/result-in.sock` — 结果回注（M1）
   - `/run/recamera/probe.sock` — 观测面（M3）
 - 选 SEQPACKET：天然消息边界；fd 传递（`SCM_RIGHTS`）与消息原子绑定。
-- **权限：目录 `0750 root:recamera-ext`，socket 文件 `0660`**。三条 socket 可按需拆分组（如 `recamera-frame` / `recamera-result`）做粗粒度授权，v1 先单组。
+- **权限（v1 实测：root-only，共享 root）：目录 `0750 root:root`，socket 文件 `0660`**。原设计曾拟用 `recamera-ext` 组做粗粒度授权，但上机（2026-08-10，V1.0.10）确认扩展应用**实际以 root 运行**（媒体设备节点均 root 属主，非 root 开不了），故 v1 落地为共享 root、无独立组；身份区分靠下条的 SO_PEERCRED + appmgr 注册表（见 §1.1 校准说明）。拆分组做多级授权留作后续演进。
 - **身份（v1 即有，不推迟）**：服务端对每个连接取 `SO_PEERCRED`（pid/uid/gid），作为连接身份记录并用于：
   - `source_id` 防冒充：`"builtin"` 为保留字，外部连接使用一律拒绝（EAUTH）。
   - **source_id ↔ uid 绑定注册表**：`/run/recamera/apps.d/<name>.conf`（内容：`uid=<n>`，root 只写）。连接的 peercred uid 在注册表中有对应条目 → 允许使用该 `<name>` 作为 `source_id`；无条目 → 强制改写为 `"uid:<n>"`，`Hello.client_name` 仅作诊断标注。v1 注册文件由管理员手写，打包分发落地后由安装器生成——机制不变，来源变。
@@ -321,7 +323,7 @@ message ProbeData {
 | `common/rc_infer/`（流水线各级） | tap 点 + probe 端点（core 之上的薄层） | 修改 + **新增** |
 | `recamera_web_backend/src/rest_api.cpp` + `ext_api.{h,cpp}` | ext 域 | 修改（2 行）+ **新增** |
 | `sdk/librecamera_ext/` | C ABI（v1 冻结对象）+ Python 薄封装 | **新增**（发布形态属门禁 G7） |
-| init 脚本 | `/run/recamera` 目录 + 组 + 0660 | 修改 |
+| init 脚本 | `/run/recamera` 目录（`0750 root:root`）+ socket `0660`（root-only，无独立组） | 修改 |
 
 **DoD（每里程碑验收）**：
 - M1：外部脚本注入假检测框 → RTSP 流里看到框和标签 → 录像回放看到 → WS:8123 收到带 `source_id` 的结果；冒充 `"builtin"` 被拒；超速消息被丢且计数可查。

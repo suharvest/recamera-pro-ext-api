@@ -617,7 +617,8 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加/录像请改用本文 §4 的结果注入。
 - **rkipc RPC 现状** — [rkipc-rpc-status.md](./rkipc-rpc-status.md)：`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，不承诺稳定、勿直连；配置类需求走 entry.cgi HTTP API，等 M4 版本化控制面。
 - **AI 结果软件叠加** — [ai-result-overlay.md](./ai-result-overlay.md)：自建 app 结果广播到 WS `:8124`（默认，带 `frame:{width,height}` 坐标参考系），官方 React `/preview` 页 canvas 叠加画框；不进码流，OSD 烧流 opt-in。
-- **推理即应用** — [inference-as-app.md](./inference-as-app.md)：内建推理经 `builtin.py` driver 变一等 app、`activate` 单活互斥切换、`config_schema` 的 `apply:live|restart` 热更（SIGHUP `on_config_reload`）、`SchemaForm` 动态配置面板。
+- **模型上板（zero-to-deployed）** — [model-onboarding.md](./model-onboarding.md)：方案商把自己的模型跑到设备上的端到端主线——ONNX 导出 → 检查 IR/opset → RKNN 转换（`rknn-toolkit2` 2.3.x，target `rv1126b`）→ 量化校准 → 放进 app `models/` + manifest 声明 → 打包/装/激活/验证。深度转换细节指向 `models/convert/` 项目。
+- **推理即应用** — [inference-as-app.md](./inference-as-app.md)：内建推理经 `builtin.py` driver 变一等 app、`activate` 单活互斥切换、`config_schema` 的 `apply:live|restart` 热更（SIGHUP → kit 自动重绑 + `on_params_changed`）、`SchemaForm` 动态配置面板。
 - **硬件隐私遮罩** — [hw-mask-api.md](./hw-mask-api.md)：`rc_ext_mask_*` / `MaskControl` 控制 VI 层硬件 COVER 遮块，增量移动不闪、不落盘；auto/manual 配额 `[3,6)`/`[0,3)`。
 - **RK 硬件编解码** — [hw-codec-gstreamer.md](./hw-codec-gstreamer.md)：出厂镜像缺的是 `gstreamer-rockchip` 插件层而非芯片能力（MPP/RGA 库与 `/dev/mpp_service` 都在）。零源码修改交叉编译出 `libgstrockchipmpp.so`，`h265parse` 取 buildroot 现成产物，只写 `/userdata`，硬件 H.265 **解码**端到端实测通过（`gi` + `cv2.CAP_GSTREAMER`）；**编码器未测**，且会与 rkipc 抢 VEPU。含三条坑（`LD_LIBRARY_PATH` 必须追加、registry 缓存）。
 - **输出组件（声明式结果输出）** — [output-sink.md](./output-sink.md)：manifest 声明 `capabilities:["output"]` + `output` 块（fields/映射/模板），kit 的 `ConfigurableSink` 把每帧结果发到 MQTT/HTTP/UART/WS，含 Home Assistant Discovery + 上下线 LWT，**app.py 零输出代码**；不声明则 app 自己发。

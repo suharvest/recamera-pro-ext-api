@@ -89,10 +89,10 @@
 
    ```sh
    ls -l /run/recamera/
-   # 期望看到 frame.sock / result-in.sock（0660 root:recamera-ext）
+   # 期望看到 frame.sock / result-in.sock（0660 root:root）
    ```
 
-2. **socket 权限。** `/run/recamera/` 目录 `0750 root:recamera-ext`，socket 文件 `0660`。你的进程需属于 `recamera-ext` 组，或以能访问该组的身份运行。现固件上扩展应用经 `appmgr serve` 以 **root** 启动（麦克风/摄像头设备节点均 root 属主）——直接以 root 跑最省事。
+2. **socket 权限（v1 = root-only，共享 root）。** 实测 RV1126B 上 `/run/recamera/` 目录为 `0750 root:root`、socket 文件 `0660`，**没有** `recamera-ext` 组。扩展应用经 `appmgr serve` 以 **root** 启动（麦克风/摄像头/`/dev/mpi` 设备节点均 root 属主，非 root 开不了硬件节点），身份区分靠 SO_PEERCRED + appmgr 注册表而非独立 uid/组。**直接以 root 跑即可，无需创建或加入任何组。**
 
 3. **C 客户端** 链接 `librecamera_ext.so.1`（设备上应已随固件安装到 `/lib` 或 `/usr/lib`）。
    **Python 客户端** `import recamera_ext`（ctypes 薄封装，运行时 `dlopen` 同一个 `.so`）。Python 端还需：
@@ -128,7 +128,7 @@ Python 的 `recamera_ext` 包：把 `sdk/librecamera_ext/python/recamera_ext/` �
 
 ## 常见问题（跨示例通用）
 
-- **`rc_ext_frame_open failed` / `rc_ext_result_open failed`**：多半是固件不含扩展 API（`/run/recamera/` 无对应 socket），或权限不足（非 root 且不在 `recamera-ext` 组）。先 `ls -l /run/recamera/`。
+- **`rc_ext_frame_open failed` / `rc_ext_result_open failed`**：多半是固件不含扩展 API（`/run/recamera/` 无对应 socket），或权限不足（非 root——socket 是 `root:root` root-only）。先 `ls -l /run/recamera/`。
 - **`librecamera_ext.so.1 not found`**：`.so` 未随固件安装。设 `LD_LIBRARY_PATH` 指向它所在目录，或给 `FrameSource(lib_path=...)` / `ResultSink(lib_path=...)` 传绝对路径。
 - **`ModuleNotFoundError: numpy`**：`pip install numpy`（或设备上用 `uv`/`opkg` 对应包）。
 - **注入的框不出现在画面**：确认用的是 `result-in.sock`（本套示例）而非 legacy notify；`source_id` 不能是保留字 `"builtin"`；发送速率别超过 60 msg/s。

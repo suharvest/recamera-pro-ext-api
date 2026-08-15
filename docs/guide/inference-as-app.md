@@ -37,13 +37,13 @@
 
 响应里 `restarted` 字段标明走了哪条。
 
-### 1.3 kit 侧热重读（SIGHUP → `on_config_reload`）
+### 1.3 kit 侧热重读（SIGHUP → 自动重绑 + `on_params_changed`）
 
 `kit/app.py` 基类（`app.py:63-133`）：
 
 - 主循环启动时装 SIGHUP handler（`app.py:107-111`，best-effort，仅主线程可装）。
-- 收到 SIGHUP → 置标志 → 下一帧循环边界重读 `config.json` 的**有效配置** → 调 `on_config_reload(cfg)`（`app.py:120-133`，**永不把异常抛进循环**）。
-- 基类默认只重挂 base 管的 live 旋钮（`conf`/`iou`）；应用有自己的 live 参数（`max_faces`、阈值、ROI 几何等）时 **override `on_config_reload`** 就地替换，**不重建 pipeline / 不重载模型**。7 个应用各自 override 需要热调的值。
+- 收到 SIGHUP → 置标志 → 下一帧循环边界重读 `config.json` 的**有效配置**，然后：先把 `apply:"live"` 的 `config_schema` 键**自动重新绑定**到 `self`（`app.py:_bind_params`），对**发生变化**的键调 `on_params_changed(changed)`；随后再调基类的 `on_config_reload(cfg)` 兜底（两者**永不把异常抛进循环**）。
+- **应用侧推荐 override `on_params_changed(changed: set)`**：普通标量旋钮（`max_faces`、阈值等）kit 已自动重绑到 `self`，**无需任何代码**；只有需要**重建派生对象**（状态机、缓存几何、`pipeline.pad`）时才 override 它，**不重建 pipeline / 不重载模型**。`on_config_reload` 是更底层的基类钩子（默认重挂 base 管的 `conf`/`iou`），一般不必覆盖。实际迁移后的应用（fitness / fall / facemesh 等）override 的是 `on_params_changed`。
 - `restart` 项永远走进程重启，不经这里。
 
 > 收益：调阈值/ROI 这类高频调参不打断摄像头链路（不抢相机、不闪流）；换模型/换输入分辨率这类重操作才重启。
@@ -94,4 +94,4 @@
 
 ## 5. 一句话
 
-内建推理与自建应用统一成一套 app 模型：`list` 同列、`activate` 单活互斥、`config_schema`+`SchemaForm` 一套动态面板。配置改动按 `apply` 分流——`live` 走 SIGHUP 热重读（`on_config_reload`，不重启不抢相机），`restart` 才重启进程。内建的 driver（`builtin.py`）把 entry.cgi 的 `/model/inference`+`/model/info` 反组装成同构 config，前端无需为内建单独写页面。
+内建推理与自建应用统一成一套 app 模型：`list` 同列、`activate` 单活互斥、`config_schema`+`SchemaForm` 一套动态面板。配置改动按 `apply` 分流——`live` 走 SIGHUP 热重读（kit 自动重绑参数 + `on_params_changed`，不重启不抢相机），`restart` 才重启进程。内建的 driver（`builtin.py`）把 entry.cgi 的 `/model/inference`+`/model/info` 反组装成同构 config，前端无需为内建单独写页面。

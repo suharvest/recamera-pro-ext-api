@@ -72,14 +72,19 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78
 
 正式发布形态是把扩展改动全量编进 rootfs，打成 `update_ota.tar` / `update.img`，走 RKDevTool / upgrade_tool 或官方 OTA 分发。这属于**打包分发范畴，本轮暂未做**——此处仅标注方向：编译入口 `./build.sh app`（编 rkipc）→ `./build.sh firmware`（打包分区）→ `./build.sh updateimg` / `allsave`（整包），产物在 `output/image/`（见 `recamera-rk-build` skill）。做成 OTA 后，`/oem` 覆盖就成了固件的一部分，不再需要 sideload。
 
-### 2.3 v1.3.0 一键部署（应用层，`deploy-app.sh`，推荐）
+### 2.3 一键部署（应用层，`deploy-app.sh`，推荐）
 
-`release/deploy/deploy-app.sh` 把本轮全部**应用层**改动一次性打到设备，让设备达到 v1.3.0 完整状态，全程 **adb over root**，**不碰 rkipc / 固件 / cgi-bin**（部署前后各取一次 `/oem/usr/bin/rkipc` md5，收尾断言未变，变了 FATAL）。
+> **版本**：当前发布 train 为 **v1.5.0**（包在 `release/v1.5.0/`，仍是
+> `recamera-ext-kit` / `recamera-ext-api` / `appmgr` / `frontend` / `apps` 五包 +
+> `deploy-app.sh`）。下文以 v1.3.0 train 为例说明**一键部署流程**——各 train 的包名
+> 与步骤同构，把版本号替换成当前 train 即可（CDN 路径同理）。
+
+`deploy-app.sh` 把本轮全部**应用层**改动一次性打到设备，让设备达到该 train 的完整状态，全程 **adb over root**，**不碰 rkipc / 固件 / cgi-bin**（部署前后各取一次 `/oem/usr/bin/rkipc` md5，收尾断言未变，变了 FATAL）。
 
 ```bash
-cd release/deploy
-./deploy-app.sh                       # 默认 host 192.168.42.1
-./deploy-app.sh --host 192.168.10.x   # 指定设备 IP（IP 易变，先确认当前地址）
+cd release/v1.5.0                      # 或对应 train 目录
+./deploy-app.sh --host <设备IP>        # 设备 IP 易变，先确认当前地址（见 §末网络）
+./deploy-app.sh --host 192.168.10.x   # 局域网同网段直连示例
 ./deploy-app.sh --skip-kit            # kit 已装，只更 appmgr/前端/apps
 ./deploy-app.sh --no-activate         # 不启动 app、不碰摄像头
 ```

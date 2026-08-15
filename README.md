@@ -54,14 +54,17 @@ export LD_LIBRARY_PATH=/userdata/sdk/lib:$LD_LIBRARY_PATH
 
 | 包 | 用途 | 说明 |
 |---|---|---|
-| [`release/recamera-ext-api-v1.2.0.tar`](release/) | **固件 sideload 包** | patched `rkipc` + `entry.cgi` + SDK + `install.sh`/`rollback.sh`。覆盖 `/oem`（持久，OTA 会还原）。设备端安装步骤见 [`release/pkg/README.md`](release/pkg/README.md)。 |
-| [`release/recamera-ext-kit-v1.2.0.tar.gz`](release/) | **kit 分享包** | `kit/` + `sdk/` + `examples/` + `INSTALL.sh`（一键装到 `/userdata`）。**不含固件**，给已刷好扩展 API 固件、要在设备上开发 app 的方案商。 |
+| [`release/recamera-ext-api-v1.5.0.tar`](release/) | **固件 sideload 包** | patched `rkipc` + `entry.cgi` + SDK + `install.sh`/`rollback.sh`。覆盖 `/oem`（持久，OTA 会还原）。设备端安装步骤见 [`release/pkg/README.md`](release/pkg/README.md)。 |
+| [`release/recamera-ext-kit-v1.5.0.tar.gz`](release/) | **kit 分享包** | `kit/` + `sdk/` + `examples/` + `INSTALL.sh`（一键装到 `/userdata`）。**不含固件**，给已刷好扩展 API 固件、要在设备上开发 app 的方案商。 |
 
 如何更新 release（重打包 / 换 rkipc / 升版本）见 [RELEASING.md](RELEASING.md)；用 [`release/build-release.sh`](release/build-release.sh) 可复现地从仓内源组装。
 
 ## 版本
 
-当前 **v1.2.0**（SDK soname `librecamera_ext.so.1`，API `frame@1 / result@1 / probe@1`）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+两条版本轴，勿混淆：
+
+- **发布 train（产品发布包）**：当前 **v1.5.0**（`release/` 下 `recamera-ext-api` / `recamera-ext-kit` / `appmgr` / `frontend` / `apps` 五包同号）。部署见 [docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)。
+- **SDK / C ABI 版本**：当前 **1.2.0**（soname `librecamera_ext.so.1`，API `frame@1 / result@1 / probe@1`）。ABI 向后兼容、soname 不变时**不随发布 train 跳版**；SDK 变更记录见 [CHANGELOG.md](CHANGELOG.md)、[sdk/VERSION](sdk/VERSION)。
 
 ## License
 
