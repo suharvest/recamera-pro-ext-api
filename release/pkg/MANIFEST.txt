@@ -1,4 +1,4 @@
-recamera-ext-api  v1.4.0
+recamera-ext-api  v1.5.0
 Built: 2026-08-15   Target: reCamera Pro (RV1126B / recamera_v2)
 
 ARTIFACTS (md5)

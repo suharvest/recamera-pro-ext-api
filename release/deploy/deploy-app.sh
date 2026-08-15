@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# deploy-app.sh -- reCamera Pro v1.4.0 application-layer one-shot deploy.
+# deploy-app.sh -- reCamera Pro v1.5.0 application-layer one-shot deploy.
 #
-# Brings a device to the full v1.4.0 application state, in order:
+# Brings a device to the full v1.5.0 application state, in order:
 #   1. kit + SDK + inference wheels (jinja2/markupsafe)  -> /userdata/local/kit, /userdata/sdk, /userdata/rknnenv
 #   2. appmgr (App Center manager)                       -> /userdata/local/appmgr   (+ restart)
 #   3. frontend web bundle                               -> /oem/usr/www
@@ -50,7 +50,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SERIAL="${HOST}:5555"
 TS="$(date +%Y%m%d-%H%M%S)"
 STAGE=/userdata/_deploy
-VER=1.4.0
+VER=1.5.0
 
 PKG_KIT="$HERE/recamera-ext-kit-v${VER}.tar.gz"
 PKG_APPMGR="$HERE/appmgr-v${VER}.tar.gz"
