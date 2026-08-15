@@ -544,6 +544,8 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 | `v4l2src` | ✅ 在(rank primary 256) |
 | `kmssink` | ❌ `No such element or plugin` |
 
+> **可补,已实测**(2026-08-15):这三个 RK element 缺的是**插件层**而非芯片能力 —— `librockchip_mpp.so`/`librga.so`/`librockit.so` 与 `/dev/mpp_service` 都在设备上。从 `gstreamer-rockchip` 零源码修改交叉编译出 `libgstrockchipmpp.so` 后,`mppvideodec` 硬件 H.265 解码端到端跑通(Python `gi` 与 `cv2.CAP_GSTREAMER` 两条路)。`h265parse` 取 buildroot 已预编但未打进镜像的 `libgstvideoparsersbad.so`,不用编。做法、前提与坑见 [`../guide/hw-codec-gstreamer.md`](../guide/hw-codec-gstreamer.md)。**编码器 `mpph264enc`/`mpph265enc` 虽同时编出但未测**,且会与 rkipc 抢 VEPU。上表描述的是**出厂镜像**状态,不受影响。
+
 `kmssink` 缺失有第二重原因:**设备上根本没有 `/dev/dri/`**(`ls /dev/dri/*` → No such file or directory),即 DRM/KMS 用户态节点未暴露,DSI 上屏走不了标准 DRM sink。
 `v4l2src` 虽在,但设备上 28 个 `/dev/video*` 全部是 ISP/CIF/VPSS 采集与统计节点(`rkisp_mainpath`、`rkvpss_scale0..5`、`stream_cif_mipi_id0..3` 等),**没有一个是通用 UVC 或 M2M 编解码节点**,且权限 `root:video 0660`。
 
@@ -575,6 +577,7 @@ recameraframesrc ! <方案商处理:推理/滤镜> ! tee ! recamerah265sink   (�
 
 ### 2026-08-15 复测核对结果:结论整体成立,两处需订正
 1. **成立**:GStreamer 1.22.6、无 RK 硬编 plugin、无 kmssink、ffmpeg 4.4.4 未编 rkmpp、`drm` hwaccel 在。
+   - 补充(同日另一轮):"无 RK plugin"是**出厂镜像**的事实,方案商可自行补齐 —— `libgstrockchipmpp.so` 交叉编译后硬件 H.265 **解码**已实测端到端可用,详见 [`../guide/hw-codec-gstreamer.md`](../guide/hw-codec-gstreamer.md)。**编码侧未测**,故上文"硬件编码回推标准框架里缺"的结论**暂不改动**。
 2. **订正 A**:"`h264_v4l2m2m` 不可用"的**表述容易误读**。`ffmpeg -encoders` **会列出** `h264_v4l2m2m`/`hevc_v4l2m2m`,wrapper 是编进来的;不可用的原因是内核侧无 V4L2 M2M codec 设备节点(28 个 `/dev/video*` 全是 ISP/CIF/VPSS 采集节点)。方案商照 `-encoders` 输出选编码器会踩空。
 3. **订正 B**:`drm` 虽列在 `-hwaccels`、`--enable-libdrm` 也在 configure 串里,但设备上**没有 `/dev/dri/`**,DRM 相关路径(含 kmssink 上屏)在当前固件上无节点可用,不只是"缺 plugin"。
 
