@@ -111,6 +111,12 @@ class HwcodecTestBase(unittest.TestCase):
             set(prev_roots) | {os.path.realpath(self.ud)})
         self.addCleanup(setattr, paths, "ALLOWED_PKG_ROOTS", prev_roots)
 
+        # These tests build UNSIGNED bundles to exercise install/env mechanics,
+        # not authenticity (release-signature verification has its own suite,
+        # test_runtime_signature.py). Opt out of the require-signature policy so
+        # the unsigned fixtures reach extraction.
+        self._patch_attr(paths, "REQUIRE_SIGNATURE", False)
+
     # -- patch helpers -------------------------------------------------------
     def _patch_env(self, key, value):
         prev = os.environ.get(key)

@@ -248,14 +248,28 @@ def _build_runtimes(runtimes_dir: str, base: str) -> dict:
         path = hits[-1]
         filename = os.path.basename(path)
         sha, size = _sha256_and_size(path)
-        out[capability] = {
+        desc = {
             "url": base + filename,
             "filename": filename,
             "sha256": sha,
             "size": size,
         }
-        print(f"add   runtime {capability:12s} {size/1048576:6.1f} MiB  {sha[:12]}…",
-              file=sys.stderr)
+        # Embed the detached release signature (C1) exactly as app packages do:
+        # runtime bundles are unpacked as root into shared trees (/userdata/rknnenv,
+        # /userdata/lib), so the device verifies this base64 against the baked-in
+        # public key before install. Unsigned -> flagged loudly; with the default
+        # policy (require_signature=1) the device REFUSES the bundle.
+        sig = _read_sig(path)
+        if sig:
+            desc["signature"] = sig
+            desc["signature_alg"] = "ecdsa-sha256"
+        else:
+            print(f"WARN  {filename}: no .sig sidecar -- runtime bundle is UNSIGNED "
+                  f"and will be REFUSED under the default signature policy "
+                  f"(run packaging/sign.py --dist {runtimes_dir})", file=sys.stderr)
+        out[capability] = desc
+        print(f"add   runtime {capability:12s} {size/1048576:6.1f} MiB  {sha[:12]}…"
+              f"  {'signed' if sig else 'UNSIGNED'}", file=sys.stderr)
     return out
 
 

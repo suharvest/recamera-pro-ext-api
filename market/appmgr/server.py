@@ -267,15 +267,20 @@ def do_runtime_status(name: str = "voice") -> dict:
     return voiceruntime.status(name)
 
 
-def do_runtime_install(name: str, pkg_path: str = None) -> dict:
-    """POST /api/appMgr/runtime {name, path} -> install the runtime bundle.
+def do_runtime_install(name: str, pkg_path: str = None, signature: str = None) -> dict:
+    """POST /api/appMgr/runtime {name, path, signature?} -> install the runtime bundle.
 
     `path` is what /api/appMgr/upload returned for voice-runtime-<ver>.tar.gz.
+    `signature` is the detached base64 release signature the catalog carries for
+    the runtime bundle; like an app install it is verified against the baked-in
+    public key BEFORE the bundle is unpacked into the shared venv / lib tree
+    (C1). Absent it, the `<pkg>.sig` sidecar is consulted, and policy
+    (paths.REQUIRE_SIGNATURE, default on) refuses an unsigned bundle.
     Idempotent: an already-importable runtime returns already_present without
     running pip, so a repeat install of an audio app costs nothing.
     """
     with busy_gate():
-        res = voiceruntime.install(name, pkg_path)
+        res = voiceruntime.install(name, pkg_path, signature)
         _audit("runtime", name=name, installed=res.get("installed"),
                already_present=res.get("already_present"))
         return res
@@ -1006,9 +1011,11 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "missing/invalid 'config'"})
                 return self._send(200, do_set_config(i, body["config"]))
             if path == "/api/appMgr/runtime":
-                # {name?: "voice", path?: "/userdata/appstage/voice-runtime-*.tar.gz"}
+                # {name?: "voice", path?: "/userdata/appstage/voice-runtime-*.tar.gz",
+                #  signature?: "<base64 detached release signature>"}
                 return self._send(200, do_runtime_install(
-                    body.get("name") or "voice", body.get("path")))
+                    body.get("name") or "voice", body.get("path"),
+                    body.get("signature")))
             if path == "/api/appMgr/mqtt":
                 cfg = body.get("mqtt", body)
                 if not isinstance(cfg, dict):

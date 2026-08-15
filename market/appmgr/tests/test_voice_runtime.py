@@ -258,6 +258,12 @@ class PipArgvTests(FakeVenvTestBase):
         paths.ALLOWED_PKG_ROOTS = tuple(
             set(prev) | {os.path.realpath(paths.APPSTAGE_DIR)})
         self.addCleanup(setattr, paths, "ALLOWED_PKG_ROOTS", prev)
+        # This suite asserts the pip ARGV for an UNSIGNED fixture bundle; release-
+        # signature verification is covered separately (test_runtime_signature.py).
+        # Opt out of the require-signature policy so install() reaches pip.
+        prev_req = paths.REQUIRE_SIGNATURE
+        paths.REQUIRE_SIGNATURE = False
+        self.addCleanup(setattr, paths, "REQUIRE_SIGNATURE", prev_req)
 
     def _bundle(self):
         """A minimal, well-formed voice-runtime tarball under an allowed root."""

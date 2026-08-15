@@ -51,9 +51,10 @@ import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 
-from . import installer, paths
+from . import installer, paths, signing
 
 # Runtime registry. `modules` is what must import; `packages` is what pip is asked
 # for (pip project names, resolved offline from the bundle's wheels/ dir). The two
@@ -249,21 +250,74 @@ def _find_wheel_dir(root: str) -> str:
         "runtime bundle contains no wheels/ directory and no .whl files")
 
 
-def install(name: str = "voice", pkg_path: str = None) -> dict:
-    """Install a runtime bundle. Idempotent. Dispatches on the entry's `kind`."""
+def _verify_and_extract(pkg_path: str, signature, dest_dir: str) -> list:
+    """Verify a runtime bundle's release signature and unpack it into `dest_dir`.
+
+    Authenticity parity with app install (C1): a runtime bundle is "deliver root
+    code to a SHARED tree" (/userdata/rknnenv, /userdata/lib) exactly as an app
+    package is, so it goes through the SAME detached-signature check
+    (signing.verify_package) under the SAME policy (paths.REQUIRE_SIGNATURE ->
+    unsigned refused by default; a bad signature always refused). This runs in
+    addition to installer.validate_pkg_path + the per-member zip-slip vetting,
+    not instead of them.
+
+    TOCTOU binding (C12): the package is opened ONCE and both the signature
+    check and the extraction read that single open file description -- we never
+    verify one path and then re-open the path to unpack (which is where a swap
+    could slip an unsigned tar past a path-only check). On Linux the signature
+    is verified over /proc/self/fd/<n>, the same inode we extract from; where
+    /proc is absent (dev/CI) we fall back to verifying the real path and then
+    assert fstat(fd) still names the inode we verified before unpacking it.
+    """
+    real = installer.validate_pkg_path(pkg_path)
+    fd = os.open(real, os.O_RDONLY)
+    try:
+        st = os.fstat(fd)
+        proc = "/proc/self/fd/%d" % fd
+        verify_path = proc if os.path.exists(proc) else real
+        # Sidecar `<pkg>.sig` is keyed on the REAL path, not the /proc alias.
+        sig_b64 = signing.load_signature(real, signature)
+        try:
+            signing.verify_package(verify_path, sig_b64)
+        except signing.SignatureError as e:
+            raise RuntimeError_(f"runtime bundle signature rejected: {e}")
+        if verify_path is real:
+            st2 = os.stat(real)
+            if (st2.st_dev, st2.st_ino) != (st.st_dev, st.st_ino):
+                raise RuntimeError_(
+                    "runtime bundle changed on disk between verify and extract")
+        os.lseek(fd, 0, os.SEEK_SET)
+        with os.fdopen(fd, "rb", closefd=True) as fobj:
+            fd = None  # ownership passes to fobj; do not double-close
+            with tarfile.open(fileobj=fobj, mode="r:gz") as tar:
+                return installer.extract_vetted_tar(tar, dest_dir)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def install(name: str = "voice", pkg_path: str = None, signature=None) -> dict:
+    """Install a runtime bundle. Idempotent. Dispatches on the entry's `kind`.
+
+    `signature` is the detached base64 release signature (from the catalog's
+    runtime descriptor, forwarded by POST /api/appMgr/runtime); when absent the
+    `<pkg>.sig` sidecar is consulted, and policy decides whether an unsigned
+    bundle is refused (paths.REQUIRE_SIGNATURE, default on).
+    """
     spec = _spec(name)
     if kind_of(spec) == "files":
-        return _install_files(spec, pkg_path)
-    return _install_wheels(spec, pkg_path)
+        return _install_files(spec, pkg_path, signature)
+    return _install_wheels(spec, pkg_path, signature)
 
 
-def _install_wheels(spec: dict, pkg_path: str = None) -> dict:
+def _install_wheels(spec: dict, pkg_path: str = None, signature=None) -> dict:
     """Install a runtime bundle into the venv, offline. Idempotent.
 
     `pkg_path` is a device path to voice-runtime-<ver>.tar.gz, normally the value
     POST /api/appMgr/upload just returned; it goes through the app installer's own
-    path gate and member vetting (installer.validate_pkg_path / extract_vetted),
-    so a hostile bundle cannot write outside the temp dir.
+    path gate, release-signature verification and member vetting
+    (_verify_and_extract), so an unsigned/forged bundle is refused and a hostile
+    bundle cannot write outside the temp dir.
 
     Returns the post-install status() dict plus {installed, already_present}.
     Raises RuntimeError_ naming the failing step / the modules still missing.
@@ -280,6 +334,8 @@ def _install_wheels(spec: dict, pkg_path: str = None) -> dict:
             f"runtime {name!r} is not installed and no bundle path was given "
             "(upload voice-runtime-<ver>.tar.gz via /api/appMgr/upload first); "
             "missing: " + ", ".join(m["module"] for m in before["missing"]))
+    # Cheap path/root/size gate first (unchanged ordering); the signature check
+    # and the bound extraction happen together in _verify_and_extract below.
     installer.validate_pkg_path(pkg_path)
 
     pip = venv_pip()
@@ -290,7 +346,7 @@ def _install_wheels(spec: dict, pkg_path: str = None) -> dict:
 
     work = tempfile.mkdtemp(prefix=".runtime.", dir=paths.ensure_appstage())
     try:
-        installer.extract_vetted(pkg_path, work)
+        _verify_and_extract(pkg_path, signature, work)
         wheels = _find_wheel_dir(work)
         # --no-deps is deliberate, and it is NOT "skip the checks".
         #
@@ -542,14 +598,15 @@ def _copy_tree_named(src: str, dest: str) -> list:
     return copied
 
 
-def _install_files(spec: dict, pkg_path: str = None) -> dict:
+def _install_files(spec: dict, pkg_path: str = None, signature=None) -> dict:
     """Unpack a file-shaped runtime bundle into `dest`. Idempotent.
 
     Nothing goes into the venv: these are native GStreamer plugins loaded by the
-    dynamic linker, and the venv has no say in that. The bundle path takes the
-    same gate as an app package (installer.validate_pkg_path / extract_vetted),
-    so a hostile archive cannot write outside the staging dir; only the vetted
-    payload is then copied into the validated dest.
+    dynamic linker, and the venv has no say in that. The bundle takes the same
+    gate as an app package (release-signature verification + path gate + member
+    vetting, all in _verify_and_extract), so an unsigned/forged archive is
+    refused and a hostile one cannot write outside the staging dir; only the
+    vetted payload is then copied into the validated dest.
     """
     name = spec["name"]
     before = _status_files(spec)
@@ -568,7 +625,7 @@ def _install_files(spec: dict, pkg_path: str = None) -> dict:
 
     work = tempfile.mkdtemp(prefix=".runtime.", dir=paths.ensure_appstage())
     try:
-        installer.extract_vetted(pkg_path, work)
+        _verify_and_extract(pkg_path, signature, work)
         payload = _find_files_payload(work)
         os.makedirs(dest, exist_ok=True)
         copied = _copy_tree_named(payload, dest)

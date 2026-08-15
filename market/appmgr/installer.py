@@ -125,29 +125,42 @@ def extract_vetted(pkg_path: str, dest_dir: str) -> list:
     member names.
     """
     real = _validate_pkg_path(pkg_path)
+    with tarfile.open(real, "r:gz") as tar:
+        return extract_vetted_tar(tar, dest_dir)
+
+
+def extract_vetted_tar(tar: tarfile.TarFile, dest_dir: str) -> list:
+    """Member-vetting extraction from an ALREADY-OPEN TarFile into `dest_dir`.
+
+    Split out of extract_vetted() so a caller that must bind signature
+    verification and extraction to a SINGLE open file descriptor (voiceruntime,
+    TOCTOU C12) can hand us the tar it already opened on that fd, instead of
+    re-opening the package by path after the signature was checked. Path/root/
+    size gating is the caller's responsibility here (the fd was already vetted);
+    the per-member zip-slip/tar-bomb rules still run on every member.
+    """
     names = []
     total = 0
-    with tarfile.open(real, "r:gz") as tar:
-        members = tar.getmembers()
-        if len(members) > paths.MAX_MEMBERS:
-            raise InstallError(f"too many members: {len(members)} > {paths.MAX_MEMBERS}")
-        for m in members:
-            _vet_member(m, dest_dir)
-            total += max(0, m.size)
-            if total > paths.MAX_UNPACKED_BYTES:
-                raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
-            outp = os.path.join(dest_dir, m.name)
-            if m.isdir():
-                os.makedirs(outp, exist_ok=True)
-                continue
-            f = tar.extractfile(m)
-            if f is None:
-                raise InstallError(f"cannot extract member {m.name!r}")
-            os.makedirs(os.path.dirname(outp) or dest_dir, exist_ok=True)
-            with open(outp, "wb") as w:
-                shutil.copyfileobj(f, w)
-            os.chmod(outp, 0o644)
-            names.append(m.name)
+    members = tar.getmembers()
+    if len(members) > paths.MAX_MEMBERS:
+        raise InstallError(f"too many members: {len(members)} > {paths.MAX_MEMBERS}")
+    for m in members:
+        _vet_member(m, dest_dir)
+        total += max(0, m.size)
+        if total > paths.MAX_UNPACKED_BYTES:
+            raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
+        outp = os.path.join(dest_dir, m.name)
+        if m.isdir():
+            os.makedirs(outp, exist_ok=True)
+            continue
+        f = tar.extractfile(m)
+        if f is None:
+            raise InstallError(f"cannot extract member {m.name!r}")
+        os.makedirs(os.path.dirname(outp) or dest_dir, exist_ok=True)
+        with open(outp, "wb") as w:
+            shutil.copyfileobj(f, w)
+        os.chmod(outp, 0o644)
+        names.append(m.name)
     return names
 
 
