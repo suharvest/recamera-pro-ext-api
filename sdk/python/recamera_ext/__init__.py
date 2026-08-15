@@ -40,6 +40,7 @@ from ctypes import (
 
 __all__ = [
     "ResultSink",
+    "ResultTooLarge",
     "Box",
     "Classification",
     "Segmentation",
@@ -414,10 +415,30 @@ class _BorrowIterator(_Handle):
             raise StopIteration  # EOF / server error
 
 
+class ResultTooLarge(ValueError):
+    """A single result message would exceed the datagram wire budget.
+
+    Raised by ResultSink.send_* BEFORE the C call when the estimated packed size
+    exceeds ResultSink.MAX_MESSAGE_BYTES. Each send_* packs exactly one datagram
+    (recamera_ext.h §M1); a datagram past the socket's wire budget is
+    dropped/truncated by the kernel while the C ABI can still report a local
+    success -- so the result would silently never reach rkipc. Failing fast with
+    this explicit error (instead of relying on a silent socket truncation) is the
+    Python-side half of the diagnostic-visibility fix; the server-ACK protocol
+    (rejects for rate-limit / auth / decode) is the firmware-side half, tracked
+    in docs/guide/result-push.md."""
+
+
 class ResultSink(_Handle):
     """Injects detection results into rkipc via /run/recamera/result-in.sock."""
 
     _close_cfn = "rc_ext_result_close"
+
+    # Conservative local wire budget for one send_* datagram. 64 KiB is the
+    # documented per-message datagram limit; the authoritative value is the
+    # server's (a future server-ACK protocol will report it -- 需核实 against the
+    # firmware socket's SO_SNDBUF). Overridable per instance if a build differs.
+    MAX_MESSAGE_BYTES = 64 * 1024
 
     def __init__(self, source_id, lib_path=None):
         self._lib = _load(lib_path)
@@ -427,6 +448,12 @@ class ResultSink(_Handle):
             raise RuntimeError("rc_ext_result_open failed: err=%d" % err.value)
         self.source_id = source_id
         self._labels = []
+        self._masks = []
+        self._pt_arrays = []
+        # Local send counters (best-effort visibility until server-ACK lands).
+        self._sent = 0
+        self._oversize = 0
+        self._send_error = 0
 
     @staticmethod
     def _enc(label):
@@ -443,13 +470,56 @@ class ResultSink(_Handle):
         items = list(items)
         n = len(items)
         arr = (ArrayT * n)()
+        # Reset EVERY keepalive here so the size estimate below counts only this
+        # message's variable-length bytes (labels/masks/point arrays), never
+        # stale ones left over from a prior send of a different task type.
         self._labels = []
+        self._masks = []
+        self._pt_arrays = []
         for i, it in enumerate(items):
             fill_item(i, it, arr)
+        # Local oversize guard, BEFORE the C call: each send_* packs one datagram
+        # (recamera_ext.h §M1); a datagram past the socket's wire budget is
+        # dropped/truncated by the kernel while the C ABI may still return local
+        # success -- the result then silently never reaches rkipc. Reject early
+        # with a clear error rather than emitting into the void.
+        est = self._estimate_size(arr)
+        if est > self.MAX_MESSAGE_BYTES:
+            self._oversize += 1
+            raise ResultTooLarge(
+                "%s: estimated wire size %d bytes for %d item(s) exceeds the "
+                "%d-byte datagram limit; split the results or drop "
+                "mask/keypoint detail" % (name, est, n, self.MAX_MESSAGE_BYTES))
         rc = getattr(self._lib, cfn)(self._h, c_uint64(pts_us), arr, c_size_t(n))
         if rc != 0:
+            self._send_error += 1
             raise RuntimeError("%s failed: rc=%d" % (name, rc))
+        self._sent += 1
         return rc
+
+    def _estimate_size(self, arr):
+        """Conservative estimate of the packed datagram size: the fixed struct
+        array bytes plus the variable-length label/mask/keypoint bytes it points
+        at, plus a small envelope allowance. Protobuf packing is of the same
+        order (varints vs the C floats/ints roughly offset the field tags), so
+        this is an adequate LOCAL guard; the authoritative limit is the
+        server's, surfaced by the future server-ACK protocol."""
+        total = ctypes.sizeof(arr) + 64  # struct payload + envelope/header slack
+        total += sum(len(lb) for lb in self._labels)
+        total += sum(len(m) for m in self._masks)
+        total += sum(ctypes.sizeof(pa) for pa in self._pt_arrays)
+        return total
+
+    def stats(self):
+        """Local send counters (best-effort visibility). `sent` = the C send
+        returned success; `oversize_rejected` = refused locally by the wire-size
+        guard before the C call; `send_error` = the C send returned a negative
+        rc. These are LOCAL only: a `sent` frame the server later drops
+        (rate-limit / auth / decode) is not visible until the server-ACK
+        protocol lands (docs/guide/result-push.md)."""
+        return {"sent": self._sent,
+                "oversize_rejected": self._oversize,
+                "send_error": self._send_error}
 
     def send_detections(self, pts_us, boxes):
         """boxes: iterable of (x1, y1, x2, y2, score, label[, class_id]).

@@ -243,6 +243,17 @@ class ResultSink(ABC):
         """
         pass
 
+    def stats(self) -> dict:
+        """Best-effort send diagnostics for this sink (default: empty).
+
+        Sinks that can count what they published override this so an app (or a
+        health probe) can read cumulative counters -- e.g. OfficialResultSink
+        surfaces the SDK's local `sent`/`oversize_rejected`/`send_error` tallies.
+        Local counters only: a frame accepted locally that the server later
+        drops is not reflected here until the server-ACK protocol lands
+        (docs/guide/result-push.md)."""
+        return {}
+
     def close(self) -> None:  # optional override
         pass
 
@@ -557,6 +568,23 @@ class MultiSink(ResultSink):
                 except Exception:
                     pass
         return total
+
+    def stats(self) -> dict:
+        """Per-child stats keyed by child class name (only children that report
+        anything). Lets an app read delivery diagnostics through the fan-out
+        without knowing which concrete sinks are behind it."""
+        out = {}
+        for s in self.sinks:
+            fn = getattr(s, "stats", None)
+            if not callable(fn):
+                continue
+            try:
+                st = fn()
+            except Exception:
+                continue
+            if st:
+                out[type(s).__name__] = st
+        return out
 
     def close(self) -> None:
         for s in self.sinks:

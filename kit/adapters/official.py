@@ -531,6 +531,14 @@ class OfficialResultSink(ResultSink):
         self.verbose = verbose
         self._sink = None            # recamera_ext.ResultSink (opened lazily)
         self._err_count = 0
+        # Local diagnostics (surfaced via stats()): frames handed to emit(),
+        # per-channel SDK send attempts, and how many of those raised. The SDK
+        # ResultSink keeps the authoritative wire counters (sent / oversize /
+        # send_error); stats() merges both so an app can see delivery health.
+        self._frames = 0
+        self._send_calls = 0
+        self._send_fail = 0
+        self._oversize = 0
         self._fw = None              # current frame width  (px) for normalization
         self._fh = None              # current frame height (px) for normalization
         # No connection at construction (cheap + side-effect free); the socket is
@@ -670,6 +678,7 @@ class OfficialResultSink(ResultSink):
     def emit(self, payload: dict, pts: float) -> None:
         if not self._ensure_open():
             return
+        self._frames += 1
         if not self._fw or not self._fh:
             # Coordinates are pixels; without the frame size we cannot normalize,
             # and sending pixels would render as invisible 1px boxes. Skip + warn
@@ -737,11 +746,36 @@ class OfficialResultSink(ResultSink):
 
     def _safe_send(self, method: str, pts_us: int, items) -> None:
         """Call one SDK send_* method, swallowing errors so a transient sink
-        problem never takes the inference loop down (warns on the first few)."""
+        problem never takes the inference loop down (warns on the first few).
+        An oversize rejection is a distinct, actionable failure -- count it
+        separately so stats() can flag "results are being dropped for being too
+        big" rather than hiding it in a generic error tally."""
+        self._send_calls += 1
         try:
             getattr(self._sink, method)(pts_us, items)
         except Exception as e:
+            self._send_fail += 1
+            if type(e).__name__ == "ResultTooLarge":
+                self._oversize += 1
             self._warn_once("%s failed: %s" % (method, e))
+
+    def stats(self) -> dict:
+        """Delivery diagnostics: this adapter's local tallies (frames handed in,
+        SDK send attempts, failures, oversize rejections) merged with the SDK
+        ResultSink's authoritative wire counters under `wire`. Local only --
+        a frame accepted by the socket that the server later drops is not
+        reflected until the server-ACK protocol lands (docs/guide/result-push.md)."""
+        st = {"frames": self._frames,
+              "send_calls": self._send_calls,
+              "send_fail": self._send_fail,
+              "oversize_rejected": self._oversize}
+        wire = getattr(self._sink, "stats", None)
+        if callable(wire):
+            try:
+                st["wire"] = self._sink.stats()
+            except Exception:
+                pass
+        return st
 
     def emit_meta(self, payload: dict) -> None:
         # Metrics/telemetry are debug-panel only; the official OSD path (and ABI

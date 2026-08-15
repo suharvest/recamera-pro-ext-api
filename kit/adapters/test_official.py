@@ -437,3 +437,25 @@ if __name__ == "__main__":
     test_result_sink_maps_tracking()
     test_registry_selects_official()
     print("ALL OFFICIAL ADAPTER TESTS PASSED")
+
+
+def test_official_result_sink_stats_surface():
+    """OfficialResultSink.stats() exposes local delivery tallies (frames handed
+    in, SDK send attempts) so an app can read result-delivery health. With the
+    fake SDK sink (no stats()) there is no `wire` sub-dict; with a real SDK sink
+    it would carry sent/oversize_rejected/send_error."""
+    _install_fake_ext()
+    _FakeExtResultSink.calls = []
+    from kit.adapters.official import OfficialResultSink
+
+    sink = OfficialResultSink(app_id="yolo-detector", verbose=False)
+    sink.set_frame_size(_FW, _FH)
+    sink.emit({"results": [{"box": [10.0, 20.0, 110.0, 220.0], "cls": 0,
+                            "cls_name": "person", "score": 0.9}]}, pts=1.0)
+    sink.emit({"results": []}, pts=2.0)   # empty -> still one send_detections
+    st = sink.stats()
+    assert st["frames"] == 2, st
+    assert st["send_calls"] == 2, st      # one send per emit
+    assert st["send_fail"] == 0 and st["oversize_rejected"] == 0, st
+    assert "wire" not in st               # fake SDK sink has no stats()
+    sink.close()

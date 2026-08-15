@@ -335,3 +335,49 @@ def test_select_probe_exported_from_package():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([os.path.abspath(__file__), "-q"]))
+
+
+# ===========================================================================
+# Diagnostic visibility (DX P0): local oversize guard + send stats.
+#   Each send_* packs ONE datagram (recamera_ext.h §M1); an oversized datagram
+#   is silently dropped/truncated by the kernel while the C ABI can still report
+#   success. The wrapper rejects oversize BEFORE the C call and tallies outcomes.
+# ===========================================================================
+def test_oversize_detections_rejected_before_c_call():
+    sdk, sink, fake = _sink_with_fake_lib()
+    # sizeof(Box) is 40 B; thousands of boxes + labels blow past the 64 KiB
+    # datagram budget. The guard must reject BEFORE the C send.
+    big = [(0.1, 0.1, 0.2, 0.2, 0.9, "person", 0)] * 6000
+    with pytest.raises(sdk.ResultTooLarge):
+        sink.send_detections(pts_us=0, boxes=big)
+    assert fake.sent == []                       # C send was never called
+    assert sink.stats() == {"sent": 0, "oversize_rejected": 1, "send_error": 0}
+
+
+def test_stats_counts_successful_sends():
+    _sdk, sink, fake = _sink_with_fake_lib()
+    sink.send_detections(pts_us=0, boxes=[(0.1, 0.1, 0.2, 0.2, 0.9, "a", 0)])
+    sink.send_classification(pts_us=0, items=[(0.8, 1, "cat")])
+    assert sink.stats() == {"sent": 2, "oversize_rejected": 0, "send_error": 0}
+
+
+def test_stats_counts_send_error():
+    """A negative rc from the C send raises AND is tallied as send_error."""
+    sdk = _load_real_sdk()
+    fake = _FakeLib()
+    fake.rc_ext_result_send_detections = lambda h, pts_us, arr, n: -5
+    sdk._load = lambda *a, **k: fake
+    sink = sdk.ResultSink(source_id="t")
+    with pytest.raises(RuntimeError):
+        sink.send_detections(pts_us=0, boxes=[(0.1, 0.1, 0.2, 0.2, 0.9, "a", 0)])
+    st = sink.stats()
+    assert st["send_error"] == 1 and st["sent"] == 0 and st["oversize_rejected"] == 0
+
+
+def test_reverse_payload_under_limit_is_sent():
+    """Reverse control: a payload comfortably under the budget is NOT rejected."""
+    _sdk, sink, fake = _sink_with_fake_lib()
+    sink.send_detections(pts_us=0,
+                         boxes=[(0.1, 0.1, 0.2, 0.2, 0.9, "p", 0)] * 100)
+    assert len(fake.sent) == 1
+    assert sink.stats() == {"sent": 1, "oversize_rejected": 0, "send_error": 0}
