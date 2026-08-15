@@ -87,7 +87,13 @@ DEFAULT_MODELS_DIR = os.path.normpath(os.path.join(_HERE, "..", "packaging", "mo
 # the kit package (INSTALL_ASSETS_SPEC §3). Keyed by CAPABILITY, because that is
 # what the store has in hand -- it reads `capabilities: ["audio"]` off the app.
 DEFAULT_RUNTIMES_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "release", "dist"))
-RUNTIME_BUNDLES = {"audio": "voice-runtime-*.tar.gz"}
+RUNTIME_BUNDLES = {
+    "audio": "voice-runtime-*.tar.gz",       # release/build-voice-runtime.sh
+    # release/build-gst-hwcodec.sh -- 3 .so (~0.4 MB) + the env vars appmgr
+    # injects. Same channel as the audio bundle, different shape: it unpacks to
+    # /userdata/lib instead of pip-installing into the venv (RUNTIME_BUNDLE_SPEC).
+    "hwcodec": "gst-hwcodec-*.tar.gz",
+}
 
 
 def _sha256_and_size(path: str) -> tuple[str, int]:
