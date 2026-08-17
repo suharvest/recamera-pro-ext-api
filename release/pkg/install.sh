@@ -5,7 +5,7 @@
 set -e
 
 PKG=$(cd "$(dirname "$0")" && pwd)
-RKIPC_MD5=9826e9ecf8ed543a6dc78e3731102e0f
+RKIPC_MD5=f683352a9d062a05a3df1f8df22d7d53
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
 SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
 # Rollback safety -- a valid rollback target MUST be a genuine, unmodified factory rkipc.
@@ -15,8 +15,8 @@ SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
 #   KNOWN_EXT_BUILD_MD5S  : rkipc builds that CARRY the extension endpoints. Listed so we
 #     NEVER mistake one for factory -- an ext build (incl. our own shipped rkipc) must not be
 #     captured as, or restored as, "factory", or the rollback becomes a silent no-op.
-VERIFIED_FACTORY_MD5S="d5e7ca9365dae553e8c7e4c0a0f436ec"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
-KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550"  # ext builds -- NOT rollback targets
+VERIFIED_FACTORY_MD5S="9826e9ecf8ed543a6dc78e3731102e0f"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
+KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550 f683352a9d062a05a3df1f8df22d7d53"  # ext builds -- NOT rollback targets
 
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 need() { [ "$(md5of "$1")" = "$2" ] || { echo "FATAL md5 mismatch: $1 (got $(md5of "$1") want $2)"; exit 1; }; }

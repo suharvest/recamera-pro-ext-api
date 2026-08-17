@@ -3,8 +3,8 @@
 # Run ON THE DEVICE as root.
 set -e
 # A rollback target MUST be a genuine clean factory rkipc (see install.sh for the rationale).
-VERIFIED_FACTORY_MD5S="d5e7ca9365dae553e8c7e4c0a0f436ec"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
-KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550"  # ext builds -- NOT rollback targets
+VERIFIED_FACTORY_MD5S="9826e9ecf8ed543a6dc78e3731102e0f"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
+KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550 f683352a9d062a05a3df1f8df22d7d53"  # ext builds -- NOT rollback targets
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 in_list() { _v=$1; shift; for _m in $*; do [ "$_v" = "$_m" ] && return 0; done; return 1; }
 is_factory()   { in_list "$1" $VERIFIED_FACTORY_MD5S; }

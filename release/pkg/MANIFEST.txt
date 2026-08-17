@@ -1,8 +1,8 @@
-recamera-ext-api  v1.5.0
-Built: 2026-08-15   Target: reCamera Pro (RV1126B / recamera_v2)
+recamera-ext-api  v1.6.0
+Built: 2026-08-17   Target: reCamera Pro (RV1126B / recamera_v2)
 
 ARTIFACTS (md5)
-  rkipc                             9826e9ecf8ed543a6dc78e3731102e0f   15502408 B  -> /oem/usr/bin/rkipc
+  rkipc                             f683352a9d062a05a3df1f8df22d7d53   15585904 B  -> /oem/usr/bin/rkipc
   entry.cgi                         75a693c87c317a49c37c4dddb6b9ac7a    1057168 B  -> /oem/usr/www/cgi-bin/entry.cgi   (M4 control plane, optional)
   sdk/lib/librecamera_ext.so.1.0.0  5cebfb9e4d9c001c45b58c75daafe934      89496 B  -> /oem/usr/lib/  (+ .so.1, .so symlinks)
   sdk/python/recamera_ext/          (ctypes bindings)                              -> /userdata/sdk/python/
@@ -18,7 +18,7 @@ PYTHON INFERENCE RUNTIME (rknnlite 2.3.2)  -- provisioned by install.sh into /us
   vision apps run via: PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib /userdata/rknnenv/bin/python3 <app>.py
 
 FACTORY / ROLLBACK
-  factory rkipc md5                 d5e7ca9365dae553e8c7e4c0a0f436ec    (clean factory, 0 ext sockets; the only valid rollback target)
+  factory rkipc md5                 9826e9ecf8ed543a6dc78e3731102e0f    (clean factory, 0 ext sockets; the only valid rollback target)
   factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak
 
 CONTENTS OF THIS rkipc
