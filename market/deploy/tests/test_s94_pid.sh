@@ -7,17 +7,20 @@
 # REUSED. `is_running` only did `kill -0`, which cannot tell any of that apart:
 # `restart` became a silent no-op and `stop` aimed SIGKILL at a bystander.
 #
-# Needs a real /proc, so it runs in a Linux container, not on the Mac:
-#   docker cp market/deploy/S94appmgr <c>:/tmp/S94appmgr
-#   docker cp market/deploy/tests/test_s94_pid.sh <c>:/tmp/
-#   docker exec <c> sh /tmp/test_s94_pid.sh
+# Needs a real /proc, so it runs in a Linux container, not on the Mac. Use a
+# glibc image (dash): busybox refuses to run under the python3 argv[0] alias the
+# fake below relies on ("applet not found").
+#   docker run --rm -v $PWD/S94appmgr:/tmp/S94appmgr:ro \
+#     -v $PWD/tests/test_s94_pid.sh:/tmp/test_s94_pid.sh:ro \
+#     debian:bookworm-slim sh /tmp/test_s94_pid.sh
 #
 # Case D carries a reverse control (R): it asserts the OLD logic really does
 # accept the bystander. Without that, D would pass even if it proved nothing.
 #
-# A fake "appmgr" is any process whose /proc/<pid>/cmdline contains
-# "-m appmgr serve".  `sh -c 'sleep 300' -m appmgr serve` gives exactly that:
-# the trailing words land in argv as $0/$1/$2 and show up in cmdline.
+# A fake "appmgr" is any process whose argv[0] looks like python and whose
+# /proc/<pid>/cmdline contains "-m appmgr serve".  A /tmp/python3 -> sh symlink
+# run as `/tmp/python3 -c 'sleep 300' -m appmgr serve` gives exactly that: the
+# trailing words land in argv as $0/$1/$2 and show up in cmdline.
 
 SCRIPT=${SCRIPT:-/tmp/S94appmgr}
 PIDFILE=/var/run/appmgr.pid
@@ -30,7 +33,10 @@ ck() { # ck <name> <expected> <actual>
 sed -n '/^MODULE_SIG=/,/^is_running() {/p' "$SCRIPT" | sed '$d' > /tmp/fns.sh
 . /tmp/fns.sh
 
-sh -c 'sleep 300' -m appmgr serve &
+# is_appmgr_pid also requires argv[0] to look like a python interpreter (so the
+# shell running a restart, whose cmdline quotes the same words, is never hit).
+ln -sf /bin/sh /tmp/python3
+/tmp/python3 -c 'sleep 300' -m appmgr serve &
 FAKE=$!
 sleep 0.3
 sh -c 'sleep 300' &

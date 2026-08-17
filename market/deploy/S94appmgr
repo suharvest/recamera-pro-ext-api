@@ -18,6 +18,11 @@ PYTHON=/usr/bin/python3
 
 NGINX_MASTER=/userdata/local/appcenter/ext_appmgr.conf
 NGINX_LIVE=/oem/usr/etc/nginx/ext_appmgr.conf
+# The stock nginx binary is built with conf-path=/etc/nginx/nginx.conf, which
+# does not exist on the device; the master is started with an explicit -c.
+# Every nginx invocation here must carry the same -c or `nginx -t` fails and
+# the re-inject below rolls itself back every boot.
+NGINX_CONF=/oem/usr/etc/nginx/nginx.conf
 
 # OTA-surviving master copy of THIS launcher. /etc (the live copy) is on the
 # rootfs and is wiped by an A/B OTA; /userdata survives. RkLunch's restore chain
@@ -50,8 +55,8 @@ reinject_nginx() {
     # Restore the edge conf if OTA (or anything) wiped /oem, then reload if valid.
     if [ -f "$NGINX_MASTER" ] && [ ! -f "$NGINX_LIVE" ]; then
         cp "$NGINX_MASTER" "$NGINX_LIVE" 2>/dev/null || return 0
-        if nginx -t >/dev/null 2>&1; then
-            nginx -s reload >/dev/null 2>&1
+        if nginx -c "$NGINX_CONF" -t >/dev/null 2>&1; then
+            nginx -c "$NGINX_CONF" -s reload >/dev/null 2>&1
             echo "[S94appmgr] re-injected + reloaded nginx ext_appmgr.conf"
         else
             # bad config -> never leave a broken edge; roll back.
@@ -82,6 +87,11 @@ is_appmgr_pid() {
     # the SHELL before tr ever runs, so the inner redirect misses it and every
     # scan of a since-exited pid spams the console.
     cmd=$({ tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null) || return 1
+    # Anchor on the interpreter: the serve process is `<python> -m appmgr serve`.
+    # A bare substring match also hits the shell that is running a restart
+    # (its cmdline quotes the same words), and `stop` would kill its caller --
+    # deploy-app.sh / the desktop App both restart appmgr from such a shell.
+    case "${cmd%% *}" in *python*) ;; *) return 1 ;; esac
     case "$cmd" in *"$MODULE_SIG"*) return 0 ;; *) return 1 ;; esac
 }
 
@@ -96,6 +106,7 @@ resolve_pid() {
     fi
     for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
         [ "$pid" = "$$" ] && continue
+        [ "$pid" = "$PPID" ] && continue
         if is_appmgr_pid "$pid"; then
             echo "$pid"
             return 0
