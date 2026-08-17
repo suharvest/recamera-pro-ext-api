@@ -60,30 +60,63 @@ class BuiltinError(Exception):
 # --------------------------------------------------------------------------- #
 # low-level HTTP to entry.cgi (localhost, no JWT)
 # --------------------------------------------------------------------------- #
+def _do_http(tls: bool, host: str, port: int, method: str, target: str,
+             body: Optional[bytes], headers: dict):
+    """One raw request; returns (status, body_bytes, Location-or-None)."""
+    if tls:
+        ctx = ssl._create_unverified_context()   # self-signed loopback cert
+        conn = http.client.HTTPSConnection(host, port, timeout=_TIMEOUT, context=ctx)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=_TIMEOUT)
+    try:
+        conn.request(method, target, body=body, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read()
+        return resp.status, raw, resp.getheader("Location")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _parse_loopback_redirect(location: str, fallback_target: str):
+    """Map a nginx redirect Location to (tls, port, path?query) on loopback.
+
+    Only scheme/port/path are honoured; the host is always 127.0.0.1 because
+    entry.cgi is trusted (no JWT) only from localhost.
+    """
+    from urllib.parse import urlsplit
+    u = urlsplit(location)
+    tls = (u.scheme or "https") == "https"
+    port = u.port or (443 if tls else 80)
+    target = (u.path or fallback_target) + (("?" + u.query) if u.query else "")
+    return tls, port, target
+
+
 def _request(method: str, path: str, body: Optional[bytes] = None) -> dict:
     """One HTTP request to entry.cgi -> parsed JSON dict.
 
     Raises BuiltinError on transport failure, non-2xx, non-JSON, or a JSON
     envelope with a non-zero `code`.
     """
-    ctx = ssl._create_unverified_context()   # self-signed loopback cert
-    conn = http.client.HTTPSConnection(_HOST, _PORT, timeout=_TIMEOUT, context=ctx)
     headers = {"Host": "localhost", "Connection": "close"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     try:
-        conn.request(method, _CGI_BASE + path, body=body, headers=headers)
-        resp = conn.getresponse()
-        raw = resp.read()
-        status = resp.status
+        status, raw, location = _do_http(True, _HOST, _PORT, method,
+                                         _CGI_BASE + path, body, headers)
+        # The firmware's HTTPS toggle (entry.cgi /system/secure, sEnable=false)
+        # makes nginx answer 443 with `307 http://$host$request_uri` and serve
+        # entry.cgi on plain :80 instead. http.client never follows redirects,
+        # so follow exactly one hop here (loopback only, so scheme is moot).
+        if status in (301, 302, 307, 308) and location:
+            tls, port, target = _parse_loopback_redirect(location, _CGI_BASE + path)
+            status, raw, _ = _do_http(tls, _HOST, port, method, target,
+                                      body, headers)
     except OSError as e:
         raise BuiltinError("entry.cgi %s %s -> transport error: %s"
                            % (method, path, e))
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
     if not (200 <= status < 300):
         raise BuiltinError("entry.cgi %s %s -> HTTP %d: %s"

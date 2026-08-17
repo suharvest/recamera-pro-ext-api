@@ -41,6 +41,21 @@ from .official import ControlPlane
 
 # entry.cgi is mounted under this nginx location; PATH_INFO is appended.
 CGI_BASE = "/cgi-bin/entry.cgi"
+
+
+def _parse_loopback_redirect(location: str, fallback_target: str):
+    """Map a nginx redirect Location to (tls, port, path?query) on loopback.
+
+    Only scheme/port/path are honoured; the host stays self.host (127.0.0.1)
+    because entry.cgi skips JWT only for localhost callers.
+    """
+    from urllib.parse import urlsplit
+    u = urlsplit(location)
+    tls = (u.scheme or "https") == "https"
+    port = u.port or (443 if tls else 80)
+    target = (u.path or fallback_target) + (("?" + u.query) if u.query else "")
+    return tls, port, target
+
 INFERENCE_PATH = "/model/inference"
 
 
@@ -68,6 +83,25 @@ class CgiControl(ControlPlane):
         self.verbose = verbose
 
     # -- low-level HTTP to entry.cgi (localhost, no JWT) -------------------- #
+    def _do_http(self, tls: bool, port: int, method: str, target: str,
+                 body: Optional[bytes], headers: dict):
+        """One raw request; returns (status, body_bytes, Location-or-None)."""
+        if tls:
+            # Cert is self-signed and this is a loopback request; skip verify.
+            ctx = ssl._create_unverified_context()
+            conn = http.client.HTTPSConnection(self.host, port,
+                                               timeout=self.timeout,
+                                               context=ctx)
+        else:
+            conn = http.client.HTTPConnection(self.host, port,
+                                              timeout=self.timeout)
+        try:
+            conn.request(method, target, body=body, headers=headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read(), resp.getheader("Location")
+        finally:
+            conn.close()
+
     def _request(self, method: str, path: str,
                  body: Optional[bytes] = None) -> dict:
         """Send one HTTP request to entry.cgi and return the parsed JSON dict.
@@ -75,25 +109,18 @@ class CgiControl(ControlPlane):
         Raises RuntimeError on transport failure, non-2xx status, or a JSON
         envelope whose `code` is present and non-zero.
         """
-        if self.use_tls:
-            # Cert is self-signed and this is a loopback request; skip verify.
-            ctx = ssl._create_unverified_context()
-            conn = http.client.HTTPSConnection(self.host, self.port,
-                                               timeout=self.timeout,
-                                               context=ctx)
-        else:
-            conn = http.client.HTTPConnection(self.host, self.port,
-                                               timeout=self.timeout)
         headers = {"Host": "localhost", "Connection": "close"}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        try:
-            conn.request(method, CGI_BASE + path, body=body, headers=headers)
-            resp = conn.getresponse()
-            raw = resp.read()
-            status = resp.status
-        finally:
-            conn.close()
+        status, raw, location = self._do_http(self.use_tls, self.port, method,
+                                              CGI_BASE + path, body, headers)
+        # Firmware HTTPS toggle (entry.cgi /system/secure sEnable=false): nginx
+        # then answers 443 with `307 http://$host$request_uri` and serves
+        # entry.cgi on plain :80 (and vice versa when enabled: 80 -> 307 https).
+        # http.client never follows redirects, so follow exactly one hop.
+        if status in (301, 302, 307, 308) and location:
+            tls, port, target = _parse_loopback_redirect(location, CGI_BASE + path)
+            status, raw, _ = self._do_http(tls, port, method, target, body, headers)
 
         if not (200 <= status < 300):
             raise RuntimeError(
