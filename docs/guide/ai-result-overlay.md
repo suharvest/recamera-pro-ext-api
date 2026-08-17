@@ -78,7 +78,7 @@ curl -k -X POST https://127.0.0.1/cgi-bin/entry.cgi/model/inference \
   -H 'Content-Type: application/json' -d '{"iEnable":0}'   # 0=关内建, 1=开
 ```
 
-- **走 HTTPS 443**，不要打 80（80→307 跳 443，POST body 会丢，见 control-api.md §1.3 踩坑）。
+- **走 HTTPS 443**，不要打 80（80→307 跳 443；固件 HTTPS 关闭时反过来 443→307 http，kit/appmgr 的 entry.cgi 客户端已跟随一跳，见 control-api.md §1.3）。
 - 关掉内建推理后，RTSP 主码流里**无任何检测框**——已抓帧铁证：软件叠加（:8124 canvas）不进码流，码流里的框只可能来自内建 OSD。这条区分了"软件叠加"与"内建 OSD 烧流"两条路。
 
 ## 5. 与其他结果通路的关系

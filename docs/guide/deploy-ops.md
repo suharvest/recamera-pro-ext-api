@@ -241,7 +241,7 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 > 本轮把内建推理收敛成一等 app + 配置热更 + 结果软件叠加落地。API 语义见 [inference-as-app.md](./inference-as-app.md) 与 [ai-result-overlay.md](./ai-result-overlay.md)，此处只记部署/运维要点。
 
-**内建检测开关（entry.cgi）**：`POST https://127.0.0.1/cgi-bin/entry.cgi/model/inference {"iEnable":0|1}`——localhost 免 JWT，**走 443 不走 80**（80→307 丢 body）。appmgr 的 `builtin.py` driver 内部就是调它 + `/model/info`（换模型时要与一次 `/model/inference` POST 配对才触发重载，`builtin.py:22-25`）。关内建后 RTSP 码流无框（软件叠加不进码流）。
+**内建检测开关（entry.cgi）**：`POST https://127.0.0.1/cgi-bin/entry.cgi/model/inference {"iEnable":0|1}`——localhost 免 JWT，**走 443 不走 80**（80→307；固件 HTTPS 关闭时 443→307 http，`builtin.py`/`cgi_control.py` 跟随一跳，见 control-api.md §1.3）。appmgr 的 `builtin.py` driver 内部就是调它 + `/model/info`（换模型时要与一次 `/model/inference` POST 配对才触发重载，`builtin.py:22-25`）。关内建后 RTSP 码流无框（软件叠加不进码流）。
 
 **appmgr activate / config API**（loopback `127.0.0.1:8130`，nginx `/api/appMgr/` JWT 门）：
 
