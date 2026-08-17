@@ -94,6 +94,15 @@ def _parse_loopback_redirect(location: str, fallback_target: str):
     return tls, port, target
 
 
+# Endpoint actually serving entry.cgi, learned at runtime: (tls, port).
+# Starts at HTTPS 443 (firmware default). The firmware's HTTPS toggle
+# (entry.cgi /system/secure, sEnable=false) makes nginx answer 443 with
+# `307 http://$host$request_uri` and serve entry.cgi on plain :80 (and the
+# reverse when re-enabled: 80 -> 307 https). We follow one hop and remember
+# where we landed so subsequent calls go straight there.
+_endpoint = [True, _PORT]
+
+
 def _request(method: str, path: str, body: Optional[bytes] = None) -> dict:
     """One HTTP request to entry.cgi -> parsed JSON dict.
 
@@ -103,18 +112,29 @@ def _request(method: str, path: str, body: Optional[bytes] = None) -> dict:
     headers = {"Host": "localhost", "Connection": "close"}
     if body is not None:
         headers["Content-Type"] = "application/json"
+    target = _CGI_BASE + path
+    tls, port = _endpoint
     try:
-        status, raw, location = _do_http(True, _HOST, _PORT, method,
-                                         _CGI_BASE + path, body, headers)
-        # The firmware's HTTPS toggle (entry.cgi /system/secure, sEnable=false)
-        # makes nginx answer 443 with `307 http://$host$request_uri` and serve
-        # entry.cgi on plain :80 instead. http.client never follows redirects,
-        # so follow exactly one hop here (loopback only, so scheme is moot).
+        try:
+            status, raw, location = _do_http(tls, _HOST, port, method, target,
+                                             body, headers)
+        except (OSError, ssl.SSLError) as e:
+            # TLS side unreachable (cert missing / 443 not listening / handshake
+            # failure): fall back to plain :80 once, otherwise re-raise.
+            if not tls:
+                raise
+            status, raw, location = _do_http(False, _HOST, 80, method, target,
+                                             body, headers)
+            tls, port = False, 80
+        # http.client never follows redirects; follow exactly one hop (loopback
+        # only, so the scheme carries no trust semantics).
         if status in (301, 302, 307, 308) and location:
-            tls, port, target = _parse_loopback_redirect(location, _CGI_BASE + path)
+            tls, port, target = _parse_loopback_redirect(location, target)
             status, raw, _ = _do_http(tls, _HOST, port, method, target,
                                       body, headers)
-    except OSError as e:
+        if 200 <= status < 300:
+            _endpoint[0], _endpoint[1] = tls, port
+    except (OSError, ssl.SSLError) as e:
         raise BuiltinError("entry.cgi %s %s -> transport error: %s"
                            % (method, path, e))
 

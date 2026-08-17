@@ -112,15 +112,29 @@ class CgiControl(ControlPlane):
         headers = {"Host": "localhost", "Connection": "close"}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        status, raw, location = self._do_http(self.use_tls, self.port, method,
-                                              CGI_BASE + path, body, headers)
+        target = CGI_BASE + path
+        tls, port = self.use_tls, self.port
+        try:
+            status, raw, location = self._do_http(tls, port, method, target,
+                                                  body, headers)
+        except (OSError, ssl.SSLError):
+            # TLS side unreachable (cert missing / 443 not listening / handshake
+            # failure): fall back to plain :80 once, otherwise re-raise.
+            if not tls:
+                raise
+            status, raw, location = self._do_http(False, 80, method, target,
+                                                  body, headers)
+            tls, port = False, 80
         # Firmware HTTPS toggle (entry.cgi /system/secure sEnable=false): nginx
         # then answers 443 with `307 http://$host$request_uri` and serves
         # entry.cgi on plain :80 (and vice versa when enabled: 80 -> 307 https).
-        # http.client never follows redirects, so follow exactly one hop.
+        # http.client never follows redirects, so follow exactly one hop and
+        # remember where we landed so later calls go straight there.
         if status in (301, 302, 307, 308) and location:
-            tls, port, target = _parse_loopback_redirect(location, CGI_BASE + path)
+            tls, port, target = _parse_loopback_redirect(location, target)
             status, raw, _ = self._do_http(tls, port, method, target, body, headers)
+        if 200 <= status < 300:
+            self.use_tls, self.port = tls, port
 
         if not (200 <= status < 300):
             raise RuntimeError(
