@@ -42,3 +42,14 @@ dist/
 
 # SDK 构建产物(源在 sdk/,build 是编出来的)
 sdk/**/build/
+
+# release 二进制(固件/前端/wheels/tar)走 CDN 分发,不进 git;
+# 版本目录只保留 README(发布说明 + md5 校验表)入库,沿用 v1.4/v1.5 惯例。
+# 交接给同事的源码 bundle 与本地中转/暂存产物同样不进 git。
+# 注意:.gitignore 不支持行内注释,注释必须独占一行。
+release/handoff-*/
+release/staging-*/
+release/verify-*/
+release/**/*.tar
+release/**/*.tar.gz
+release/**/*.bundle
