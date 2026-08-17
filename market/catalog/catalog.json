@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-15T00:58:38Z",
+  "generated": "2026-08-17T02:29:23Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -21,9 +21,9 @@
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-analysis-0.1.0-arm64.tar.gz",
         "filename": "face-analysis-0.1.0-arm64.tar.gz",
-        "sha256": "c748d9ca58b9377f7048c464405ba2192aa4a40ab157ac0587524649bb76a8d3",
-        "size": 52838389,
-        "signature": "MEUCIQCfenXrWT5BBSlQgHV2jZ8bKNmoJRJJJLVvIf08Y+rfCQIgAIxyNG3f0aTQPs6VdOn0Yt0ooFSo0bQLLG9JTlREC/s=",
+        "sha256": "afbdef12fe2a9d64e86bcb6b13e59470d5470db5c7c2c54d855d80d4a978bbad",
+        "size": 52838757,
+        "signature": "MEYCIQC585kHqmkBvxHdzD3UKHkn37aVGMH9TSzHwlF1JCaOOwIhAK5kN9rdb3e0cy2KBsgSk0gutkCwm/yoDYTIKdYfyvnn",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -48,7 +48,7 @@
         "filename": "facemesh-reader-0.1.0-arm64.tar.gz",
         "sha256": "249e6a0fc9ff470ac58e761f34fcddba03b0b3e6deefebcf56e323412f28e2b8",
         "size": 6843123,
-        "signature": "MEQCIHpP9VHyAGqQ8s+yg6SxYBeRoaB9+avHn3IYPLT6eP/PAiAvpxY7bwlcSrxJklLR6Qm9SwuaxBv6QkmKpRCGIzZgUg==",
+        "signature": "MEQCIHqqmhR6jCXOAMqsLmutU7ShIds1KL9F7vi6oGUDGL8vAiACIfQA/8onduEFjT3GD5QtQ9KAvRE/LSI5rPF4jdYcoA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -71,9 +71,9 @@
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fall-detection-0.2.0-arm64.tar.gz",
         "filename": "fall-detection-0.2.0-arm64.tar.gz",
-        "sha256": "67773daf4d2079d28700fe12005be8654a3de010def3400b28a7ea333d0c69f9",
-        "size": 3053510,
-        "signature": "MEUCIQCFCWsxZv/kbv6GHGQubMf5Qty714K0eJOghDsUOK9JJQIgKRoKHYeS0pvkvHM+zhU1hRtTo2K2tuOrWAiKGn+DsA4=",
+        "sha256": "6ed5eafc2835c506f4bda9d125ee1f14cef1a1c698808ca125c733a03638ba72",
+        "size": 3053542,
+        "signature": "MEUCIQCSjzNgCi/sXe0VKCIxMQ7KcUHHxjA0EvO4IIrOH5YJCgIgDflgyyBRtFfPzdhAu/1gzoEDvFGyBLmfhEg9H3os4qw=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -98,7 +98,7 @@
         "filename": "fitness-trainer-0.1.0-arm64.tar.gz",
         "sha256": "0bbcbe7707f70f49f520beb6dc6755b7fe462511529b2e04617f942a886745a2",
         "size": 2867151,
-        "signature": "MEUCIQCj0TaNNJjyWDkXMa/uMWSOj8+N1kIg3MU4Z0A9j3rvxwIgSGAoOQlsu8Rtgunp40ZyWVBoXfsSndTOQh/fY33Prx8=",
+        "signature": "MEYCIQCHDcu4PO04Ngo2q4PGq36NxSpU9eS4wN3Ipj5aGEvvlgIhAJmVHAu2dDOpSYLqqxrM+9Xswv1am6uXkwbN24sm9ZYV",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -123,7 +123,7 @@
         "filename": "ppocr-reader-0.1.0-arm64.tar.gz",
         "sha256": "8ea129949f8efa5e435e054e70fd632b407ba9a190637e21ada4881ace755ca6",
         "size": 5194719,
-        "signature": "MEUCIBnHR3GKz8KIMIJFK9x967IHaariAxdTvPHlmO8yYZmQAiEA6JJFuwMq3QRm0XOBZKTOWZl1iRgwhHJW7F3ODgMgkTg=",
+        "signature": "MEYCIQDyYg29uQingdu9n8dn8+TswIBzEgnYBq+WUOJSImqAFgIhANz8tNeHn713Mob7kzHG3NqsWzXz8MLHV+hqBydNi8rZ",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -144,7 +144,7 @@
         "filename": "qrcode-reader-0.1.0-arm64.tar.gz",
         "sha256": "b791b79dd5ef372e6ae260748945c8ca9c90bfff07674b1720e3765e2e7cf641",
         "size": 922415,
-        "signature": "MEUCIEF8Wh2lUe7A/x9ol4HESPf+bwhozpagPSPlD5cJv8FeAiEA+sWd9/m3av/N5vk6vx8sTOYxBM2TaCfjoRXXUXZwtf8=",
+        "signature": "MEUCIQCCOX1CaWRKzPssK/FDTLpokDa1TgKPDEtCEOUnnB5CMAIgMIpxuO8d86rclUNvN+9sSnuzHW2sztlvLV1LgpAfiHo=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -169,7 +169,7 @@
         "filename": "retail-vision-0.1.0-arm64.tar.gz",
         "sha256": "9c5efc040dc46a506effbf1aa5cd6c9e56853c136eff3a5113fa7a9955080f82",
         "size": 3023387,
-        "signature": "MEUCIHTu+FMfiijcllLfNHi9VLiRSwoqdnYbHztWwlGpZK3bAiEAtS85Rf5hnKm+SFMCjipPUJErtmp53iDrHAW3PWQZKqk=",
+        "signature": "MEUCIQDxnEa5j5QQdbIIdAl26hT2tOfC7StgINcP3GL9tfVLDAIgTaFZzzZfQJaP7cZR/P9dvsTyHs/F43MhSmHtVsvI1GM=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -195,7 +195,7 @@
         "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
         "sha256": "abe531f2baa22680e660791051168bc7e2326c01d720703ce6389b3f9f88c914",
         "size": 8158,
-        "signature": "MEUCIApz4Tc/vgif56+35QKhPV2+CbrqLYf0RW/eggaP9ygNAiEAySCqhEEG2WKbZMexc5OlrRyLIj54JlLSnpQfx5TfcsI=",
+        "signature": "MEUCIQD07ci3HJ7VuAFmYoGQZIK2ebUURoGcGTJKOn82eSRIpAIgWoo1AotUEiDg1wi/iVUeJ22AQrhMf44o/eN3SxUF2Cs=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -287,7 +287,7 @@
         "filename": "yolo-detector-0.1.0-arm64.tar.gz",
         "sha256": "8b78f8abac329f633b125d23ab1bf30400a63b77ccb2823c352ed2ec2ff9b809",
         "size": 3018913,
-        "signature": "MEQCIA2o7gwi6u3LQtOXGr11Bf64OwqnTEZ1ndF/+DLb09hUAiA74sAl2Skl+Pos4UbTOILMjimRiLZC2rI658Z5vV72wA==",
+        "signature": "MEQCIDRws1QA68aiTdyPFKs4Dkmcwe0Sm79WkkmIp9sJo0+DAiBVkxhMtH2TLpp+ccvOBgpG8AsO4En62VC8VptncPaaMg==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -298,13 +298,17 @@
       "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/voice-runtime-1.0.0.tar.gz",
       "filename": "voice-runtime-1.0.0.tar.gz",
       "sha256": "e1bccfc4f42f43478186d17119a20c4d7f0834640bf9bc324ed5d028e397f711",
-      "size": 18856604
+      "size": 18856604,
+      "signature": "MEUCIQCHzUShYopghmkkIx0iJHTmD5JTSa1igzVYN7wQuvdytAIgN3e/dB8CbYlyUqymjME4fUGzI0/gM1yI2y62vdTE+h4=",
+      "signature_alg": "ecdsa-sha256"
     },
     "hwcodec": {
       "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/gst-hwcodec-1.0.0.tar.gz",
       "filename": "gst-hwcodec-1.0.0.tar.gz",
       "sha256": "ec9e0eb0286bb78740fd45ad1c9c8333f6f2621cb660154852039efadb9ddddc",
-      "size": 425137
+      "size": 425137,
+      "signature": "MEYCIQDYockjBf6YHZenz/EhthWqqtpzIi2f2ic+36G4POsmggIhAPP8oA3I9gLR1NnRkkaAI2PdgfVw7gNqWHxVtUwUPBlo",
+      "signature_alg": "ecdsa-sha256"
     }
   }
 }
