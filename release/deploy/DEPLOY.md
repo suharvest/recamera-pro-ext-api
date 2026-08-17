@@ -28,6 +28,7 @@ cd release/deploy && ./deploy-app.sh --host <设备IP>
 | **固件**(rkipc / entry.cgi / `librecamera_ext.so`) | `/oem/usr/{bin,www/cgi-bin,lib}` | `deploy-firmware.sh` | 很少;**换 rkipc 必须冷启动** |
 | **kit 运行时 + SDK + venv** | `/userdata/local/kit`、`/userdata/sdk`、`/userdata/rknnenv` | `deploy-app.sh` 第 1 步 | 跟随 kit 改动 |
 | **appmgr**(应用中心后端) | `/userdata/local/appmgr` | `deploy-app.sh` 第 2 步 | 跟随 appmgr 改动 |
+| **nginx 边缘配置 + 开机启动**(`ext_appmgr.conf` → `/oem/usr/etc/nginx/`,`S94appmgr` → `/etc/init.d/`,master 在 `/userdata`) | 见左 | `deploy-app.sh` 第 2b 步 | 随脚本;出厂/恢复出厂后没有它们 → 浏览器装 app 报 `405`、重启后 appmgr 不起 |
 | **前端**(React 静态产物) | `/oem/usr/www` | `deploy-app.sh` 第 3 步 | 跟随前端改动 |
 | **应用**(9 个 app 的代码+manifest) | `/userdata/local/apps/<id>` | `deploy-app.sh` 第 4 步 / App Center 安装 | 经常 |
 | **用户配置** | `/userdata/local/appdata/<id>/config.json` | 用户在 UI 改 | **不随升级丢失** |
@@ -88,7 +89,7 @@ cd release/deploy
 | 脚本 | 解决什么 | 谁需要 |
 |---|---|---|
 | `market/deploy/provision-runtime.sh` | 让 `recamera_ext` 在 rknn venv 里可导入 | **所有 app** |
-| `market/deploy/appmgr-restore.sh` | OTA 会冲掉 `/etc/init.d/S94appmgr`,靠它恢复 | **OTA 之后** |
+| `market/deploy/appmgr-restore.sh` | OTA 会冲掉 `/etc/init.d/S94appmgr`,靠它恢复(重跑 `deploy-app.sh` 也会重装) | **OTA 之后** |
 
 装一个 app 的顺序:
 ```

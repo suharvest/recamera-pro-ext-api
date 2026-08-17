@@ -5,13 +5,18 @@
 # Brings a device to the full v1.5.0 application state, in order:
 #   1. kit + SDK + inference wheels (jinja2/markupsafe)  -> /userdata/local/kit, /userdata/sdk, /userdata/rknnenv
 #   2. appmgr (App Center manager)                       -> /userdata/local/appmgr   (+ restart)
+#      + nginx edge conf ext_appmgr.conf (/api/appMgr/ -> :8130) and the
+#        S94appmgr boot launcher -- without them a factory device answers
+#        POST /api/appMgr/upload with nginx's 405 and appmgr dies at reboot
 #   3. frontend web bundle                               -> /oem/usr/www
 #   4. app packages (9 apps, code+manifest only)         -> /userdata/local/apps
 #   5. activate one app and verify the pipeline is live
 #
-# SAFE by design: this script NEVER touches rkipc, the camera firmware, nginx
-# edge config, or cgi-bin. It only writes /userdata and overlays the web bundle
-# under /oem/usr/www. The masking firmware (rkipc/SDK) is deployed SEPARATELY and
+# SAFE by design: this script NEVER touches rkipc, the camera firmware, the
+# official nginx confs, or cgi-bin. It only writes /userdata, overlays the web
+# bundle under /oem/usr/www and ADDS one nginx include (ext_appmgr.conf, picked
+# up by `include ext_*.conf;`, validated with `nginx -t` and rolled back on
+# failure). The masking firmware (rkipc/SDK) is deployed SEPARATELY and
 # at higher risk by deploy-firmware.sh -- it is NOT part of this flow.
 #
 # Transport: files/root ops go over ADB (the device's adbd runs as root). SSH
@@ -56,6 +61,12 @@ PKG_KIT="$HERE/recamera-ext-kit-v${VER}.tar.gz"
 PKG_APPMGR="$HERE/appmgr-v${VER}.tar.gz"
 PKG_FRONTEND="$HERE/frontend-v${VER}.tar.gz"
 PKG_APPS="$HERE/apps-v${VER}.tar.gz"
+# nginx edge conf + init launcher: beside this script in a release dir, or from
+# the source tree when run from release/deploy.
+EDGE_DIR="$HERE"
+[ -f "$EDGE_DIR/ext_appmgr.conf" ] || EDGE_DIR="$HERE/../../market/deploy"
+EDGE_CONF="$EDGE_DIR/ext_appmgr.conf"
+S94_SRC="$EDGE_DIR/S94appmgr"
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mOK\033[0m %s\n' "$*"; }
@@ -157,8 +168,9 @@ ok "appmgr code deployed (keys/ preserved from package)"
 # always is -- so `$!` is setsid's own pid and it exits immediately. Writing that
 # left /var/run/appmgr.pid dead from birth, which is what made `S94appmgr
 # restart` a silent no-op afterwards.
+# Not `S94appmgr stop` either: launchers before 2026-08-17 match by cmdline
+# substring and kill this shell (its cmdline quotes the same words).
 ash 'MOD="-m appmgr serve"; MY=$$; \
-     [ -x /etc/init.d/S94appmgr ] && /etc/init.d/S94appmgr stop >/dev/null 2>&1; \
      [ -f /var/run/appmgr.pid ] && kill "$(cat /var/run/appmgr.pid)" 2>/dev/null; \
      for pid in $(ls /proc 2>/dev/null | grep -E "^[0-9]+$"); do \
        [ "$pid" = "$MY" ] && continue; \
@@ -178,6 +190,38 @@ if ash_rc "curl -s -m 8 http://127.0.0.1:8130/api/appMgr/list >/dev/null"; then
 else
   die "appmgr did not answer on :8130 after restart (see /var/log/appmgr.log)"
 fi
+
+# ---- step 2b: nginx edge conf + S94appmgr boot launcher ----------------------
+# appmgr listens on 127.0.0.1 only; the browser reaches it through nginx
+# (ext_appmgr.conf: /api/appMgr/ -> :8130 behind the official JWT gate). The
+# packages above do not carry that conf nor the launcher; a factory-fresh (or
+# factory-restored) device without them answers POST /api/appMgr/upload with
+# nginx's own 405 (the request lands in the static `location /`) and appmgr does
+# not come back after a reboot. Masters live in /userdata (survive OTA); the live
+# conf is validated with the same -c the running nginx master uses (the binary's
+# compiled-in conf-path does not exist on the device) and rolled back on failure.
+say "step 2b/5 nginx edge conf + S94appmgr"
+[ -f "$EDGE_CONF" ] || die "missing $EDGE_CONF"
+[ -f "$S94_SRC" ]   || die "missing $S94_SRC"
+push_verified "$EDGE_CONF" "$STAGE/ext_appmgr.conf"
+push_verified "$S94_SRC"   "$STAGE/S94appmgr"
+EDGE_OUT="$(ash 'M=/userdata/local/appcenter/ext_appmgr.conf; L=/oem/usr/etc/nginx/ext_appmgr.conf; \
+     C=/oem/usr/etc/nginx/nginx.conf; S=/etc/init.d/S94appmgr; SM=/userdata/config/system/etc/init.d/S94appmgr; \
+     mkdir -p /userdata/local/appcenter /userdata/config/system/etc/init.d || exit 1; \
+     cp '"$STAGE"'/ext_appmgr.conf $M || exit 1; \
+     cp '"$STAGE"'/S94appmgr $S && chmod 755 $S || exit 1; \
+     cp '"$STAGE"'/S94appmgr $SM && chmod 755 $SM || exit 1; \
+     rm -f $L.prev; [ -f $L ] && cp $L $L.prev; \
+     cp $M $L || exit 1; \
+     if nginx -c $C -t >/dev/null 2>&1; then nginx -c $C -s reload && echo edge-reloaded; \
+     else echo edge-nginx-t-failed; if [ -f $L.prev ]; then mv $L.prev $L; else rm -f $L; fi; fi; \
+     rm -f $L.prev')"
+case "$EDGE_OUT" in *edge-reloaded*) ;; *) die "nginx rejected ext_appmgr.conf (nginx -t failed); previous edge conf restored: $EDGE_OUT" ;; esac
+EDGE_CODE="$(ash "sleep 1; curl -sk -m 8 -o /dev/null -w '%{http_code}' https://127.0.0.1/api/appMgr/list; echo")"
+case "$EDGE_CODE" in
+  200|401) ok "nginx edge live: /api/appMgr/ -> :8130 (HTTP $EDGE_CODE); S94appmgr installed for boot" ;;
+  *) die "nginx edge check failed: GET /api/appMgr/list -> HTTP ${EDGE_CODE:-?} (expected 401 behind the JWT gate)" ;;
+esac
 
 # ---- step 3: frontend (differential sync) ----------------------------------
 # The bundle is ~36 MB, but 34 MB of that is three Source Han Sans woff2 files
