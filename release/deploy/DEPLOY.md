@@ -17,6 +17,10 @@ cd release/deploy && ./deploy-app.sh --host <设备IP>
 
 它只动**应用层**,不碰固件。固件是另一条高危路径,单独跑、且需要你能物理复位设备。
 
+**默认不预装应用。** `apps-v<ver>.tar.gz` 里只有代码和 manifest,**不含模型**(9 个 app 合计 987 KB);推上去的结果是 9 个 app 全部显示"已安装"、一启动就 `Invalid RKNN model path`。而应用中心的安装路径走 catalog,拉的是**含模型的完整包**(CDN 上单个 3–53 MB),装完即可用。所以出厂设备保持干净,由用户在应用中心按需安装。
+
+要恢复旧行为(演示机 / 装机站预装,模型另行下发)加 `--with-apps`。不加时第 5 步的激活自动跳过——没有东西可激活。
+
 ---
 
 ## 1. 设备上有哪几层
@@ -30,7 +34,7 @@ cd release/deploy && ./deploy-app.sh --host <设备IP>
 | **appmgr**(应用中心后端) | `/userdata/local/appmgr` | `deploy-app.sh` 第 2 步 | 跟随 appmgr 改动 |
 | **nginx 边缘配置 + 开机启动**(`ext_appmgr.conf` → `/oem/usr/etc/nginx/`,`S94appmgr` → `/etc/init.d/`,master 在 `/userdata`) | 见左 | `deploy-app.sh` 第 2b 步 | 随脚本;出厂/恢复出厂后没有它们 → 浏览器装 app 报 `405`、重启后 appmgr 不起 |
 | **前端**(React 静态产物) | `/oem/usr/www` | `deploy-app.sh` 第 3 步 | 跟随前端改动 |
-| **应用**(9 个 app 的代码+manifest) | `/userdata/local/apps/<id>` | `deploy-app.sh` 第 4 步 / App Center 安装 | 经常 |
+| **应用** | `/userdata/local/apps/<id>` | **App Center 安装**(默认);`deploy-app.sh --with-apps` 才预推 | 经常 |
 | **用户配置** | `/userdata/local/appdata/<id>/config.json` | 用户在 UI 改 | **不随升级丢失** |
 | **共享模型** | `/userdata/local/models/` | catalog `putModel` / provision 脚本 | 很少(体积大) |
 

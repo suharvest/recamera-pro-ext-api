@@ -9,8 +9,8 @@
 #        S94appmgr boot launcher -- without them a factory device answers
 #        POST /api/appMgr/upload with nginx's 405 and appmgr dies at reboot
 #   3. frontend web bundle                               -> /oem/usr/www
-#   4. app packages (9 apps, code+manifest only)         -> /userdata/local/apps
-#   5. activate one app and verify the pipeline is live
+#   4. app packages -- OFF BY DEFAULT, see --with-apps below
+#   5. activate one app and verify the pipeline is live (only with --with-apps)
 #
 # SAFE by design: this script NEVER touches rkipc, the camera firmware, the
 # official nginx confs, or cgi-bin. It only writes /userdata, overlays the web
@@ -24,12 +24,23 @@
 # backed up first with a timestamp suffix.
 #
 # Usage:
-#   ./deploy-app.sh [--host <ip>] [--skip-kit] [--skip-frontend] [--no-activate]
+#   ./deploy-app.sh [--host <ip>] [--skip-kit] [--skip-frontend] [--with-apps]
+#                   [--no-activate]
 #     --host          device IP (default 192.168.42.1), adb serial = <ip>:5555
 #     --activate-app  app id to activate at the end (default retail-vision)
 #     --skip-kit      skip step 1 (kit already installed)
 #     --skip-frontend skip step 3
-#     --no-activate   skip step 5 (no camera touch, no app start)
+#     --with-apps     ALSO push the app packages in step 4 (default: do not).
+#                     Those packages carry code+manifest only -- the models are
+#                     NOT in them, so every app lands 'installed' but dies at
+#                     start with 'Invalid RKNN model path'. The App Center
+#                     install path pulls the FULL package (models included) from
+#                     the catalog, so a clean device is the better default: the
+#                     user installs what they actually want, and it works.
+#                     Use this flag for demo/factory preload where the models
+#                     are provisioned separately (e.g. via /api/appMgr/putModel).
+#     --no-activate   skip step 5 (no camera touch, no app start). Implied when
+#                     --with-apps is absent (there is nothing to activate).
 #
 set -euo pipefail
 
@@ -39,12 +50,14 @@ ACTIVATE_APP=retail-vision
 SKIP_KIT=0
 SKIP_FRONTEND=0
 NO_ACTIVATE=0
+WITH_APPS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST="$2"; shift 2;;
     --activate-app) ACTIVATE_APP="$2"; shift 2;;
     --skip-kit) SKIP_KIT=1; shift;;
     --skip-frontend) SKIP_FRONTEND=1; shift;;
+    --with-apps) WITH_APPS=1; shift;;
     --no-activate) NO_ACTIVATE=1; shift;;
     -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
@@ -336,6 +349,16 @@ else
 fi
 
 # ---- step 4: apps ----------------------------------------------------------
+if [ "$WITH_APPS" = "0" ]; then
+  say "step 4/5 app packages -- SKIPPED (default)"
+  echo "  The packages in $(basename "$PKG_APPS") carry code+manifest only, NOT the"
+  echo "  models. Pushing them leaves every app 'installed' but dead on start with"
+  echo "  'Invalid RKNN model path'. The App Center install path downloads the full"
+  echo "  package (models included) from the catalog, so leave the device empty and"
+  echo "  let the user install what they want. Pass --with-apps for the old behaviour"
+  echo "  (demo/factory preload where the models are provisioned separately)."
+  NO_ACTIVATE=1
+else
 say "step 4/5 app packages -> /userdata/local/apps"
 push_verified "$PKG_APPS" "$STAGE/apps.tar.gz"
 ash "[ -f /userdata/local/apps/state.json ] && cp -a /userdata/local/apps/state.json $STAGE/backups/state.json.$TS || true" >/dev/null
@@ -344,6 +367,7 @@ ash "[ -f /userdata/local/apps/state.json ] && cp -a /userdata/local/apps/state.
 ash "mkdir -p /userdata/local/apps && gzip -dc $STAGE/apps.tar.gz | tar -xf - -C /userdata/local/apps" >/dev/null
 INSTALLED="$(ash 'for d in /userdata/local/apps/*/; do [ -f "$d/manifest.json" ] && basename "$d"; done | tr "\n" " "')"
 ok "apps deployed: $INSTALLED"
+fi
 
 # ---- step 5: activate + verify --------------------------------------------
 if [ "$NO_ACTIVATE" = "1" ]; then
