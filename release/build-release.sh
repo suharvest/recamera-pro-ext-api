@@ -260,7 +260,9 @@ check_list  "$PKG/install.sh"  VALIDATED_BASELINE_MD5S "$BASELINE_FIRST"
 # marker test itself instead: the rkipc/entry.cgi we ship MUST trip it, otherwise
 # every "is this a factory build?" check downstream silently answers yes.
 check_markers() { # file regex label
-  if strings -a "$1" 2>/dev/null | grep -qE "$2"; then
+  # NOTE: not `strings | grep -q` -- under pipefail, grep -q exiting early
+  # SIGPIPEs strings (141) and the whole pipeline reads as failure.
+  if grep -qaE "$2" "$1" 2>/dev/null; then
     echo "  OK  $(basename "$1") carries $3 markers"
   else
     echo "FATAL self-check: $1 carries no $3 markers -- rollback guard would be blind" >&2; exit 1
