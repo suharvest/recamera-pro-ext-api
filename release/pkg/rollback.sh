@@ -1,34 +1,46 @@
 #!/bin/sh
 # recamera-ext-api rollback.sh  -- restore factory rkipc (and entry.cgi) into /oem, then reboot.
-# Run ON THE DEVICE as root.
+# Run ON THE DEVICE as root:  sh rollback.sh [--reboot]
 set -e
-# A rollback target MUST be a genuine clean factory rkipc (see install.sh for the rationale).
-VERIFIED_FACTORY_MD5S="9826e9ecf8ed543a6dc78e3731102e0f"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
-KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550 f683352a9d062a05a3df1f8df22d7d53"  # ext builds -- NOT rollback targets
+# A rollback target must be a FACTORY build -- one that does NOT carry our
+# extension. That is a content property, so test the content (see install.sh for
+# why an md5 allowlist is the wrong instrument here).
+RKIPC_EXT_MARKERS='/run/recamera|rc_ext_|osd_rgn_cover_'
+ENTRY_EXT_MARKERS='ExtApiHandler'
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
-in_list() { _v=$1; shift; for _m in $*; do [ "$_v" = "$_m" ] && return 0; done; return 1; }
-is_factory()   { in_list "$1" $VERIFIED_FACTORY_MD5S; }
-is_ext_build() { in_list "$1" $KNOWN_EXT_BUILD_MD5S; }
+has_ext() {
+  if command -v strings >/dev/null 2>&1; then
+    strings -a "$1" 2>/dev/null | grep -qE "$2"
+  else
+    grep -aqE "$2" "$1"
+  fi
+}
+is_factory_rkipc() { [ -f "$1" ] && ! has_ext "$1" "$RKIPC_EXT_MARKERS"; }
+is_factory_entry() { [ -f "$1" ] && ! has_ext "$1" "$ENTRY_EXT_MARKERS"; }
 
 if [ ! -f /userdata/rkipc.factory.bak ]; then
-  echo "FATAL: /userdata/rkipc.factory.bak missing -- cannot roll back"; exit 1
+  echo "FATAL: /userdata/rkipc.factory.bak missing -- cannot roll back locally."
+  echo "       Recover with a full OTA / update.img flash, which rewrites /oem to factory."
+  exit 1
 fi
 BAK=$(md5of /userdata/rkipc.factory.bak)
-if ! is_factory "$BAK"; then
-  if is_ext_build "$BAK"; then
-    echo "FATAL: backup ($BAK) is a known EXTENSION build, not factory -- refusing to restore."
-  else
-    echo "FATAL: backup ($BAK) is not a VERIFIED factory rkipc -- refusing to restore."
-  fi
-  echo "       A rollback target must be clean factory (md5 one of: $VERIFIED_FACTORY_MD5S)."
-  echo "       Nothing changed. Obtain the true factory rkipc before rolling back."; exit 1
+if ! is_factory_rkipc /userdata/rkipc.factory.bak; then
+  echo "FATAL: backup ($BAK) CARRIES extension markers -- it is one of our builds, not a"
+  echo "       factory rkipc. Restoring it would be a no-op. Nothing changed."
+  echo "       Recover with a full OTA / update.img flash, which rewrites /oem to factory."
+  exit 1
 fi
+[ -f /userdata/rkipc.factory.bak.info ] && { echo "backup provenance:"; sed 's/^/  /' /userdata/rkipc.factory.bak.info; }
 echo "restoring factory rkipc from backup ($BAK)"
 cp /userdata/rkipc.factory.bak /oem/usr/bin/rkipc && chmod 755 /oem/usr/bin/rkipc
 
 if [ -f /userdata/entry.cgi.factory.bak ]; then
-  cp /userdata/entry.cgi.factory.bak /oem/usr/www/cgi-bin/entry.cgi && chmod 755 /oem/usr/www/cgi-bin/entry.cgi
-  echo "entry.cgi restored"
+  if is_factory_entry /userdata/entry.cgi.factory.bak; then
+    cp /userdata/entry.cgi.factory.bak /oem/usr/www/cgi-bin/entry.cgi && chmod 755 /oem/usr/www/cgi-bin/entry.cgi
+    echo "entry.cgi restored"
+  else
+    echo "WARN: entry.cgi backup carries extension markers -- skipped (restoring it is a no-op)"
+  fi
 fi
 # ext .so left in place is harmless (nothing loads it unless a solution asks); remove if you want a clean factory:
 # rm -f /oem/usr/lib/librecamera_ext.so /oem/usr/lib/librecamera_ext.so.1 /oem/usr/lib/librecamera_ext.so.1.0.0

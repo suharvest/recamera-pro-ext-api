@@ -18,7 +18,15 @@ PYTHON INFERENCE RUNTIME (rknnlite 2.3.2)  -- provisioned by install.sh into /us
   vision apps run via: PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib /userdata/rknnenv/bin/python3 <app>.py
 
 FACTORY / ROLLBACK
-  factory rkipc md5                 9826e9ecf8ed543a6dc78e3731102e0f    (clean factory, 0 ext sockets; the only valid rollback target)
+  rollback target test              CONTENT, not md5: a factory rkipc carries none of
+                                    /run/recamera | rc_ext_ | osd_rgn_cover_
+                                    (factory entry.cgi carries no ExtApiHandler).
+                                    Holds for any baseline -- no md5 list to maintain.
+  validated baselines               ce3dfa64a554667028b47f4d9ce84981  (2026-08 factory,
+                                    2178232 B, seen on 192.168.42.1). Advisory only:
+                                    an unlisted baseline warns; --strict makes it abort.
+  no local backup?                  recover with a full OTA / update.img flash, which
+                                    rewrites /oem back to factory.
   factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak
 
 CONTENTS OF THIS rkipc
