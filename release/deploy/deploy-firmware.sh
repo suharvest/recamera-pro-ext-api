@@ -20,23 +20,31 @@
 #   #############################################################################
 #
 # Usage:
-#   ./deploy-firmware.sh --host <ip> [--reboot]      install masking firmware
+#   ./deploy-firmware.sh --host <ip> [--reboot] [--strict] [--force]   install
+#                                                     masking firmware
 #   ./deploy-firmware.sh --host <ip> --rollback [--reboot]   restore factory rkipc
 #
 #   --reboot   let the on-device script reboot immediately after install/rollback.
 #              WITHOUT it, the script only stages the change and PROMPTS you to
 #              reboot manually (recommended: reboot from the device console).
+#   --strict   abort if the device firmware baseline is not one this build was
+#              validated against (default: warn and continue).
+#   --force    install even if the pre-flight finds no capturable factory rkipc,
+#              i.e. accept having NO local rollback point.
 #
 set -euo pipefail
 
 HOST=192.168.42.1
 DO_REBOOT=0
 ROLLBACK=0
+INSTALL_FLAGS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST="$2"; shift 2;;
     --reboot) DO_REBOOT=1; shift;;
     --rollback) ROLLBACK=1; shift;;
+    --strict) INSTALL_FLAGS="$INSTALL_FLAGS --strict"; shift;;
+    --force)  INSTALL_FLAGS="$INSTALL_FLAGS --force"; shift;;
     -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
@@ -91,10 +99,10 @@ ash "rm -rf $STAGE && mkdir -p $STAGE && tar -xf $STAGE.tar -C $STAGE" >/dev/nul
 # install.sh md5-verifies every artifact, backs up factory rkipc/entry.cgi once,
 # installs into /oem, provisions the rknnlite runtime, then stops BEFORE reboot.
 if [ "$DO_REBOOT" = 1 ]; then
-  ash "sh $STAGE/install.sh --reboot" | sed 's/^/  /'
+  ash "sh $STAGE/install.sh$INSTALL_FLAGS --reboot" | sed 's/^/  /'
   red "Install done; device is rebooting to activate new rkipc."
 else
-  ash "sh $STAGE/install.sh" | sed 's/^/  /'
+  ash "sh $STAGE/install.sh$INSTALL_FLAGS" | sed 's/^/  /'
   echo
   red "Install STAGED into /oem. New rkipc is NOT active yet."
   red "COLD BOOT the device now (from the device console):   reboot"
