@@ -57,12 +57,16 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78
 ```
 
 `install.sh` 是**幂等 + md5 校验**的（见 `release/pkg/install.sh`）：
-1. `[1/6]` 校验包内三件产物 md5，不符立即 `exit 1`；
-2. `[2/6]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`——但**只接受经校验的干净原厂**（`VERIFIED_FACTORY_MD5S`，当前 `d5e7ca9365dae553e8c7e4c0a0f436ec`，1.9MB、0 个扩展 socket 字符串）作为回滚目标。若 `/oem` 当前 rkipc 是**已知扩展构建**（`KNOWN_EXT_BUILD_MD5S`，含本包自己的 rkipc）或未知构建，则**拒绝把它当原厂备份**并 `exit 1`（否则日后回滚会变成空操作、扩展固件留在 `/oem`）。新固件版本要先确认 `strings rkipc | grep /run/recamera` 为空、再把其 md5 追加进 `VERIFIED_FACTORY_MD5S`；`rollback.sh` 同理，备份非已验证原厂时**拒绝恢复**；
-3. `[3/6]` 首次备份原厂 `entry.cgi` 到 `/userdata/entry.cgi.factory.bak`；
-4. `[4/6]` `touch /oem/.wtest` 验证 `/oem` 可写；
-5. `[5/6]` `cp` 三件产物进 `/oem` 并**逐个 `chmod 755`**，建立 `.so.1` / `.so` 软链，SDK python + 头拷进 `/userdata/sdk/`，`sync`；
-6. `[6/6]` 提示 reboot（或 `--reboot` 自动重启）激活新 rkipc。
+1. `[1/8]` 校验包内三件产物 md5，并断言包内 rkipc/entry.cgi **确实带扩展标记**——否则下面的判据会全部静默通过；不符立即 `exit 1`；
+2. `[3/8]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`，同时写一份 `.info` 记录该机基线（md5 / size / rootfs 版本）。**回滚目标按内容判定**：原厂 rkipc 不含 `/run/recamera`、`rc_ext_`、`osd_rgn_cover_` 这些我们的符号，扩展构建含（entry.cgi 对应 `ExtApiHandler`）。这条对任何固件基线成立，**新固件版本不需要往任何列表里加 md5**。只有 `/oem` 当前已是扩展构建、且没有备份时才拒绝——把扩展构建存成"原厂"会让日后回滚变空操作；这种情况可 `--force` 强装，代价是没有本地回滚点，恢复只能靠完整 OTA / update.img 刷机（会把 `/oem` 重写回原厂）。`rollback.sh` 用同一判据，备份带扩展标记时**拒绝恢复且不改动 `/oem`**；
+
+   > 早先这里是 `VERIFIED_FACTORY_MD5S` md5 白名单，已废弃：它测的是"这个文件我见过没有"而非"这是不是原厂"，没收录的官方基线在现场一律 abort（`192.168.42.1` 的 2026-08 基线就被拦下），而且这套元数据自身就漂了——同一个 md5 曾同时出现在 factory 和 ext 两个列表里，本文档里记的又是第三个值。
+
+   `[2/8]` 是独立的**固件基线兼容性**检查：我们的 rkipc 从特定基线构建，装到别的基线上等于换掉相机主程序。默认只告警，`--strict` 才中止；
+3. `[4/8]` 首次备份原厂 `entry.cgi` 到 `/userdata/entry.cgi.factory.bak`（同样按内容判定；这一步只告警不中止，entry.cgi 丢了不影响相机）；
+4. `[5/8]` `touch /oem/.wtest` 验证 `/oem` 可写；
+5. `[6/8]` `cp` 三件产物进 `/oem` 并**逐个 `chmod 755`**，建立 `.so.1` / `.so` 软链，SDK python + 头拷进 `/userdata/sdk/`，`sync`；
+6. `[7/8]` 装 rknnlite 运行时（best-effort，失败只告警）；`[8/8]` 提示 reboot（或 `--reboot` 自动重启）激活新 rkipc。
 
 **边界（诚实标注）**：这是 **sideload，覆盖 `/oem`**。`/oem` 是 ext4 rw，普通 reboot 持久；但**一次完整固件 OTA / `update.img` 刷写会重写 `/oem`，把 rkipc 还原成原厂**——**OTA 后必须重跑 `install.sh`**。本包不碰分区、shadow、update.img。
 
@@ -302,7 +306,7 @@ reboot / 部署后依次核对：
 ```sh
 adb shell "sh /userdata/ext-pkg/rollback.sh --reboot"
 ```
-`rollback.sh`（见 `release/pkg/rollback.sh`）从 `/userdata/rkipc.factory.bak` 恢复原厂 rkipc（缺备份直接 `exit 1`），有 `entry.cgi.factory.bak` 一并恢复，`chmod 755` 后 reboot。扩展 `.so` 留着无害（没人加载它除非方案主动连），要彻底干净可手动删 `librecamera_ext.so*`。
+`rollback.sh`（见 `release/pkg/rollback.sh`）从 `/userdata/rkipc.factory.bak` 恢复原厂 rkipc，有 `entry.cgi.factory.bak` 一并恢复，`chmod 755` 后 reboot。两种情况会**拒绝且不改动 `/oem`**：备份缺失，或备份自身带扩展标记（那是我们的构建，恢复它等于空操作）。两种情况的恢复路径都是完整 OTA / update.img 刷机。备份旁边的 `.info` 记录了该机原始基线。扩展 `.so` 留着无害（没人加载它除非方案主动连），要彻底干净可手动删 `librecamera_ext.so*`。
 
 **二级 · 整机文件级回滚**：设备上有分级备份可 `cp` 回：
 - `/userdata/rkipc.factory.bak` — 原厂 rkipc（install.sh 首次保存）
