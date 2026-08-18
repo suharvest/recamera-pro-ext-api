@@ -58,7 +58,7 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78
 
 `install.sh` 是**幂等 + md5 校验**的（见 `release/pkg/install.sh`）：
 1. `[1/8]` 校验包内三件产物 md5，并断言包内 rkipc/entry.cgi **确实带扩展标记**——否则下面的判据会全部静默通过；不符立即 `exit 1`；
-2. `[3/8]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`，同时写一份 `.info` 记录该机基线（md5 / size / rootfs 版本）。**回滚目标按内容判定**：原厂 rkipc 不含 `/run/recamera`、`rc_ext_`、`osd_rgn_cover_` 这些我们的符号，扩展构建含（entry.cgi 对应 `ExtApiHandler`）。这条对任何固件基线成立，**新固件版本不需要往任何列表里加 md5**。只有 `/oem` 当前已是扩展构建、且没有备份时才拒绝——把扩展构建存成"原厂"会让日后回滚变空操作；这种情况可 `--force` 强装，代价是没有本地回滚点，恢复只能靠完整 OTA / update.img 刷机（会把 `/oem` 重写回原厂）。`rollback.sh` 用同一判据，备份带扩展标记时**拒绝恢复且不改动 `/oem`**；
+2. `[3/8]` 首次把原厂 `rkipc` 备份到 `/userdata/rkipc.factory.bak`，同时写一份 `.info` 记录该机基线（md5 / size / rootfs 版本）。**回滚目标按内容判定**：原厂 rkipc 不含 `/run/recamera`、`rc_ext_` 这两个我们的符号，扩展构建含（entry.cgi 对应 `ExtApiHandler`）。**`osd_rgn_cover_` 不能用作判据**——那是 vendor 的 OSD cover 区域符号，硬件遮罩建在它上面，原厂 rkipc 同样含有（真机实测：出厂 `d5e7ca93` 2 处、扩展 `9826e9ec` 8 处），误用会把真出厂备份判成扩展构建、拒绝回滚。这条对任何固件基线成立，**新固件版本不需要往任何列表里加 md5**。只有 `/oem` 当前已是扩展构建、且没有备份时才拒绝——把扩展构建存成"原厂"会让日后回滚变空操作；这种情况可 `--force` 强装，代价是没有本地回滚点，恢复只能靠完整 OTA / update.img 刷机（会把 `/oem` 重写回原厂）。`rollback.sh` 用同一判据，备份带扩展标记时**拒绝恢复且不改动 `/oem`**；
 
    > 早先这里是 `VERIFIED_FACTORY_MD5S` md5 白名单，已废弃：它测的是"这个文件我见过没有"而非"这是不是原厂"，没收录的官方基线在现场一律 abort（`192.168.42.1` 的 2026-08 基线就被拦下），而且这套元数据自身就漂了——同一个 md5 曾同时出现在 factory 和 ext 两个列表里，本文档里记的又是第三个值。
 

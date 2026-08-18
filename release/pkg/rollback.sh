@@ -5,7 +5,7 @@ set -e
 # A rollback target must be a FACTORY build -- one that does NOT carry our
 # extension. That is a content property, so test the content (see install.sh for
 # why an md5 allowlist is the wrong instrument here).
-RKIPC_EXT_MARKERS='/run/recamera|rc_ext_|osd_rgn_cover_'
+RKIPC_EXT_MARKERS='/run/recamera|rc_ext_'
 ENTRY_EXT_MARKERS='ExtApiHandler'
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 has_ext() {

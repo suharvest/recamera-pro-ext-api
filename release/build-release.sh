@@ -266,7 +266,7 @@ check_markers() { # file regex label
     echo "FATAL self-check: $1 carries no $3 markers -- rollback guard would be blind" >&2; exit 1
   fi
 }
-check_markers "$RKIPC" '/run/recamera|rc_ext_|osd_rgn_cover_' rkipc-ext
+check_markers "$RKIPC" '/run/recamera|rc_ext_' rkipc-ext
 check_markers "$ENTRY" 'ExtApiHandler' entry.cgi-ext
 
 # verify firmware tar actually carries the expected rkipc/entry/so md5s

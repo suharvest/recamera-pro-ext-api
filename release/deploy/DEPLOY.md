@@ -78,7 +78,7 @@ cd release/deploy
 
 **只有需要扩展 API 能力(帧代理 / 结果回注 / 硬件遮罩 / probe)时才装固件。** `deploy-app.sh` 不依赖它也能把 apps/前端/appmgr 跑起来。
 
-**回滚点按内容判定,不按 md5 白名单**:`install.sh` 只把**不带扩展标记**的 rkipc 存为回滚点。判据是文件内容——我们的构建带 `/run/recamera`/`rc_ext_`/`osd_rgn_cover_` 符号,原厂不带(entry.cgi 对应 `ExtApiHandler`)。这条对**任何**固件基线成立,不需要维护 md5 列表。
+**回滚点按内容判定,不按 md5 白名单**:`install.sh` 只把**不带扩展标记**的 rkipc 存为回滚点。判据是文件内容——我们的构建带 `/run/recamera`/`rc_ext_` 符号,原厂不带(entry.cgi 对应 `ExtApiHandler`)。**不能用 `osd_rgn_cover_`**:那是 vendor 的 OSD cover 区域符号,遮罩功能建在它上面,原厂 rkipc 同样含有(真机实测:出厂 `d5e7ca93` 有 2 处,扩展 `9826e9ec` 有 8 处),拿它判会把真出厂备份误判成扩展构建。这条对**任何**固件基线成立,不需要维护 md5 列表。
 
 早先用的 `VERIFIED_FACTORY_MD5S` 白名单已废弃:它测的是"这个文件我见过没有",而不是"这是不是原厂",结果是没收录过的官方基线在现场一律 abort(实测 `192.168.42.1` 的 2026-08 基线就被拦下),而且同一个 md5 曾同时出现在 factory 和 ext 两个列表里。
 

@@ -43,7 +43,7 @@ done
 # factory rkipc has none of them. Our entry.cgi links rockchip::cgi::ExtApiHandler;
 # a factory entry.cgi does not. Both hold for any baseline, past or future.
 # ---------------------------------------------------------------------------
-RKIPC_EXT_MARKERS='/run/recamera|rc_ext_|osd_rgn_cover_'
+RKIPC_EXT_MARKERS='/run/recamera|rc_ext_'
 ENTRY_EXT_MARKERS='ExtApiHandler'
 
 # Firmware baselines this rkipc has been validated against, by the md5 of the
