@@ -63,7 +63,12 @@ RKNN_MAX_NAME_LEN = 256
 RKNN_QUERY_IN_OUT_NUM = 0
 RKNN_QUERY_INPUT_ATTR = 1
 RKNN_QUERY_OUTPUT_ATTR = 2
-RKNN_QUERY_SDK_VERSION = 3
+RKNN_QUERY_PERF_DETAIL = 3
+# 5, not 3. 3 is PERF_DETAIL, whose struct is a pointer plus a length --
+# querying it into an RknnSdkVersion returns RKNN_SUCC and fills the
+# buffer with garbage rather than failing, so the wrong constant reads as
+# a working call.
+RKNN_QUERY_SDK_VERSION = 5
 
 # rknn_tensor_type / rknn_tensor_format
 RKNN_TENSOR_UINT8 = 3
