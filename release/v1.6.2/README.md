@@ -3,9 +3,11 @@
 把本轮全部应用层改动一次性部署到设备，让设备达到 v1.6.2 完整状态。
 **固件层（rkipc 遮罩固件）单独、高危、默认不在一键流程内** —— 见文末。
 
-> **本版两项变更**：
+> **本版四项变更**：
 > 1. **兼容固件 HTTPS 开关**（`kit/adapters/cgi_control.py`、`appmgr/builtin.py`）：entry.cgi 客户端对 301/302/307/308 跟随一跳、记住落点端点（443↔80）、443 TLS 不可达时回退 80。HTTPS 开/关两态及来回切换已真机验证（2026-08-17/18）。
 > 2. **固件包回滚判据重构**（`install.sh` / `rollback.sh`）：回滚目标从 md5 白名单改为**按内容判定**（扩展标记 `/run/recamera|rc_ext_`、`ExtApiHandler`），未知出厂固件版本也能安全回滚；`deploy-firmware.sh` 透传 `--strict` / `--force`。
+> 3. **前端应用卡片描述悬停显示完整文字**：卡片描述仍三行截断，悬停浮出全文（原生 `title` 提示，bundle `main.1e2af984.js`）。
+> 4. **`deploy-app.sh` 默认不再预装应用**（行为变更）：`apps-v1.6.2.tar.gz` 只含代码和 manifest、**不含模型**（9 个 app 合计 987 KB），推上去的结果是 9 个 app 全显示"已安装"、一启动就 `Invalid RKNN model path`。应用中心的安装路径拉的是 catalog 上**含模型的完整包**（单个 3–53 MB），装完即可用。现在出厂设备保持干净，由用户按需安装；第 5 步的激活一并跳过（没有东西可激活）。要恢复旧行为（演示机 / 装机站预装，模型另行下发）加 `--with-apps`。
 
 **固件产物（rkipc / entry.cgi / `.so`）与 v1.6.0、v1.6.1 逐字节相同**，变的只是包内安装/回滚脚本。
 已装过 v1.6.0/v1.6.1 遮罩固件的设备**不需要重装固件**；仅需应用层能力的设备跑 `deploy-app.sh` 即可。
@@ -17,11 +19,11 @@
 | `recamera-ext-kit-v1.6.2.tar.gz` | **不同** | `cgi_control.py` 跟随 307 / 记忆端点 / TLS 回退 |
 | `appmgr-v1.6.2.tar.gz` | **不同** | `builtin.py` 同上 |
 | `recamera-ext-api-v1.6.2.tar` | **不同** | 仅 `install.sh`/`rollback.sh`/`MANIFEST.txt`/`README.md` 变（回滚判据按内容判定）；rkipc/entry.cgi/`.so` 逐字节同 v1.6.1 |
-| `frontend-v1.6.2.tar.gz` | **相同**（md5 `d0f00b05…`） | 前端未改，确定性重建逐字节一致 |
+| `frontend-v1.6.2.tar.gz` | **不同** | 卡片描述悬停 tooltip（bundle `main.1e2af984.js`） |
 | `apps-v1.6.2.tar.gz` | **相同**（md5 `3e667757…`） | 9 个 app 源码未变 |
 | `voice-runtime-1.0.0.tar.gz` | **相同**（md5 `ace48a68…`） | 音频运行时未改 |
 | `gst-hwcodec-1.0.0.tar.gz` | **相同**（md5 `8e6d286f…`） | 硬编解码运行时未改 |
-| `deploy-app.sh` / `deploy-firmware.sh` | 不同 | `VER=1.6.2`；firmware 版新增透传 `--strict`/`--force` |
+| `deploy-app.sh` / `deploy-firmware.sh` | 不同 | `VER=1.6.2`；**app 版默认不再预装应用（新增 `--with-apps` 才推）**；firmware 版新增透传 `--strict`/`--force` |
 | `S94appmgr` / `ext_appmgr.conf` | 相同 | 与 v1.6.1 逐字节一致 |
 
 > App Center 目录不变：`catalog.json` 与 `packages/` 仍是 v1.6.0 的内容（本版改动在 kit 运行时与 appmgr，不在任何 app 包内）。
@@ -41,13 +43,13 @@ v1.6.1 及更早版本的 kit / appmgr 硬编码打 443 且不跟随重定向 �
 |------|------|----------|
 | `recamera-ext-kit-v1.6.2.tar.gz` | kit 运行时 + SDK(python/lib/头文件) + 离线推理 wheels，自带 `INSTALL.sh` | `/userdata/local/kit`、`/userdata/sdk`、`/userdata/rknnenv` |
 | `appmgr-v1.6.2.tar.gz` | App Center 管理器全部代码，**含签名公钥 `keys/`** | `/userdata/local/appmgr` |
-| `frontend-v1.6.2.tar.gz` | React 前端构建产物（bundle `main.024cbb4e.js`，同 v1.6.1） | `/oem/usr/www` |
-| `apps-v1.6.2.tar.gz` | 9 个 app 的 `manifest.json` + `app.py`（+ 小配置）。**不含大模型** | `/userdata/local/apps` |
+| `frontend-v1.6.2.tar.gz` | React 前端构建产物（bundle `main.1e2af984.js`） | `/oem/usr/www` |
+| `apps-v1.6.2.tar.gz` | 9 个 app 的 `manifest.json` + `app.py`（+ 小配置）。**不含大模型** —— 因此 `deploy-app.sh` 默认**不推**它，见上文第 3 项 | `/userdata/local/apps`（仅 `--with-apps`） |
 | `voice-runtime-1.0.0.tar.gz` | 按需音频运行时（`runtimes.audio`，`kind:"pip"`） | 由 appmgr 按需拉取安装 |
 | `gst-hwcodec-1.0.0.tar.gz` | 按需硬编解码运行时（`runtimes.hwcodec`，`kind:"files"`） | `/userdata/lib` |
 | `recamera-ext-api-v1.6.2.tar` | 遮罩固件（rkipc + entry.cgi + `.so` + SDK + wheels），自带**内容判定版** `install.sh`/`rollback.sh` | `/oem`（**高危，冷启动**） |
 | `S94appmgr` / `ext_appmgr.conf` | 开机启动脚本 / nginx 边缘配置（`deploy-app.sh` 第 2b 步自动安装） | `/etc/init.d/`、`/oem/usr/etc/nginx/` |
-| `deploy-app.sh` | 应用层一键部署主脚本（安全） | — |
+| `deploy-app.sh` | 应用层一键部署主脚本（安全；默认不预装应用，`--with-apps` 才推） | — |
 | `deploy-firmware.sh` | 遮罩固件部署脚本（**高危，单独跑**；支持 `--strict`/`--force`） | — |
 
 包的 md5 / size 在文末「校验」一节列出。
@@ -77,7 +79,10 @@ v1.6.1 及更早版本的 kit / appmgr 硬编码打 443 且不跟随重定向 �
 cd release/v1.6.2
 ./deploy-app.sh --host <设备IP>          # 应用层 5 步，不碰 rkipc
 ./deploy-app.sh --host <ip> --skip-kit   # kit 没变时
+./deploy-app.sh --host <ip> --with-apps  # 演示机/装机站：连不含模型的 app 包一起推
 ```
+
+**默认跑完设备上不会有任何应用**——这是有意的，应用由用户在应用中心按需安装（那条路径下载的是含模型的完整包）。
 
 流程细节（备份、幂等、回滚）见 `release/deploy/DEPLOY.md`。
 
@@ -127,11 +132,11 @@ release/build-release.sh --rkipc <rkipc> --entry-cgi <entry.cgi> --version 1.6.2
 | `recamera-ext-api-v1.6.2.tar` | 18708480 | `5708b454a5e8f11fbfc65377d4e8cbee` | **不同**（install/rollback 脚本重构） |
 | `recamera-ext-kit-v1.6.2.tar.gz` | 2223582 | `a9bfec6fc7f588299de9374d547d148a` | **不同**（cgi_control 307 兼容） |
 | `appmgr-v1.6.2.tar.gz` | 65927 | `edc772159ad7643e3279e03942b1e9ac` | **不同**（builtin 307 兼容） |
-| `frontend-v1.6.2.tar.gz` | 36757258 | `d0f00b05ed4aed1f12aaae45e07514d4` | **相同**（确定性重建，逐字节一致） |
+| `frontend-v1.6.2.tar.gz` | 36757262 | `6a48749108747c6bed59a06fef55965e` | **不同**（描述悬停 tooltip，bundle `main.1e2af984.js`） |
 | `apps-v1.6.2.tar.gz` | 986788 | `3e6677572e044dc2d1fc25da7ffdda52` | **相同**（确定性重建，逐字节一致） |
 | `voice-runtime-1.0.0.tar.gz` | 18856604 | `ace48a688d41a3fc6b852a0f14ddad8d` | **相同** |
 | `gst-hwcodec-1.0.0.tar.gz` | 425137 | `8e6d286fac58a5b366e8fdd1709b212f` | **相同** |
-| `deploy-app.sh` | 21080 | `bce2af4f27f0cdb5178731861a84811d` | 不同（版本号 + 2b 步安装 S94/nginx conf） |
+| `deploy-app.sh` | 21080 | `bce2af4f27f0cdb5178731861a84811d` | 不同（版本号 + 2b 步安装 S94/nginx conf + 默认不预装应用） |
 | `deploy-firmware.sh` | 5469 | `e3a827c7cf7ee48cabcba3338b1d15f5` | 不同（版本号 + `--strict`/`--force` 透传） |
 | `S94appmgr` | 8116 | `e49fcf81c715e827daeed10475f0a5b4` | **相同** |
 | `ext_appmgr.conf` | 4849 | `c5e0131966b85bfce8e614afd0a55577` | **相同** |
