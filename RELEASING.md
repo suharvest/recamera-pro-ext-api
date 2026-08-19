@@ -46,7 +46,13 @@ LD_LIBRARY_PATH=/oem/usr/lib \
 
 1. **wsl 构建产物**：`recamera_ipc` 构建输出目录 `out/bin/`（`rkipc`），以及 M4 控制面 `entry.cgi`。跨机开发见 `recamera-rk-build` skill（代码/编译在 wsl2-local）。
 2. **设备现役**：从已验证设备的 `/oem/usr/bin/rkipc`、`/oem/usr/www/cgi-bin/entry.cgi` 拉回（`adb pull` 或 `scp`）。
-3. **仓内现役副本**：`release/pkg/rkipc`、`release/pkg/entry.cgi` 就是当前发布的现役二进制（`de5b3aa4` / `75a693c8`）。内容不变时直接用它们重打即可。
+3. **上一版发布包**：`tar xf release/v<上一版>/recamera-ext-api-v<上一版>.tar ./rkipc ./entry.cgi`。
+   固件不变时这是最可靠的来源 —— 解出来的就是上一版实际发出去的字节。
+
+> ⚠️ `release/pkg/rkipc` 曾被当作"仓内现役副本"，现在已经漂了：它的 md5 是
+> `9826e9ec…`，既不等于 v1.6.0–v1.6.3 发布包里的 `f683352a…`，也不等于本文
+> 以前写的 `de5b3aa4…`。**别拿它当现役二进制**，用上面第 3 条。
+> （`release/pkg/entry.cgi` = `75a693c8…`，与发布包一致。）
 
 ## 重打步骤
 
@@ -69,7 +75,26 @@ release/build-release.sh \
 1. 计算 `rkipc`/`entry.cgi`/`.so` 的 md5 与 size；
 2. **自动写回** `release/pkg/{install.sh,rollback.sh,MANIFEST.txt,README.md}` 的 md5 常量、size、版本、构建日期（消除手工同步漂移）；
 3. 确定性组装两个包（成员排序、`mtime=0`、`gzip` 去时间戳）→ 同输入得同 md5；
-4. 自检：`install.sh` 的常量与实际 artifact md5 一致、固件 tar 内成员 md5 正确，否则报错退出。
+4. 自检：`install.sh` 的常量与实际 artifact md5 一致、固件 tar 内成员 md5 正确，否则报错退出；
+5. **完整性自检**：拿 `git ls-files` 列出 `kit/`、`examples/`、`sdk/python/recamera_ext/`
+   下所有 tracked 文件，逐个在 kit 包里找同名成员并比 md5。缺文件或内容不一致 →
+   build 失败。
+
+### 为什么有第 5 步
+
+kit 包是 `cp -R kit/ …` 整树拷贝，新增文件本来就会进包 —— 但在 v1.6.3 之前没有任何
+东西**断言**这件事。一旦布局改成显式清单、或者修复落在 `cp -R` 覆盖不到的树里，
+包会缺文件却打包成功，设备装完继续跑旧代码，全程无报错。v1.6.3 的 kit 修复新增了
+`kit/runtime/ctypes_rknn.py`，正是这类文件。
+
+这个检查也会抓住"包比工作树旧"：拿 v1.6.2 的 kit 包跑一次就报
+`kit/runtime/ctypes_rknn.py` MISSING + `kit/runtime/engine.py` CONTENT DIFFERS。
+
+**不要放宽它**。报错时改打包步骤（`scrub()` / staging 的 `cp` 列表），别改判据。
+
+不在 git 里的文件不进这个清单；`scrub()` 会删掉 `__pycache__` / `*.pyc` /
+`*.bak*` / `*.orig` / `._*` / `.DS_Store` 这类编辑器与构建残留 —— 在此之前，
+`kit/runtime/engine.py.bak-pre-ctypes` 这种备份文件是会被 `cp -R` 一起发到设备的。
 
 `--factory-md5`：设备原厂（未打补丁）`rkipc` 的 md5，供 `install.sh`/`rollback.sh` 校验回滚目标。不传则沿用现值 `d5e7ca93…`。
 

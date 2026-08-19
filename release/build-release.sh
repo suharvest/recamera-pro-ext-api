@@ -136,7 +136,14 @@ trap 'rm -rf "$STAGE"' EXIT
 scrub() { # remove build junk under $1
   find "$1" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "$1" -name '.pytest_cache' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  find "$1" \( -name '*.pyc' -o -name '.DS_Store' \) -delete 2>/dev/null || true
+  # Editor/refactor leftovers live next to the source they shadow. `cp -R` copies
+  # the whole tree, so an untracked `engine.py.bak-pre-ctypes` sitting in
+  # kit/runtime/ ships to every device unless it is dropped here. Same glob set
+  # release/deploy/build-packages.py uses for appmgr.
+  find "$1" \( -name '*.pyc' -o -name '.DS_Store' -o -name '._*' \
+               -o -name '*.bak' -o -name '*.bak.*' -o -name '*.bak-*' \
+               -o -name '*.orig' -o -name '*.rej' -o -name '*.swp' \) \
+       -delete 2>/dev/null || true
 }
 
 # firmware pkg staging (layout mirrors current release/pkg/ + sdk flat header)
@@ -280,6 +287,88 @@ verify_tar_member() { # tar arcname expected-md5
 verify_tar_member "$FW_TAR" "./rkipc"                    "$RKIPC_MD5"
 verify_tar_member "$FW_TAR" "./entry.cgi"                "$ENTRY_MD5"
 verify_tar_member "$FW_TAR" "./sdk/lib/$SO_NAME"         "$SO_MD5"
+
+# ---- completeness: every git-tracked source file is really inside the kit pkg --
+# The kit package is assembled with `cp -R kit/ examples/ ...`, so a NEW source
+# file is picked up only as long as it sits under one of those trees. Nothing
+# used to assert that, which means a fix living in a file the layout does not
+# cover -- or a tree someone later switches to an explicit file list -- ships as
+# a package that silently lacks it, and the device keeps running the old code
+# without any error. Here the tarball is compared member-by-member against
+# `git ls-files`: a tracked file that is missing from the package, or present
+# with different bytes, fails the build.
+echo "=== completeness (git-tracked sources vs $(basename "$KIT_TGZ")) ==="
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  KIT_PREFIX="recamera-ext-kit-v$VERSION/" REPO="$REPO" KIT_TGZ="$KIT_TGZ" python3 - <<'PY'
+import fnmatch, hashlib, os, subprocess, sys, tarfile
+
+repo   = os.environ["REPO"]
+tgz    = os.environ["KIT_TGZ"]
+prefix = os.environ["KIT_PREFIX"]
+
+# repo-relative source tree -> path inside the package
+TREES = {
+    "kit":                      "kit",
+    "examples":                 "examples",
+    "sdk/python/recamera_ext":  "sdk/python/recamera_ext",
+}
+# mirrors scrub(): these are intentionally not shipped
+SKIP = ("*.pyc", ".DS_Store", "._*", "*.bak", "*.bak.*", "*.bak-*",
+        "*.orig", "*.rej", "*.swp", "*/__pycache__/*", "*/.pytest_cache/*")
+
+def skipped(rel):
+    base = os.path.basename(rel)
+    return any(fnmatch.fnmatch(base, g) or fnmatch.fnmatch(rel, g) for g in SKIP)
+
+members = {}
+with tarfile.open(tgz, "r:gz") as tar:
+    for ti in tar:
+        if ti.isreg():
+            members[ti.name] = hashlib.md5(tar.extractfile(ti).read()).hexdigest()
+
+missing, differing, checked = [], [], 0
+for tree, arcdir in TREES.items():
+    out = subprocess.run(["git", "-C", repo, "ls-files", "-z", "--", tree],
+                         capture_output=True, text=True, check=True).stdout
+    for rel in filter(None, out.split("\0")):
+        if skipped(rel):
+            continue
+        src = os.path.join(repo, rel)
+        if not os.path.isfile(src):          # tracked but deleted in the worktree
+            continue
+        arc = prefix + arcdir + rel[len(tree):]
+        checked += 1
+        if arc not in members:
+            missing.append(rel)
+            continue
+        got = hashlib.md5(open(src, "rb").read()).hexdigest()
+        if got != members[arc]:
+            differing.append("%s (src %s != pkg %s)" % (rel, got, members[arc]))
+
+for label, items in (("MISSING from package", missing),
+                     ("CONTENT DIFFERS", differing)):
+    if items:
+        print("FATAL completeness: %d file(s) %s:" % (len(items), label),
+              file=sys.stderr)
+        for it in items[:20]:
+            print("    " + it, file=sys.stderr)
+        if len(items) > 20:
+            print("    ... and %d more" % (len(items) - 20), file=sys.stderr)
+
+if missing or differing:
+    print("HINT: a source tree grew a file the packaging layout does not reach, "
+          "or the package predates the working tree. Re-run the build; if it "
+          "still fails, fix the staging step above -- do NOT relax this check.",
+          file=sys.stderr)
+    sys.exit(1)
+
+print("  OK  %d git-tracked files present in the package with matching md5" % checked)
+for probe in ("kit/runtime/engine.py", "kit/runtime/ctypes_rknn.py"):
+    print("  OK  %-32s md5=%s" % (probe, members.get(prefix + probe, "<absent>")))
+PY
+else
+  echo "  SKIP  not a git worktree -- completeness check needs 'git ls-files'" >&2
+fi
 
 echo "=== done ==="
 echo "  firmware sideload : $FW_TAR"
