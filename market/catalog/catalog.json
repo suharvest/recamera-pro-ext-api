@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-09T06:14:02Z",
+  "generated": "2026-09-09T08:02:48Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -11,6 +11,7 @@
       "image": "/appcenter/apps/crayfish-fight.png",
       "author": "Seeed reCamera Pro",
       "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为——单帧粗筛，再由 8 帧时序分类器看运动做确认；只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/crayfish-fight.png",
       "capabilities": [
         "output"
       ],
@@ -20,7 +21,7 @@
         "filename": "crayfish-fight-0.1.4-arm64.tar.gz",
         "sha256": "ecaba26a29837ddfaae17fa63293e1f5a8decad4c0d77f83ce739ebc4af69eb0",
         "size": 7628611,
-        "signature": "MEQCIDrDAVTU14IcrXg65OsCXHs8Ms+GJnRTCVc5oIaBt8DsAiAbEWV+WaM5NK3nuFAqW54E2BSqd3KOus0rZ7auAPb6kw==",
+        "signature": "MEYCIQDsvQ6dMnhQSynwij2Wuw7MblGpF9/CrchFEUs5IPIWEAIhAN5j5qJy5uDAZ04QHvUVhtEztKuM82q/UCwWQT5SQXzS",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -36,6 +37,7 @@
       "name_zh": "单目深度估计",
       "description_zh": "实时单目相对深度。在 RV1126B NPU 上运行 MiDaS v2.1 small（256×256 FP16），输出整帧深度统计、近/中/远网格分区与画面中最近的分区。深度为相对值、无单位，不代表实际距离。",
       "scene_zh": "自动化",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/depth-estimation.png",
       "capabilities": [
         "output"
       ],
@@ -45,7 +47,7 @@
         "filename": "depth-estimation-0.1.2-arm64.tar.gz",
         "sha256": "b3ba6b658730ef7488dff5562f008b56b3dc49b7ecffe4aab1f95e867998e9cf",
         "size": 31228149,
-        "signature": "MEYCIQCwFpbi37JEV9+aptIewUu63XFBI4M6M9erJaEQp7bOTgIhAKNlAJ/3QdZ7YI1ZYfLflD4BI69zR00bqYhlu6uKifuh",
+        "signature": "MEYCIQC6eJxRFOLLdK7EU9av9IzjAReNJOBqiN1kQmExpkB0EAIhAPM3YbxaFw1oTNWJWA881qkTABJXuEc75V+cO+IF69lO",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -55,12 +57,13 @@
       "name": "F1 Door Access",
       "version": "0.1.2",
       "description": "On-device 1:N face identification. SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, and the embedding is matched against an enrolled gallery by cosine similarity. Faces are tracked, so a reported identity is the argmax of the evidence accumulated over that person's frames rather than one frame's nearest neighbour, and faces too small to embed reliably are gated out instead of matched to whoever happens to be closest. An optional MiniFASNet anti-spoofing head suppresses printed photos and phone screens: a face that fails liveness contributes no evidence at all. Enrollment runs over a loopback HTTP command channel, from the live camera or from a posted still. No image and no embedding leaves the device.",
-      "image": "/appcenter/apps/face-recognition.png",
+      "image": "/appcenter/apps/f1-access.png",
       "scene": "Access & Attendance",
       "author": "Seeed reCamera Pro",
       "name_zh": "F1 门禁",
       "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
       "scene_zh": "门禁考勤",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/f1-access.png",
       "capabilities": [
         "output"
       ],
@@ -68,9 +71,9 @@
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.2-arm64.tar.gz",
         "filename": "f1-access-0.1.2-arm64.tar.gz",
-        "sha256": "7c6a2c3b0bd1f8665e232f501c83c5ad9818075ee8182b3b3443e9871b0962b4",
-        "size": 41447450,
-        "signature": "MEQCIBWuJCjNWuaYw2kCrx3IoGBhZPrl5JQkaFsknacFMYo6AiA2ba11a6S/IzaJRrbvgZlZre3Wmmge9M0O5QTpNG89fA==",
+        "sha256": "8e62aaf2ac45f9741da1bb9dcc3b7b9eef1e3562cb797d5e2519f6504ae4dd03",
+        "size": 41447465,
+        "signature": "MEQCIEONQBxUqhCNxAgxUwQobnOi1DoQbgEqQlS0GvlV+MklAiBqY6UpTY+nEoohY5w/wQ15R4t4rNTDdtktFnnyzbZssQ==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -86,6 +89,7 @@
       "name_zh": "客群分析",
       "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
       "scene_zh": "零售客群",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/face-analysis.png",
       "capabilities": [
         "output"
       ],
@@ -95,7 +99,7 @@
         "filename": "face-analysis-0.2.2-arm64.tar.gz",
         "sha256": "9f974d8b96fdb3c4fd0c667346c1eb7630609f916398d734520fe2b6fa345d8e",
         "size": 53275025,
-        "signature": "MEUCIBs9prdByzQLj3bbor3kPN2BYbUbRFM4sLQxpfTR+14SAiEA3gPL9mMNT+paAoVVbVpP10GB4poocnpQ1bNgP70TARc=",
+        "signature": "MEUCIQCDNHFM8tNphUmio1Jb+Zf3/h1oLSG+b4YCGGogEAHHJwIgQ6K8wP4vMUPCxEdbI5aRd1aQycENGQl9GFukEO7UjIM=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -111,6 +115,7 @@
       "name_zh": "人脸识别",
       "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
       "scene_zh": "门禁考勤",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/face-recognition.png",
       "capabilities": [
         "output"
       ],
@@ -120,7 +125,7 @@
         "filename": "face-recognition-0.1.2-arm64.tar.gz",
         "sha256": "1c89b3fd05f21e760e09f6035c1cef5584668be70dc4294104937280c2e0393e",
         "size": 41447482,
-        "signature": "MEQCIHWtP5YLLG/ZtilMKc3Bpf4SJLtnt7WYcQ5zJbTwF6xdAiABEKiL2C7Gfe77oE5XKJTGXUzU0drGsObemBrbZ+HvnQ==",
+        "signature": "MEQCIGslNl6SGj/khuN/uzu8ihpdsDa4lYkeqgHZKazfG4msAiBt/p2QVTRWY2wCOSS1h+u0aEFMdKdDxH2cl7AsJu/bjQ==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -136,6 +141,7 @@
       "name_zh": "面部疲劳检测",
       "description_zh": "设备端困倦/疲劳检测，采用两级人脸级联：YOLOv8n-face 检测人脸，468 点 MediaPipe FaceMesh 关键点模型在裁剪的人脸 ROI 上运行，再由可解释的纯 CPU 时序逻辑计算 EAR（眼纵横比）、MAR（嘴纵横比）、眨眼、打哈欠与综合困倦状态。是 reCamera Pro 级联流水线范式的首个参考，供 face-analysis 复用。",
       "scene_zh": "安全看护",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/facemesh-reader.png",
       "capabilities": [
         "output"
       ],
@@ -145,7 +151,7 @@
         "filename": "facemesh-reader-0.1.4-arm64.tar.gz",
         "sha256": "ead6c1508e7a24f10aae5c892ca5165059678ffc23bb420e8a21b083b7263235",
         "size": 7224612,
-        "signature": "MEQCIA6RZf00FarI2w3rGKqmWgK2EkGZunkqIqkqkuwqWVcaAiBKCMszvCvYe/AlCQSfjk1zfWQ+XhbVKD7jird89pH3xw==",
+        "signature": "MEYCIQDTlTL6xzNOuesrKdzFQEzyXMmJE8ZQmVWouiAXciZ0AwIhAI/8vy88KSOOJTTAAxhqbIljr/fa8+dzYmmkSs5HtCFa",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -161,6 +167,7 @@
       "name_zh": "跌倒检测",
       "description_zh": "使用 YOLO11n-Pose、几何候选触发与冻结的 48 帧学习型时序确认门在设备本地检测多人跌倒。每个人都有稳定的 track_id、独立历史和独立跌倒状态。",
       "scene_zh": "安全看护",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/fall-detection.png",
       "capabilities": [
         "output"
       ],
@@ -170,7 +177,7 @@
         "filename": "fall-detection-0.2.4-arm64.tar.gz",
         "sha256": "760f8ec58d6041a3d620ace9ce1f3344cab72a88b428c46231d9adb483c7d8f5",
         "size": 3384503,
-        "signature": "MEUCIEvKRye3kJjvYHwL9TZiZht6IF30k56QrO9oCuHZ5Q7tAiEArBOsmbM5ricvpVnDllRahyd/m5xUuDa3pTZXokclj8M=",
+        "signature": "MEYCIQDQbGWq4lDRJN8sWbYdiwTePxxy52d9RT6XxFr2DdYOgQIhAMFKBvqaFngeTa2zuLE5SUqtvucykZIMXLqxjkPQ86zF",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -186,6 +193,7 @@
       "name_zh": "健身教练",
       "description_zh": "使用 YOLO11n-Pose 与关节角迟滞状态机在设备本地数你的组数并提示动作不到位。选择深蹲、俯卧撑或哑铃弯举，设定次数与组数，剩下的交给摄像头——不用手机、不戴手环，画面也不出设备。向 /appcenter 叠加层输出关键点与实时计数。",
       "scene_zh": "健康健身",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/fitness-trainer.png",
       "capabilities": [
         "output"
       ],
@@ -195,7 +203,7 @@
         "filename": "fitness-trainer-0.1.4-arm64.tar.gz",
         "sha256": "a79fb564f134b858d5c834d62eb6eb851b1f7fdc889f2cf1902bd928fdaa3d9d",
         "size": 3262309,
-        "signature": "MEYCIQCmw28XIi1S2bfsnIM7e3ofKLHksTbyDObaMzIz4CMGYgIhAOLS9uLM4Q5uXIMPDe8U7tT3fjZKx4rqG8PINfKEDrfY",
+        "signature": "MEQCIDDanKQHJSez+aiEIX4aCntHB+LNW5RxbvcqJGdf+aABAiASM1DpQYYgb1E8D35h/dD8mU3Tl/9AIQcRhdKBZI7sfw==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -218,7 +226,7 @@
         "filename": "inspection-assembly-0.1.1-arm64.tar.gz",
         "sha256": "5bc6e00105fab854181f7ab403a58e516615b92b1727ff44f397fff9c422b873",
         "size": 61173,
-        "signature": "MEUCIQCHykfYyPJ1Vb3y/5VSIWHyfwJtetPoz/Dpybq1n/GqBQIgRjETUeFlw92bW+ZpE0Imvjj7pGGzrT8n4Vfr5XqsrkA=",
+        "signature": "MEUCIDFE+kNTXN7W6ZHLMfJNn7zLRDcMnugD7/MFeLWxmU6YAiEAuPJfFq7CK/NRqiUmKlog43p7+owhOPdhdJnQfInfK1k=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -242,6 +250,7 @@
       "name_zh": "文字识别",
       "description_zh": "设备端 OCR 文字识别：DBNet 检测器（PP-OCRv3，480x480）找出每个文本区域，逐区域透视裁剪为竖直的 48x320 文本条，再由 CTC 识别器（SVTR-LCNet，6625 类中英文字典）解码字符。每个文本框输出一条事件，包含识别文本、四点框与置信度。全流程设备端运行，图像与文本均不出设备。一代 SSCMA ppocr-reader C++ 方案到 reCamera Pro Python kit 的移植。",
       "scene_zh": "文字识别",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/ppocr-reader.png",
       "capabilities": [
         "output"
       ],
@@ -251,7 +260,7 @@
         "filename": "ppocr-reader-0.1.5-arm64.tar.gz",
         "sha256": "69c1441fd30deda09effaee329765f0ac7a150f6ffa2470545e464c0cfcb0222",
         "size": 5642812,
-        "signature": "MEQCIDwaiNeSETmAid0vbxVDFc0dAdHBk69CbeB3aKyXIFYoAiB5LPV8x/9awFf82OSfJkrcjOlnTFHDgw/1KqMOdyAAhg==",
+        "signature": "MEUCIQDmDA72oNoDCHSjLl9k2Z50dcadUnZAXnLba0dTotvLHwIgalT4UsnZ4JlQ8XAOafVVNuexgKcDKW4zsYRuqY9MVNk=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -263,6 +272,7 @@
       "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
       "image": "/appcenter/apps/qrcode-reader.png",
       "author": "Seeed reCamera Pro",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/qrcode-reader.png",
       "capabilities": [
         "output"
       ],
@@ -272,7 +282,7 @@
         "filename": "qrcode-reader-0.1.4-arm64.tar.gz",
         "sha256": "d102f493806f5b51c840fc62bfed4f68075a761f7dd219712662c6f6c87dcf84",
         "size": 1281629,
-        "signature": "MEYCIQC4uEF+lb8DkcN85aZQprpzaD1HP62l7sZasZFYOrJo8wIhAKdQAaygc11Oe6c1KmOftLQ4/Y4XfWVPCMe/wxQfySQR",
+        "signature": "MEUCIQDJ9g3PeodYxZjQLweAaTCynVQFit11+6bYa9r6KFeS5QIgKAbwUeCuF2S+jfll7ezIA3Uda5/Dt3OZz5FY8ttqROg=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -288,6 +298,7 @@
       "name_zh": "零售人流分析",
       "description_zh": "本地零售人流分析。在 RV1126B NPU 上运行 YOLOv8n（只取 person 类），跨帧跟踪每位顾客（IoU 关联 + 速度预测 + track id），把轨迹转化为门店最关心的三个数字：进/出多少人、当前在店多少人、谁在浏览/驻足/需要帮助。可选统计区域与有向进出计数线。向 /appcenter 叠加层输出轨迹与计数事件。",
       "scene_zh": "零售",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/retail-vision.png",
       "capabilities": [
         "output"
       ],
@@ -297,7 +308,34 @@
         "filename": "retail-vision-0.1.4-arm64.tar.gz",
         "sha256": "09cfa59251d754190318b086237455b5be2659b802e8af0a37cfa3ced8d74b7c",
         "size": 3462721,
-        "signature": "MEUCIHACAQtKQ6ntUP/JxFeLO0MsyMFpxpCIPg4LjocGsbRIAiEA8wwaDx45qEdWcyHp1wMxUUr6WnINc0i7UVawc9TqWd4=",
+        "signature": "MEUCIQCdSHBQWx5JGBUpSAn+DzOW3Xg6XfJbw6uimmAchv1aegIgF8GNyeiLs9yWief5ASm+62A4smx5QwiUPdIUChKMsAY=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "voice-transcribe",
+      "name": "Voice Transcribe",
+      "version": "0.1.3",
+      "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux is a fallback). Streaming sherpa-onnx KWS and silero VAD run on the ARM cores; the default `rk` ASR backend runs SenseVoice w4a16 on the RV1126B NPU under the shared rkipc broker lease. The optional `sherpa` ASR backend is CPU-only and requires an extra ONNX model. Streams state and transcript text to the /appcenter panel.",
+      "image": "/appcenter/apps/voice-transcribe.png",
+      "scene": "Voice & Audio",
+      "author": "Seeed reCamera Pro",
+      "name_zh": "语音转录",
+      "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。默认通过官方 ALSA `ai_asr` 共享采集 PCM（dsnoop，与 rkipc 共用麦克风、不接管设备、不影响视频；也可回退到 RTSP 音频轨）。流式 sherpa-onnx KWS 与 silero VAD 运行在 ARM 核心；默认 `rk` 识别后端通过共享的 rkipc broker 租约，在 RV1126B NPU 上运行 SenseVoice w4a16。可选 `sherpa` 识别后端仅使用 CPU，且需额外提供 ONNX 模型。向 /appcenter 面板输出状态与转录文本。",
+      "scene_zh": "语音音频",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/voice-transcribe.png",
+      "capabilities": [
+        "audio",
+        "output"
+      ],
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/voice-transcribe-0.1.3-arm64.tar.gz",
+        "filename": "voice-transcribe-0.1.3-arm64.tar.gz",
+        "sha256": "b842cc7aa89f8c85436aad2e710b125132be4e8749e4523d1fc9e0e7b87851a1",
+        "size": 116083896,
+        "signature": "MEUCIQD5M9JS6qMhMNZ1fh+/1Hr6QHrAf+I1nPcjYmdyrnN3UgIgDkH5Fn73ypuk2vPjrpJJoJYDWC9vwFASsEm6X4/aIpA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -320,7 +358,7 @@
         "filename": "waste-sorting-0.1.0-arm64.tar.gz",
         "sha256": "7c44fa41a7fb10d021d656dd46f504f30d72baee5e991201107cf14041186952",
         "size": 68908,
-        "signature": "MEQCIEEvPEkVE8OzbWo+JdEwZqXTUiuypUDWjS88yBW3TdhcAiBDY1mgfRF62Xlds5hkSOLLZGW75RO9UfTLhiaIkjRLkQ==",
+        "signature": "MEQCIHy5gvxKFehKBkzAy72xdliuaJp/sJe9rlxaaxBahV/XAiBXSNk7SekxamegOqcROm12VIpFJ5BlTPv/3DTGuR140g==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -340,6 +378,7 @@
       "description": "General-purpose object detection over the live camera. Runs YOLOv8n (COCO-80) on the RV1126B NPU and streams structured detections for the /appcenter overlay.",
       "image": "/appcenter/apps/yolo-detector.png",
       "author": "Seeed reCamera Pro",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/yolo-detector.png",
       "capabilities": [
         "output"
       ],
@@ -349,7 +388,7 @@
         "filename": "yolo-detector-0.1.4-arm64.tar.gz",
         "sha256": "1dd2f05533468fffbaa29bc2d2c6d754d1319b3ffce99b8a50fa109ef3d3a1c4",
         "size": 3410225,
-        "signature": "MEUCIQCkMlTIGSoSXZYAbRy6ZARxzmgU0Xlt7I++xfv/4Vh9lAIgDnhQjIvpz8xM5KOipZZVfNvv+VRrn7yHDQRtqh9gr6E=",
+        "signature": "MEQCIGyZioZWjJNY9HDnE3IeclZTR9BzRWDfqTmYAthO/zUBAiBj+9g2A37qM+DEARDjkzvzxv7F0yv5jEizR6LpSZNLvA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
