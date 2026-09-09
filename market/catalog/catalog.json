@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-09T08:02:48Z",
+  "generated": "2026-09-09T08:34:46Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -21,7 +21,7 @@
         "filename": "crayfish-fight-0.1.4-arm64.tar.gz",
         "sha256": "ecaba26a29837ddfaae17fa63293e1f5a8decad4c0d77f83ce739ebc4af69eb0",
         "size": 7628611,
-        "signature": "MEYCIQDsvQ6dMnhQSynwij2Wuw7MblGpF9/CrchFEUs5IPIWEAIhAN5j5qJy5uDAZ04QHvUVhtEztKuM82q/UCwWQT5SQXzS",
+        "signature": "MEUCIQCJA5SsES66MX5/3U9YGhl2Qync8bjrLBaKDeutcZHSwgIgEzv8+TYsh/dknx2v45r0bNwf2ROiFMawmlzP6jBCLX0=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -47,7 +47,7 @@
         "filename": "depth-estimation-0.1.2-arm64.tar.gz",
         "sha256": "b3ba6b658730ef7488dff5562f008b56b3dc49b7ecffe4aab1f95e867998e9cf",
         "size": 31228149,
-        "signature": "MEYCIQC6eJxRFOLLdK7EU9av9IzjAReNJOBqiN1kQmExpkB0EAIhAPM3YbxaFw1oTNWJWA881qkTABJXuEc75V+cO+IF69lO",
+        "signature": "MEUCIC+SlebTyHno+pIoZ6TgJwKcju5cngaeFwgzBwNLqMg2AiEA77J5xLGWpeUDvrnX8o/3/m6RPMiSqU8LU8SJuwSJiXA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -73,7 +73,7 @@
         "filename": "f1-access-0.1.2-arm64.tar.gz",
         "sha256": "8e62aaf2ac45f9741da1bb9dcc3b7b9eef1e3562cb797d5e2519f6504ae4dd03",
         "size": 41447465,
-        "signature": "MEQCIEONQBxUqhCNxAgxUwQobnOi1DoQbgEqQlS0GvlV+MklAiBqY6UpTY+nEoohY5w/wQ15R4t4rNTDdtktFnnyzbZssQ==",
+        "signature": "MEQCIBU68uV66zm3E9X0+HXCNmLuMh+QVgcI7uvg7f6zilQdAiA1IIv/x4Nd3cPpYgnq2ZJgN0kz5Zwc3iqJdIJ2vvXEpA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -99,7 +99,7 @@
         "filename": "face-analysis-0.2.2-arm64.tar.gz",
         "sha256": "9f974d8b96fdb3c4fd0c667346c1eb7630609f916398d734520fe2b6fa345d8e",
         "size": 53275025,
-        "signature": "MEUCIQCDNHFM8tNphUmio1Jb+Zf3/h1oLSG+b4YCGGogEAHHJwIgQ6K8wP4vMUPCxEdbI5aRd1aQycENGQl9GFukEO7UjIM=",
+        "signature": "MEYCIQDkHL/JFJeNi7UHQxTyTeS9DyO65ZQy1ygdPV88LbNPpgIhAO1D3iSXDJuFXj8u3H+vMgrSEBO5eW8au672QFxQkDCl",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -125,7 +125,7 @@
         "filename": "face-recognition-0.1.2-arm64.tar.gz",
         "sha256": "1c89b3fd05f21e760e09f6035c1cef5584668be70dc4294104937280c2e0393e",
         "size": 41447482,
-        "signature": "MEQCIGslNl6SGj/khuN/uzu8ihpdsDa4lYkeqgHZKazfG4msAiBt/p2QVTRWY2wCOSS1h+u0aEFMdKdDxH2cl7AsJu/bjQ==",
+        "signature": "MEYCIQD4ktr3zsEqS6WPbqV+fS7jIXWaOUv9r11bJIk0qehBNAIhALtGeCLNpH2W4P6I6gHp3TF+LEcCZ0pPfvTJkyCsXp1e",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -151,7 +151,7 @@
         "filename": "facemesh-reader-0.1.4-arm64.tar.gz",
         "sha256": "ead6c1508e7a24f10aae5c892ca5165059678ffc23bb420e8a21b083b7263235",
         "size": 7224612,
-        "signature": "MEYCIQDTlTL6xzNOuesrKdzFQEzyXMmJE8ZQmVWouiAXciZ0AwIhAI/8vy88KSOOJTTAAxhqbIljr/fa8+dzYmmkSs5HtCFa",
+        "signature": "MEQCIGFMcz46PDApKSDhKCVqeNm1ZC/mAYtKufBeWKbLbSBeAiBOULtxR2QkWeyGCweOk0bkIzfv56kUl+BbipVmQsGm9A==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -177,7 +177,7 @@
         "filename": "fall-detection-0.2.4-arm64.tar.gz",
         "sha256": "760f8ec58d6041a3d620ace9ce1f3344cab72a88b428c46231d9adb483c7d8f5",
         "size": 3384503,
-        "signature": "MEYCIQDQbGWq4lDRJN8sWbYdiwTePxxy52d9RT6XxFr2DdYOgQIhAMFKBvqaFngeTa2zuLE5SUqtvucykZIMXLqxjkPQ86zF",
+        "signature": "MEUCIQCC24nPEvgiRFpZsyNqj3noOzXa+mMQoQ8B1NSoOusVhgIgethOnFnH8FaFFIiCT1Z8M5jkkMiqeOqiMCZBy3IRtCA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -203,7 +203,7 @@
         "filename": "fitness-trainer-0.1.4-arm64.tar.gz",
         "sha256": "a79fb564f134b858d5c834d62eb6eb851b1f7fdc889f2cf1902bd928fdaa3d9d",
         "size": 3262309,
-        "signature": "MEQCIDDanKQHJSez+aiEIX4aCntHB+LNW5RxbvcqJGdf+aABAiASM1DpQYYgb1E8D35h/dD8mU3Tl/9AIQcRhdKBZI7sfw==",
+        "signature": "MEUCIQCzaqR+FgrHII8M8fogVHYWTZF5vAAO1U11jcN5RHAvCwIgKZUpZ2kxy8bxg20N09rOahY/tn1YfiHwJ5zrgqdSSKA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -211,7 +211,7 @@
     {
       "id": "inspection-assembly",
       "name": "Assembly Inspection",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "description": "Defect detection and OK/NG judgement on the camera itself. Each frame is letterboxed to 640x640 and run through YOLOX-tiny on the RV1126B NPU, trained on DeepPCB (MIT) for six bare-board defect classes: open, short, mousebite, spur, copper and pin-hole. Boxes above the frozen score become defects, the verdict engine turns them into one OK or NG per frame, and the same verdict leaves the device three ways at once: an MQTT record on inspection/{stream_id}/results validated against the project contract, a Modbus TCP register block a PLC can read (holding registers 0-11 written atomically before coil 0/1 flips, so a PLC that sees the coil already has the matching data), and a loopback HTTP panel with /healthz and /metrics. The detection, judgement and output code is the same core this project runs on Jetson Orin (TensorRT) and Raspberry Pi 5 (Hailo-8) -- only the frame source and the NPU backend differ. Measured on the 205-image DeepPCB validation split on this device: mAP50 0.9870 against 0.9876 for the fp32 CPU reference, 30.9 ms median inference.",
       "image": "/appcenter/apps/inspection-assembly.png",
       "scene": "Industrial Inspection",
@@ -219,25 +219,20 @@
       "name_zh": "装配检测",
       "description_zh": "缺陷检测与 OK/NG 判定在摄像头上完成。每一帧 letterbox 到 640x640，由 YOLOX-tiny 在 RV1126B NPU 上推理，模型在 DeepPCB（MIT 许可）上训练，覆盖六个裸板缺陷类：断路、短路、鼠咬、毛刺、余铜、漏孔。高于冻结阈值的框计为缺陷，判定引擎按帧给出 OK 或 NG，同一个判定同时从三条出口离开设备：inspection/{stream_id}/results 上的 MQTT 记录（按本项目契约校验）、PLC 可读的 Modbus TCP 寄存器块（保持寄存器 0-11 先原子写入，再翻转线圈 0/1，PLC 看到线圈时数据已经就位）、以及带 /healthz 与 /metrics 的回环 HTTP 面板。检测、判定与出口代码与本项目在 Jetson Orin（TensorRT）、树莓派 5（Hailo-8）上跑的是同一份 core，只有取帧口与 NPU 后端不同。在本设备上用 DeepPCB 验证集 205 张实测：mAP50 0.9870，fp32 CPU 参考为 0.9876，推理时延中位数 30.9 ms。",
       "scene_zh": "工业检测",
-      "kit": ">=1.6.0",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/inspection-assembly.png",
+      "capabilities": [
+        "output"
+      ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/inspection-assembly-0.1.1-arm64.tar.gz",
-        "filename": "inspection-assembly-0.1.1-arm64.tar.gz",
-        "sha256": "5bc6e00105fab854181f7ab403a58e516615b92b1727ff44f397fff9c422b873",
-        "size": 61173,
-        "signature": "MEUCIDFE+kNTXN7W6ZHLMfJNn7zLRDcMnugD7/MFeLWxmU6YAiEAuPJfFq7CK/NRqiUmKlog43p7+owhOPdhdJnQfInfK1k=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/inspection-assembly-0.1.2-arm64.tar.gz",
+        "filename": "inspection-assembly-0.1.2-arm64.tar.gz",
+        "sha256": "4976e594157e9590cc16901c50c9ea2957616c8f91b9de0a2126e80de09fd5e1",
+        "size": 6998106,
+        "signature": "MEQCIE0sXaa/m1hsewPku229EIu3Z/lgSoHOuhBW43mSYouFAiAnolexHgPTR8/Gnn6IbYKB3SJplyaD2JJ/MUSAmGHUiA==",
         "signature_alg": "ecdsa-sha256"
       },
-      "models": [
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/inspection-assembly/yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn",
-          "filename": "yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn",
-          "sha256": "35965a5b416cc3f994620c50918685cf795a93a44441b3a23b847ea9ad9f8428",
-          "size": 6681680,
-          "target_path": "/userdata/local/models/inspection-assembly"
-        }
-      ]
+      "models": []
     },
     {
       "id": "ppocr-reader",
@@ -260,7 +255,7 @@
         "filename": "ppocr-reader-0.1.5-arm64.tar.gz",
         "sha256": "69c1441fd30deda09effaee329765f0ac7a150f6ffa2470545e464c0cfcb0222",
         "size": 5642812,
-        "signature": "MEUCIQDmDA72oNoDCHSjLl9k2Z50dcadUnZAXnLba0dTotvLHwIgalT4UsnZ4JlQ8XAOafVVNuexgKcDKW4zsYRuqY9MVNk=",
+        "signature": "MEQCIDQUrm2yM4y93eklXxzlfgNugH9OVbRFphpBj0GDS9OzAiAauROzh49YFWLg1hgphx41jQVIWhHIJH0iI/BCV/4u1Q==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -282,7 +277,7 @@
         "filename": "qrcode-reader-0.1.4-arm64.tar.gz",
         "sha256": "d102f493806f5b51c840fc62bfed4f68075a761f7dd219712662c6f6c87dcf84",
         "size": 1281629,
-        "signature": "MEUCIQDJ9g3PeodYxZjQLweAaTCynVQFit11+6bYa9r6KFeS5QIgKAbwUeCuF2S+jfll7ezIA3Uda5/Dt3OZz5FY8ttqROg=",
+        "signature": "MEUCIQDUAJw539J6FHEieycbFqUGU/qABK9TsPnnE5A+JKKMJgIgK3RIY0i+MUiNiInzFj1UOwADo/y3Y0ni1hWmGWihh5E=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -308,7 +303,7 @@
         "filename": "retail-vision-0.1.4-arm64.tar.gz",
         "sha256": "09cfa59251d754190318b086237455b5be2659b802e8af0a37cfa3ced8d74b7c",
         "size": 3462721,
-        "signature": "MEUCIQCdSHBQWx5JGBUpSAn+DzOW3Xg6XfJbw6uimmAchv1aegIgF8GNyeiLs9yWief5ASm+62A4smx5QwiUPdIUChKMsAY=",
+        "signature": "MEQCICl1NtMt+z7sUKQzswWGjv48ygyUTve1enolFwb6yJ+cAiAza4m6PP4vAbFIYm1mgxeRSD0VXap8oHYYSqU3bliE8g==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -335,7 +330,7 @@
         "filename": "voice-transcribe-0.1.3-arm64.tar.gz",
         "sha256": "b842cc7aa89f8c85436aad2e710b125132be4e8749e4523d1fc9e0e7b87851a1",
         "size": 116083896,
-        "signature": "MEUCIQD5M9JS6qMhMNZ1fh+/1Hr6QHrAf+I1nPcjYmdyrnN3UgIgDkH5Fn73ypuk2vPjrpJJoJYDWC9vwFASsEm6X4/aIpA=",
+        "signature": "MEYCIQDb/RuOl8jqL+q1dtjsx9B4g8FO6q+0McLdrv2Ax8T1ugIhALQhKb51kVo90wm9pwVNK7MI0AcUhB52GnH9Wjc5a1t8",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -343,7 +338,7 @@
     {
       "id": "waste-sorting",
       "name": "Waste Sorting",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "Waste classification on the camera itself. Each frame is resized short-side 256, centre-cropped to 224 and classified by EfficientNet-Lite0 on the RV1126B NPU into eight material classes (paper, cardboard, glass, metal, plastic, textile, organic, residual); the Chinese four-bin category (recyclable / kitchen / hazardous / residual) is a lookup on top of the material class, not a second model head. A class is published only after it holds for a configurable number of consecutive frames above a confidence floor, then re-published on a heartbeat and retried after a delivery failure, so a bag moving through the frame produces one record rather than a burst. Every record is the same MQTT event shape this project publishes on TensorRT, Hailo and the SG2002 build -- top-3 with per-class confidence, the material and four-bin category, inference time, the ONNX hash and the RKNN artifact hash -- validated against the contract on the publish path itself. Images never leave the device: the payload carries a reference, never pixels. On a 1060-image validation subset the INT8 model agreed with the CPU reference on 99.06% of images at a 5.8 ms median inference time.",
       "image": "/appcenter/apps/waste-sorting.png",
       "scene": "Waste & Recycling",
@@ -351,25 +346,20 @@
       "name_zh": "垃圾分类",
       "description_zh": "分类在摄像头上完成。每一帧短边缩到 256、中心裁 224，由 EfficientNet-Lite0 在 RV1126B NPU 上判成八个物料类（纸、纸板、玻璃、金属、塑料、织物、厨余、其他）；中国生活垃圾四分类（可回收物 / 厨余垃圾 / 有害垃圾 / 其他垃圾）是在物料类之上查表得到的，不是模型的第二个头。一个类别要连续若干帧高于置信度下限才会发出，之后按心跳重发、投递失败按间隔补发，因此一个袋子经过画面产出的是一条记录而不是一串。每条记录与本项目在 TensorRT、Hailo 与 SG2002 上发的是同一个 MQTT 事件形状——top-3 及各自置信度、物料类与四分类、推理耗时、ONNX 哈希与 RKNN 制品哈希——并在发布路径上按契约校验。图片不出设备：payload 里只有引用，没有像素。在 1060 张验证子集上，INT8 模型与 CPU 参考的一致率 99.06%，推理时延中位数 5.8 ms。",
       "scene_zh": "垃圾分类",
-      "kit": ">=1.6.0",
+      "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/waste-sorting.png",
+      "capabilities": [
+        "output"
+      ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/waste-sorting-0.1.0-arm64.tar.gz",
-        "filename": "waste-sorting-0.1.0-arm64.tar.gz",
-        "sha256": "7c44fa41a7fb10d021d656dd46f504f30d72baee5e991201107cf14041186952",
-        "size": 68908,
-        "signature": "MEQCIHy5gvxKFehKBkzAy72xdliuaJp/sJe9rlxaaxBahV/XAiBXSNk7SekxamegOqcROm12VIpFJ5BlTPv/3DTGuR140g==",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/waste-sorting-0.1.1-arm64.tar.gz",
+        "filename": "waste-sorting-0.1.1-arm64.tar.gz",
+        "sha256": "d5b62a63cb6619a70ef021345090dccc9984748b420f9b01175b355c44956988",
+        "size": 5623063,
+        "signature": "MEUCIQCquFj7Gz3NtCPyjMhyO5BYAzW9j+Oplz/ISCx1HZirDQIgHz43Q/CakDWq1jnVLN3mJOe4FjAjqeR6LBP2P3uh/YE=",
         "signature_alg": "ecdsa-sha256"
       },
-      "models": [
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/waste-sorting/efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn",
-          "filename": "efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn",
-          "sha256": "59cf7d18d15b592bf00d7fca1aa9661ad7a5a71ca0b7665c88ef725116413723",
-          "size": 4105866,
-          "target_path": "/userdata/local/models/waste-sorting"
-        }
-      ]
+      "models": []
     },
     {
       "id": "yolo-detector",
@@ -388,7 +378,7 @@
         "filename": "yolo-detector-0.1.4-arm64.tar.gz",
         "sha256": "1dd2f05533468fffbaa29bc2d2c6d754d1319b3ffce99b8a50fa109ef3d3a1c4",
         "size": 3410225,
-        "signature": "MEQCIGyZioZWjJNY9HDnE3IeclZTR9BzRWDfqTmYAthO/zUBAiBj+9g2A37qM+DEARDjkzvzxv7F0yv5jEizR6LpSZNLvA==",
+        "signature": "MEYCIQDMRblhY2+rr3uz3k8ODS9Ubrt+xoOzlXbFk6eytYas6gIhAMuQEDWsM0SiMjccJ3Qms4ED8xufogyEXx7RvdQhMOsL",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []

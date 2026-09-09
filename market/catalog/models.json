@@ -1,16 +1,4 @@
 {
   "_comment": "Shared-model manifest for gen_catalog.py. Maps an app id to the SHARED model files it needs dropped into device directories at install time -- for apps whose package does NOT bundle the model (one-gen models[]+target_path parity). gen_catalog hashes the real staged bytes; nothing here is hand-written except the file list + target_path. Apps absent from this map get models: [] (their model is bundled inside the package).",
-  "_schema": "Two accepted per-app forms. (a) SINGLE target (backward compatible): {\"target_path\": \"/abs/dir\", \"files\": [\"a\", \"b\"]} -- files staged at <models-dir>/<app_id>/<file>. (b) MULTI target: {\"groups\": [{\"target_path\": \"/abs/dir\", \"files\": [...]}, {\"target_path\": \"/abs/dir/sub\", \"subdir\": \"sub\", \"files\": [...]}]} -- each group has its OWN target_path so different files can land in different device subdirs. Optional per-group \"subdir\" is the staging path segment under <models-dir>/<app_id>/ AND the URL path segment (default \"\", i.e. files directly under the app stage). Filenames are always bare basenames. Each staged file becomes one catalog models[] entry {url, filename, sha256, size, target_path} -- the entry shape is identical for both forms; groups only change where the bytes come from and where they land.",
-  "waste-sorting": {
-    "target_path": "/userdata/local/models/waste-sorting",
-    "files": [
-      "efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn"
-    ]
-  },
-  "inspection-assembly": {
-    "target_path": "/userdata/local/models/inspection-assembly",
-    "files": [
-      "yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn"
-    ]
-  }
+  "_schema": "Two accepted per-app forms. (a) SINGLE target (backward compatible): {\"target_path\": \"/abs/dir\", \"files\": [\"a\", \"b\"]} -- files staged at <models-dir>/<app_id>/<file>. (b) MULTI target: {\"groups\": [{\"target_path\": \"/abs/dir\", \"files\": [...]}, {\"target_path\": \"/abs/dir/sub\", \"subdir\": \"sub\", \"files\": [...]}]} -- each group has its OWN target_path so different files can land in different device subdirs. Optional per-group \"subdir\" is the staging path segment under <models-dir>/<app_id>/ AND the URL path segment (default \"\", i.e. files directly under the app stage). Filenames are always bare basenames. Each staged file becomes one catalog models[] entry {url, filename, sha256, size, target_path} -- the entry shape is identical for both forms; groups only change where the bytes come from and where they land."
 }
