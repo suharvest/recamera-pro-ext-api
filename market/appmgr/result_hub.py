@@ -60,6 +60,7 @@ from kit.geometry import (
 from . import config as appconfig
 from . import manifest as appmanifest
 from . import paths
+from . import render_override as apprenderoverride
 from . import visualization as appvisualization
 
 
@@ -2157,6 +2158,58 @@ class ResultHub:
             "source_invalidated", source=source,
             extensions={"reason": "lifecycle", "scope": "source"})
 
+    def render_updated_envelope(self, app_id: str, identity, render: dict) -> dict:
+        """Control message: the effective render of one live source changed.
+
+        Only the appmgr control plane emits it (after a device-level override
+        write); application payloads have no path to control messages.
+        """
+        current = identity if isinstance(identity, tuple) else ("", None)
+        source = {
+            "kind": "app", "id": str(app_id), "app_id": str(app_id),
+            "instance": str(current[0] or ""), "trust": "local",
+        }
+        if current[1] is not None:
+            source["generation"] = int(current[1])
+        envelope = self._control(
+            "render_updated", source=source,
+            extensions={"reason": "render_override", "scope": "source"})
+        envelope["render"] = copy.deepcopy(render or {})
+        return envelope
+
+    def refresh_app_render(self, app_id: str, manifest: dict,
+                           render_override: Optional[dict] = None) -> bool:
+        """Replace the cached effective render for the current generation.
+
+        Unlike :meth:`refresh_app_manifest` this does not retire generations,
+        purge replay or reset observers: only presentation changed.  Returns
+        ``False`` when no live generation is cached for ``app_id``.
+        """
+        app_id = str(app_id or "")
+        if (not app_id or not isinstance(manifest, dict)
+                or manifest.get("manifest_version") != 2
+                or str(manifest.get("id") or "") != app_id):
+            return False
+        if render_override is None:
+            render_override = apprenderoverride.load_override(app_id)
+        render = appvisualization.effective_render(
+            manifest, override=render_override)
+        with self._publish_fence:
+            with self._state_lock:
+                cached = self._app_render_cache.get(app_id)
+                current = self._app_generations.get(app_id)
+                if (cached is None or current is None
+                        or (cached[0], cached[1]) != current):
+                    return False
+                self._app_render_cache[app_id] = (
+                    cached[0], cached[1], copy.deepcopy(render),
+                    cached[3], cached[4])
+                ws = self._ws
+            if ws is not None:
+                ws.broadcast_control(self.render_updated_envelope(
+                    app_id, current, render))
+        return True
+
     def _prepare_system_path(self) -> None:
         parent = os.path.dirname(self.system_uds_path)
         os.makedirs(parent, mode=0o755, exist_ok=True)
@@ -2448,7 +2501,8 @@ class ResultHub:
                 self._retired_app_generation_order.popleft())
 
     def refresh_app_manifest(self, identity: dict, manifest: dict,
-                             stream_contract: Optional[dict] = None) -> bool:
+                             stream_contract: Optional[dict] = None,
+                             render_override: Optional[dict] = None) -> bool:
         """Cache trusted manifest and launch contracts for one generation.
 
         The caller is the appmgr control plane, after
@@ -2464,6 +2518,10 @@ class ResultHub:
         generation number -- is a successful no-op.  Returning ``True`` for
         that case is intentional: the server treats ``False`` as a malformed
         current manifest and would otherwise invalidate the newer generation.
+
+        The cached render is the *effective* render: manifest defaults merged
+        with the device-level display override (``render_override`` or, when
+        omitted, the persisted override for ``app_id``).
         """
         app_id = str((identity or {}).get("app_id") or "")
         instance = str((identity or {}).get("instance_id") or "")
@@ -2478,7 +2536,10 @@ class ResultHub:
         raw_render = manifest.get("render") if valid else None
         if raw_render is not None and not isinstance(raw_render, dict):
             valid = False
-        render = (appvisualization.effective_render(manifest)
+        if valid and render_override is None:
+            render_override = apprenderoverride.load_override(app_id)
+        render = (appvisualization.effective_render(
+                      manifest, override=render_override)
                   if valid else None)
         record_trigger = (appmanifest.effective_record_trigger(manifest)
                           if valid else {})
