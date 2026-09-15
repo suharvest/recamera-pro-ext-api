@@ -460,7 +460,7 @@ def do_set_render_override(app_id: str, incoming: dict, *,
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _render_override_manifest(app_id)
         document = apprenderoverride.replace(app_id, revision, override)
-        _audit("v1_render_override", id=app_id, action="replace",
+        _audit("v1_render_override", id=app_id, op="replace",
                revision=document["revision"])
     _publish_render_override(app_id, manifest)
     return apprenderoverride.view(app_id, manifest, document=document)
@@ -471,7 +471,7 @@ def do_delete_render_override(app_id: str, revision, *,
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _render_override_manifest(app_id)
         document = apprenderoverride.reset(app_id, revision)
-        _audit("v1_render_override", id=app_id, action="reset",
+        _audit("v1_render_override", id=app_id, op="reset",
                revision=document["revision"])
     _publish_render_override(app_id, manifest)
     return apprenderoverride.view(app_id, manifest, document=document)
@@ -481,7 +481,7 @@ def _remove_render_override(app_id: str, *, reason: str) -> None:
     """Delete an app's display override; failures are audited, not fatal."""
     try:
         if apprenderoverride.remove(app_id):
-            _audit("v1_render_override", id=app_id, action="removed",
+            _audit("v1_render_override", id=app_id, op="removed",
                    reason=reason)
     except Exception as exc:
         _audit("v1_render_override_cleanup_failed", id=app_id,
@@ -1588,7 +1588,7 @@ def do_install(pkg_path: str, signature: str = None, *,
                     app_id, candidate.manifest)
                 if staged is not None and staged.get("dropped"):
                     _audit("v1_render_override", id=app_id,
-                           action="upgrade_revalidated",
+                           op="upgrade_revalidated",
                            dropped=staged["dropped"])
 
             installer.begin_install_transaction(

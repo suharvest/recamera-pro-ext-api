@@ -38,7 +38,8 @@ def layout(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_result_hub_instance", None)
     monkeypatch.setattr(server, "_coordinator_instance", None)
     monkeypatch.setattr(server, "_coordinator_layout", None)
-    monkeypatch.setattr(server, "_audit", lambda *args, **kwargs: None)
+    # Real _audit: it writes under the tmp APPMGR_DIR, and a stub here once
+    # hid a TypeError from duplicate keyword arguments.
     if server._operation_manager_instance is not None:
         server._operation_manager_instance.close()
     monkeypatch.setattr(server, "_operation_manager_instance", None)
@@ -705,3 +706,14 @@ def test_startup_recovery_removes_pending_orphans_and_revalidates(layout):
     # A second pass is a no-op.
     assert server._recover_render_overrides() == {
         "pending_removed": [], "orphans_removed": [], "revalidated": {}}
+
+
+def test_render_override_mutations_write_audit_records(layout):
+    _install_dir()
+    server.do_set_render_override(APP_ID, {"revision": 0, "override": VALID})
+    server.do_delete_render_override(APP_ID, 1)
+    records = [json.loads(line) for line in open(paths.audit_log())]
+    ops = [(r["action"], r.get("op"), r.get("revision"))
+           for r in records if r["action"] == "v1_render_override"]
+    assert ops == [("v1_render_override", "replace", 1),
+                   ("v1_render_override", "reset", 2)]
