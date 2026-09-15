@@ -194,10 +194,11 @@ chmod 644 /userdata/local/appmgr/keys/owners/owner.pem
 然后上传并安装：
 
 ```bash
-scp /tmp/dist/overlay-geometry-demo-0.1.0-arm64.tar.gz root@<IP>:/userdata/_deploy/
-SIG=$(tr -d '\n' < /tmp/dist/overlay-geometry-demo-0.1.0-arm64.tar.gz.sig)
+scp /tmp/dist/overlay-geometry-demo-0.1.0-arm64.tar.gz /tmp/dist/overlay-geometry-demo-0.1.0-arm64.tar.gz.sig \
+    root@<IP>:/userdata/_deploy/
 
 # 设备（root）
+SIG=$(tr -d '\n' < /userdata/_deploy/overlay-geometry-demo-0.1.0-arm64.tar.gz.sig)
 curl -s -X POST --data-binary @/userdata/_deploy/overlay-geometry-demo-0.1.0-arm64.tar.gz \
   -H 'X-Filename: overlay-geometry-demo-0.1.0-arm64.tar.gz' \
   http://127.0.0.1:8130/api/appMgr/upload          # 返回 {"path": "/userdata/appstage/..."}
