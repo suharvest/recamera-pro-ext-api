@@ -53,6 +53,40 @@ uv sync
 
 下面每步先备份。`<IP>` 为设备地址，命令在开发机仓库根目录执行。
 
+### 4.0 从出厂固件开始（设备上没有 `/etc/init.d/S94appmgr`、`/userdata/local`）
+
+2026-09-15 在出厂固件 V1.0.10 的设备（192.168.42.1，仅 USB adb，SSH 关闭）上按以下顺序完成，fall-detection 与 overlay-geometry-demo 均运行：
+
+1. **扩展固件**：`release/v1.6.5/deploy-firmware.sh`（或按其逻辑执行包内 `install.sh`），替换 rkipc、entry.cgi、`librecamera_ext.so`，**冷启动** `reboot` 激活。包声明支持固件 V1.0.4 / V1.0.10；出厂文件备份在 `/userdata/*.factory.bak`，回滚用 `/userdata/ext-pkg/rollback.sh --reboot`。
+2. **v1.6.5 应用层**：`release/v1.6.5/deploy-app.sh --host <IP>`。脚本固定 `SERIAL="${HOST}:5555"`（网络 adb）；USB 连接时复制脚本，把该行改成 USB serial（`adb devices` 查看）后运行。
+3. **仓库 HEAD 的 kit 与 appmgr 必须一起替换**（HEAD appmgr 导入 HEAD kit 才有的 `kit.adapters.output_sink._bounded_render`，只换 appmgr 会启动即 ImportError）：
+
+   ```bash
+   COPYFILE_DISABLE=1 tar czf /tmp/kit.tar.gz --exclude='__pycache__' --exclude='*.pyc' --exclude='tests' --exclude='*.bak*' kit
+   COPYFILE_DISABLE=1 tar czf /tmp/appmgr.tar.gz --exclude='__pycache__' --exclude='*.pyc' --exclude='tests' -C market appmgr
+   COPYFILE_DISABLE=1 tar czf /tmp/inferenced.tar.gz --exclude='__pycache__' --exclude='*.pyc' --exclude='tests' -C market inferenced
+   # 设备：三个包都解到 /userdata/local
+   ```
+
+4. **`/etc/init.d/S94appmgr` 追加三行**（仓库 HEAD 的默认路径面向固件集成布局 `/usr/lib/...`，`/userdata/local` 布局需指回实际位置）：
+
+   ```sh
+   export APPMGR_KIT_PARENT=/userdata/local
+   export APPMGR_RELEASE_PUBKEY=/userdata/local/appmgr/keys/release_pub.pem
+   export APPMGR_SDK_PYTHON=/userdata/sdk/python
+   ```
+
+   | 变量 | 缺失时的现象 |
+   |---|---|
+   | `APPMGR_KIT_PARENT` | appmgr 找不到 kit，应用无法启动 |
+   | `APPMGR_RELEASE_PUBKEY` | 安装签名包报 `cannot open trusted public key vendor` |
+   | `APPMGR_SDK_PYTHON` | 应用崩溃 `ModuleNotFoundError: No module named 'recamera_ext'` |
+
+5. **推理调度服务 inferenced**：复制仓库 `market/deploy/S93inferenced` 到 `/etc/init.d/S93inferenced`，只改一行 `PYTHONPATH_VALUE=/userdata/local:/userdata/sdk/python:/usr/lib/python3.11/site-packages`，然后启动。缺失时声明 `npu.rknn` scheduled 的应用（如 fall-detection 0.2.4）停在 `waiting_dependency: scheduled inference service unavailable: /run/recamera/inferenced.sock`。
+6. 继续 4.1（重启 appmgr）、4.2（nginx）、4.3（前端），再装应用。
+
+**通过 adb 调 init 脚本**时必须前台执行 `adb shell "setsid /etc/init.d/S94appmgr restart </dev/null >/userdata/_deploy/s94.log 2>&1"`。v1.6.5 的 `S94appmgr` 用 `python3 -m appmgr serve &` 后台启动，adb 会话结束时进程被 HUP，几秒后退出且日志无报错。
+
 ### 4.1 appmgr
 
 ```bash
@@ -280,9 +314,20 @@ curl -s -X DELETE "http://127.0.0.1:8130/api/app-center/v1/apps/<app-id>/render-
 | geometry polygon 半透明填充在画面上不可见 | 面板底色不显示 | 原因需核实 |
 | geometry 点在部分位置显示为小圆弧 | 视觉 | 原因需核实 |
 | 标签字号、字体、底色由前端固定；每帧最多 48 个标签 | 文字排版受限 | 需要时走阶段 2 |
+| 预览页出现的 `suitcase` / `chair` 等框 | 来自系统内置检测（推断为烧录进码流的 OSD，切换结果来源后仍显示），不是 overlay 应用绘制 | 需核实 |
 | fall-detection 运行时 voice-transcribe 因内存准入被拒（需 768+256 MiB，可用约 996 MiB） | 两者不能同时跑 | 与本功能无关，未处理 |
 
-## 10. 设备当前状态（2026-09-15，192.168.10.29）
+## 10. 设备当前状态
+
+### 192.168.42.1（2026-09-15，USB，出厂 V1.0.10 起装）
+
+- 扩展固件 v1.6.5（rkipc `f683352a…`），v1.6.5 应用层，其上替换为仓库 `integrate/full-20260909` `5fc3ea4` 的 kit / appmgr / inferenced。
+- `S94appmgr` 追加 4.0 节三行 env；新增 `S93inferenced`。
+- nginx `ext_appmgr.conf` 为仓库版本；前端 `main.a3475a1e.js`。
+- 运行中：`fall-detection`、`overlay-geometry-demo`；fall-detection 显示样式覆盖 revision 2。
+- 备份：`/userdata/_deploy/backups/`（`20260915T082444Z` 固件前、`20260915-163351` 与 `20260915T164456Z` 应用层、`20260915_170217` S94appmgr）。
+
+### 192.168.10.29（2026-09-15）
 
 - appmgr：`integrate/full-20260909` 分支代码（与本分支后端提交相同），经 `S94appmgr` 启动。
 - 前端：`recamera_web_react` `feat/overlay-customization` 构建（`main.a3475a1e.js`）。
