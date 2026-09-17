@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from appmgr import (installer, manifest as appmanifest, paths,  # noqa: E402
                     render_override, server, state, supervisor, visualization)
-from appmgr.result_hub import ResultHub  # noqa: E402
+from appmgr.result_hub import (ResultHub, _HubWebSocketServer,  # noqa: E402
+                               _Subscription)
 
 
 APP_ID = "overlay-app"
@@ -523,6 +524,203 @@ def test_hub_injects_effective_render_and_broadcasts_render_updated(
     assert hub.publish_app(_payload(4), identity)[0]["render"] == \
         visualization.effective_render(manifest)
     hub._ws = None
+
+
+class _ReplayClient:
+    """Minimal stand-in for the WS client used by the initial replay path."""
+
+    def __init__(self):
+        self.subscription = _Subscription()
+        self.controls = []
+        self.records = []
+        self.reserved = None
+
+    def reserve_replay(self, record_count):
+        self.reserved = record_count
+
+    def offer_control(self, envelope):
+        self.controls.append(envelope)
+        return True
+
+    def offer_record(self, record):
+        self.records.append(record)
+
+
+class _ReplayServer:
+    """Only ``hub`` is touched by :meth:`_HubWebSocketServer.replay`."""
+
+    def __init__(self, hub):
+        self.hub = hub
+
+    def replay(self, client):
+        return _HubWebSocketServer.replay(self, client)
+
+
+def _live_hub(tmp_path, monkeypatch, identity, manifest):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=_NoopFormatter())
+    assert hub.refresh_app_manifest(identity, manifest, stream_contract=None)
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+    return hub
+
+
+def test_saved_override_reaches_replay_without_a_new_frame(
+        layout, monkeypatch, tmp_path):
+    """Records published before the override still replay the new style."""
+    _install_dir()
+    identity = _identity()
+    manifest = _manifest()
+    hub = _live_hub(tmp_path, monkeypatch, identity, manifest)
+    hub._ws = _CaptureWs()
+
+    published = hub.publish_app(_payload(
+        1, events=[{"kind": "fall", "event_id": 1}],
+        summary={"state": "idle"}), identity)
+    kinds = {item["type"] for item in published}
+    assert {"frame", "event", "status"} <= kinds
+    before = visualization.effective_render(manifest)
+    assert all(item["render"] == before for item in published)
+
+    # The application publishes nothing after this point.
+    view = server.do_set_render_override(APP_ID, {
+        "revision": 0, "override": {"boxes": {"line_width": 9}}})
+    assert view["effective"] != before
+
+    replayed = hub.snapshot_records()
+    assert {record.raw["type"] for record in replayed} == {
+        "frame", "event", "status"}
+    for record in replayed:
+        assert record.raw["render"] == view["effective"]
+        assert json.loads(record.raw_bytes.decode())["render"] == \
+            view["effective"]
+
+    # The stored records themselves keep every other field untouched.
+    stored = list(hub._latest_frames.values()) + list(
+        hub._latest_status.values()) + [
+            item for _timestamp, item in hub._events]
+    assert len(stored) == len(replayed)
+    for old, new in zip(stored, replayed):
+        assert old.raw["id"] == new.raw["id"]
+        assert old.batch_id == new.batch_id
+        assert {key: value for key, value in old.raw.items()
+                if key != "render"} == {
+            key: value for key, value in new.raw.items() if key != "render"}
+
+    # The real initial-replay path returns the same refreshed records.
+    client = _ReplayClient()
+    _ReplayServer(hub).replay(client)
+    assert client.reserved == len(replayed)
+    assert [record.raw["type"] for record in client.records] == [
+        record.raw["type"] for record in replayed]
+    assert all(record.raw["render"] == view["effective"]
+               for record in client.records)
+    hub._ws = None
+
+
+def test_replay_never_injects_render_into_another_generation(
+        layout, monkeypatch, tmp_path):
+    _install_dir()
+    identity = _identity()
+    manifest = _manifest()
+    hub = _live_hub(tmp_path, monkeypatch, identity, manifest)
+
+    live = hub.publish_app(_payload(1), identity)[0]
+    stale_raw = json.loads(json.dumps(live))
+    stale_raw["id"] = "stale:frame"
+    stale_raw["source"]["generation"] = identity["generation"] - 1
+    stale = next(record for record in hub._latest_frames.values())
+    hub._latest_frames[("stale", "")] = type(stale)(
+        raw=stale_raw, raw_bytes=json.dumps(stale_raw).encode(),
+        format_batch=stale.format_batch)
+    before = visualization.effective_render(manifest)
+
+    view = server.do_set_render_override(APP_ID, {
+        "revision": 0, "override": {"boxes": {"line_width": 9}}})
+    replayed = {record.raw["id"]: record.raw["render"]
+                for record in hub.snapshot_records()}
+    assert replayed["stale:frame"] == before
+    assert replayed[live["id"]] == view["effective"]
+
+
+def test_in_flight_frame_is_rebound_to_the_render_saved_mid_publish(
+        layout, monkeypatch, tmp_path):
+    """A frame that read the old render must not repaint the new style away."""
+    _install_dir()
+    identity = _identity()
+    manifest = _manifest()
+    hub = _live_hub(tmp_path, monkeypatch, identity, manifest)
+    hub._ws = _CaptureWs()
+
+    assert hub.publish_app(_payload(1), identity)[0]["render"] == \
+        visualization.effective_render(manifest)
+    assert hub._render_rebound == 0
+
+    saved = {}
+    original = hub._trusted_app_contract
+
+    def racing_contract(current):
+        contract = original(current)
+        if not saved:
+            # The override lands after the render was read but before the
+            # envelope reaches the publication fence.
+            saved["view"] = server.do_set_render_override(APP_ID, {
+                "revision": 0,
+                "override": {"boxes": {"line_width": 9},
+                             "subtitles": {"font_size": 28}}})
+        return contract
+
+    monkeypatch.setattr(hub, "_trusted_app_contract", racing_contract)
+    published = hub.publish_app(_payload(
+        2, events=[{"kind": "fall", "event_id": 2}],
+        summary={"state": "idle"}), identity)
+    monkeypatch.setattr(hub, "_trusted_app_contract", original)
+
+    effective = saved["view"]["effective"]
+    assert effective["boxes"]["line_width"] == 9
+    assert published
+    for envelope in published:
+        assert envelope["render"] == effective
+    assert hub._render_rebound == len(published)
+
+    # The next frame reads the new revision and is not copied again.
+    rebound = hub._render_rebound
+    assert hub.publish_app(_payload(3), identity)[0]["render"] == effective
+    assert hub._render_rebound == rebound
+    hub._ws = None
+
+
+def test_in_flight_rebind_still_discards_a_payload_supplied_render(
+        layout, monkeypatch, tmp_path):
+    _install_dir()
+    identity = _identity()
+    manifest = _manifest()
+    hub = _live_hub(tmp_path, monkeypatch, identity, manifest)
+
+    forged = {"schema_version": 1, "boxes": {"line_width": 16},
+              "stream_osd": {"supported": ["boxes"], "default": True}}
+    saved = {}
+    original = hub._trusted_app_contract
+
+    def racing_contract(current):
+        contract = original(current)
+        if not saved:
+            saved["view"] = server.do_set_render_override(APP_ID, {
+                "revision": 0, "override": {"boxes": {"line_width": 9}}})
+        return contract
+
+    monkeypatch.setattr(hub, "_trusted_app_contract", racing_contract)
+    frame = hub.publish_app(_payload(1, render=forged), identity)[0]
+    monkeypatch.setattr(hub, "_trusted_app_contract", original)
+
+    assert frame["render"] == saved["view"]["effective"]
+    assert frame["render"]["boxes"]["line_width"] == 9
+    assert "stream_osd" not in frame["render"]
+
+    # Replay agrees with the publication, and a forged payload render never
+    # survives into the stored record either.
+    replayed = next(record for record in hub.snapshot_records()
+                    if record.raw["type"] == "frame")
+    assert replayed.raw["render"] == saved["view"]["effective"]
 
 
 def test_render_refresh_without_live_generation_is_noop(layout, tmp_path):
